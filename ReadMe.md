@@ -32,6 +32,6 @@ More adapters coming soon.
 
 ## 🚧 Status
 
-DogRS is in active development.  
-The goal is to build a simple but powerful foundation for real-world Rust applications without forcing a fixed stack.
+- DogRS is in active development.  
+- The goal is to build a simple but powerful foundation for real-world Rust applications without forcing a fixed stack.
 
