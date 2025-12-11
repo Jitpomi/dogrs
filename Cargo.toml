@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "dog-core",
+    "dog-axum",
+]
+
+resolver = "2"

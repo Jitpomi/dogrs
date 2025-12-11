@@ -1,0 +1,26 @@
+# === Rust / Cargo ===
+target/
+Cargo.lock
+
+# === IDEs ===
+
+# VSCode
+.vscode/
+
+# JetBrains / WebStorm / CLion / RustRover
+.idea/
+*.iml
+
+# === FerrisUp ===
+.ferrisup/backup/
+.ferrisup/temp/
+
+# === OS Files ===
+.DS_Store
+Thumbs.db
+
+# === Logs ===
+*.log
+
+# === Misc ===
+*.bak

@@ -1,0 +1,7 @@
+["component.dog-core"]
+template = "library"
+created_at = "2025-12-11T11:06:52.664893-07:00"
+
+["component.dog-axum"]
+template = "library"
+created_at = "2025-12-11T11:11:07.427895-07:00"
