@@ -24,14 +24,15 @@ It provides a clean core for building flexible, multi-tenant applications where 
 
 ## 📦 Crates (Workspace)
 
-dog-core → Framework-agnostic core (services, hooks, tenants, storage contracts)
-dog-axum → Axum adapter for HTTP APIs
+- dog-core → Framework-agnostic core (services, hooks, tenants, storage contracts)
+- dog-axum → Axum adapter for HTTP APIs
 
 
 More adapters coming soon.
 
 ## 🚧 Status
 
-- DogRS is in active development.  
-- The goal is to build a simple but powerful foundation for real-world Rust applications without forcing a fixed stack.
+DogRS is in active development.  
+The goal is to build a simple but powerful foundation for real-world Rust applications without forcing a fixed stack.
 
+Inspiration from: [FeathersJS](https://feathersjs.com/) and [NestJS](https://nestjs.com/).
