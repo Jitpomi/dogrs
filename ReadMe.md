@@ -30,6 +30,10 @@ It provides a clean core for building flexible, multi-tenant applications where 
 
 More adapters coming soon.
 
+## 📚 Docs
+
+- [Configuration](docs/configuration.md)
+
 ## 🚧 Status
 
 DogRS is in active development.  

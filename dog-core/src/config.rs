@@ -1,10 +1,64 @@
+//! # DogRS Configuration
+//!
+//! DogRS includes a minimal, framework-agnostic configuration
+//! system based on a simple string key/value store. This mirrors
+//! Feathers' `app.set()` / `app.get()` API and allows applications
+//! to layer configuration however they like.
+//!
+//! ## Setting and reading values
+//! ```rust
+//! let mut app = DogApp::<(), ()>::new();
+//!
+//! app.set("paginate.default", "10");
+//! app.set("paginate.max", "50");
+//!
+//! assert_eq!(app.get("paginate.default"), Some("10"));
+//! ```
+//!
+//! ## Environment overrides
+//! DogRS core is intentionally environment-agnostic. Applications
+//! may choose to load environment variables using any convention.
+//!
+//! Here is a recommended helper:
+//!
+//! ```rust
+//! pub fn load_env_config<R, P>(app: &mut DogApp<R, P>, prefix: &str)
+//! where
+//!     R: Send + 'static,
+//!     P: Send + 'static,
+//! {
+//!     for (key, value) in std::env::vars() {
+//!         if let Some(stripped) = key.strip_prefix(prefix) {
+//!             let normalized = stripped
+//!                 .to_lowercase()
+//!                 .replace("__", "."); // ADSDOG__PAGINATE__DEFAULT → paginate.default
+//!
+//!             app.set(normalized, value);
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! Applications can now override configuration using:
+//!
+//! ```bash
+//! export ADSDOG__PAGINATE__DEFAULT=25
+//! ```
+//!
+//! ## Why this design?
+//! - Works in any environment (cloud, edge, P2P, serverless)
+//! - No dependency on TOML/JSON/YAML formats
+//! - Zero stack lock-in
+//! - Multi-tenant friendly
+//! - Mirrors Feathers’ configuration style in a Rust-friendly way
+//!
+//! Higher-level loaders (TOML, JSON, Consul, Vault, etc.) are
+//! intentionally kept *out* of DogRS so each application remains
+//! free to choose its configuration strategy.
+
+
 use std::collections::HashMap;
 
-/// Simple application-level configuration store for DogRS.
-///
-/// This is intentionally string-based and framework-agnostic.
-/// Higher-level layers (apps) can decide how to map env vars,
-/// JSON, TOML, etc. into these keys and values.
 #[derive(Debug, Default)]
 pub struct DogConfig {
     values: HashMap<String, String>,
