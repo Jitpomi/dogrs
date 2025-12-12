@@ -1,16 +1,7 @@
 //! Library template created with FerrisUp
 
-/// Returns a greeting message
-pub fn hello() -> String {
-    "Hello from FerrisUp library template!".to_string()
-}
+//! dog-core: framework-agnostic core for DogRS.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod tenant;
 
-    #[test]
-    fn test_hello() {
-        assert_eq!(hello(), "Hello from FerrisUp library template!");
-    }
-}
+pub use tenant::{TenantContext, TenantId};
