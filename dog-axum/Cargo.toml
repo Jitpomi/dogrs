@@ -13,10 +13,10 @@ component_type = "library"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-
+dog-core = { path = "../dog-core" }
+axum = { version = "0.8.7", features = ["macros", "json"] }
 [dev-dependencies]
-anyhow = "1.0"
-criterion = "0.7.0"
+anyhow = "1.0.100"
 
 [lib]
 name = "dog_axum"

@@ -1,16 +1,14 @@
 //! Library template created with FerrisUp
 
-/// Returns a greeting message
-pub fn hello() -> String {
-    "Hello from FerrisUp library template!".to_string()
-}
+//! dog-axum: Axum adapter for DogRS.
+//!
+//! This crate will expose helpers to build Axum routers
+//! from DogRS services and apps.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+use axum::Router;
 
-    #[test]
-    fn test_hello() {
-        assert_eq!(hello(), "Hello from FerrisUp library template!");
-    }
+/// For now, just expose a minimal router constructor.
+/// Later we’ll make this take a DogRS app/registry.
+pub fn new_router() -> Router {
+    Router::new()
 }
