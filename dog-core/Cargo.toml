@@ -13,10 +13,11 @@ component_type = "library"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-trait = "0.1.89"
+anyhow = "1.0.100"
 
 [dev-dependencies]
-anyhow = "1.0"
-criterion = "0.7.0"
+#criterion = "0.8.1"
 
 [lib]
 name = "dog_core"
