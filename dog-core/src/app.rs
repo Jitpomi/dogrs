@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use anyhow::Result;
 use crate::{
-    DogHook, DogService, DogServiceRegistry,
+    DogConfig, DogHook, DogService, DogServiceRegistry,
 };
 
 /// DogApp is the central application container for DogRS.
@@ -26,6 +26,7 @@ where
 {
     pub(crate) registry: DogServiceRegistry<R, P>,
     pub(crate) global_hooks: Vec<Arc<dyn DogHook<R, P>>>,
+    pub(crate) config: DogConfig,
 }
 
 impl<R, P> DogApp<R, P>
@@ -38,6 +39,7 @@ where
         Self {
             registry: DogServiceRegistry::new(),
             global_hooks: Vec::new(),
+            config: DogConfig::new(),
         }
     }
 
@@ -68,6 +70,30 @@ where
         self.registry
             .get(name)
             .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))
+    }
+
+}
+impl<R, P> DogApp<R, P>
+where
+    R: Send + 'static,
+    P: Send + 'static,
+{
+    /// Set a configuration value on the app.
+    ///
+    /// Equivalent to Feathers `app.set(name, value)`.
+    pub fn set<K, V>(&mut self, key: K, value: V)
+    where
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.config.set(key, value);
+    }
+
+    /// Get a configuration value from the app.
+    ///
+    /// Equivalent to Feathers `app.get(name)`.
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.config.get(key)
     }
 }
 
