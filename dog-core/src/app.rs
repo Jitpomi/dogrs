@@ -1,5 +1,5 @@
 use std::sync::Arc;
-
+use anyhow::Result;
 use crate::{
     DogHook, DogService, DogServiceRegistry,
 };
@@ -48,11 +48,15 @@ impl<R, P> DogApp<R, P> {
 }
 
 impl<R, P> DogApp<R, P> {
-    /// Get a service by name, if it exists.
+    /// Get a service by name, or return an error if it does not exist.
     ///
-    /// This is the DogRS equivalent of `app.service(name)` in Feathers.
-    pub fn service(&self, name: &str) -> Option<&Arc<dyn DogService<R, P>>> {
-        self.registry.get(name)
+    /// This mirrors Feathers' `app.service(name)` ergonomics, but uses
+    /// Rust's `Result` instead of throwing.
+    pub fn service(&self, name: &str) -> Result<&Arc<dyn DogService<R, P>>> {
+        self.registry
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))
     }
 }
+
 
