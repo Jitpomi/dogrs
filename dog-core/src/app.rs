@@ -46,3 +46,13 @@ impl<R, P> DogApp<R, P> {
         self.global_hooks.push(hook);
     }
 }
+
+impl<R, P> DogApp<R, P> {
+    /// Get a service by name, if it exists.
+    ///
+    /// This is the DogRS equivalent of `app.service(name)` in Feathers.
+    pub fn service(&self, name: &str) -> Option<&Arc<dyn DogService<R, P>>> {
+        self.registry.get(name)
+    }
+}
+
