@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-
+use anyhow::{anyhow, Result};
 use crate::{DogService, TenantContext};
 
 /// A simple registry that maps service names to DogService instances.
@@ -36,5 +36,36 @@ impl<R, P> DogServiceRegistry<R, P> {
 impl<R, P> Default for DogServiceRegistry<R, P> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<R, P: Clone> DogServiceRegistry<R, P> {
+    /// Call `list` on a named service.
+    pub async fn list(
+        &self,
+        name: &str,
+        ctx: &TenantContext,
+        params: P,
+    ) -> Result<Vec<R>> {
+        let service = self
+            .get(name)
+            .ok_or_else(|| anyhow!("DogService not found: {name}"))?;
+
+        service.list(ctx, params).await
+    }
+
+    /// Call `create` on a named service.
+    pub async fn create(
+        &self,
+        name: &str,
+        ctx: &TenantContext,
+        params: P,
+        record: R,
+    ) -> Result<R> {
+        let service = self
+            .get(name)
+            .ok_or_else(|| anyhow!("DogService not found: {name}"))?;
+
+        service.create(ctx, params, record).await
     }
 }
