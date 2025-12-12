@@ -19,12 +19,20 @@ use crate::{
 /// - a list of global hooks
 ///
 /// Later, it will orchestrate the method pipeline (before/after/around/error).
-pub struct DogApp<R, P = ()> {
+pub struct DogApp<R, P = ()>
+where
+    R: Send + 'static,
+    P: Send + 'static,
+{
     pub(crate) registry: DogServiceRegistry<R, P>,
     pub(crate) global_hooks: Vec<Arc<dyn DogHook<R, P>>>,
 }
 
-impl<R, P> DogApp<R, P> {
+impl<R, P> DogApp<R, P>
+where
+    R: Send + 'static,
+    P: Send + 'static,
+{
     /// Create an empty DogApp instance with no services and no hooks.
     pub fn new() -> Self {
         Self {
@@ -47,7 +55,11 @@ impl<R, P> DogApp<R, P> {
     }
 }
 
-impl<R, P> DogApp<R, P> {
+impl<R, P> DogApp<R, P>
+where
+    R: Send + 'static,
+    P: Send + 'static,
+{
     /// Get a service by name, or return an error if it does not exist.
     ///
     /// This mirrors Feathers' `app.service(name)` ergonomics, but uses
