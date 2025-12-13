@@ -12,7 +12,7 @@
 //! app.set("paginate.default", "10");
 //! app.set("paginate.max", "50");
 //!
-//! assert_eq!(app.get("paginate.default"), Some("10"));
+//! assert_eq!(app.get("paginate.default"), Some("10".to_string()));
 //! ```
 //!
 //! ## Environment overrides
@@ -55,7 +55,6 @@
 //! Higher-level loaders (TOML, JSON, Consul, Vault, etc.) are
 //! intentionally kept *out* of DogRS so each application remains
 //! free to choose its configuration strategy.
-
 
 use std::collections::HashMap;
 

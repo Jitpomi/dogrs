@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 
 use crate::tenant::TenantContext;
 
@@ -65,14 +65,13 @@ impl ServiceCapabilities {
 /// All methods have default implementations that return
 /// "Method not implemented", so a service can override only
 /// what it actually supports.
-#[async_trait]
+
 #[async_trait]
 pub trait DogService<R, P = ()>: Send + Sync
 where
     R: Send + 'static,
     P: Send + 'static,
 {
-
     /// Describe which methods this service wants to expose.
     ///
     /// Adapters (HTTP, P2P, etc.) should respect this when deciding
@@ -103,13 +102,7 @@ where
     /// Fully replace an existing record.
     ///
     /// `id` is required (no multi-update here at core level).
-    async fn update(
-        &self,
-        _ctx: &TenantContext,
-        _id: &str,
-        _data: R,
-        _params: P,
-    ) -> Result<R> {
+    async fn update(&self, _ctx: &TenantContext, _id: &str, _data: R, _params: P) -> Result<R> {
         Err(anyhow!("Method not implemented: update"))
     }
 
@@ -131,12 +124,7 @@ where
     ///
     /// `id` can be `None` to indicate "multi" semantics if
     /// an adapter / implementation supports it.
-    async fn remove(
-        &self,
-        _ctx: &TenantContext,
-        _id: Option<&str>,
-        _params: P,
-    ) -> Result<R> {
+    async fn remove(&self, _ctx: &TenantContext, _id: Option<&str>, _params: P) -> Result<R> {
         Err(anyhow!("Method not implemented: remove"))
     }
 }
