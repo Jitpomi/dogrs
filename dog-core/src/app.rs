@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-
+use crate::events::PublishFn;
 use anyhow::Result;
 
 use crate::hooks::{collect_method_hooks, HookFut};
@@ -10,18 +10,20 @@ use crate::{
     ServiceMethodKind, TenantContext,
 };
 
+use crate::events::{method_to_standard_event, DogEventHub, ServiceEventData, ServiceEventKind};
+
 struct DogAppInner<R, P>
 where
     R: Send + 'static,
-    P: Send + 'static,
+    P: Send + Clone + 'static,
 {
     registry: RwLock<DogServiceRegistry<R, P>>,
     global_hooks: RwLock<ServiceHooks<R, P>>,
     service_hooks: RwLock<HashMap<String, ServiceHooks<R, P>>>,
     config: RwLock<DogConfig>,
-
     // Store the concrete: Arc<dyn DogService<R,P>> as Box<dyn Any>
     any_services: RwLock<HashMap<String, Box<dyn Any + Send + Sync>>>,
+    events: RwLock<DogEventHub<R, P>>,
 }
 
 /// DogApp is the central application container for DogRS.
@@ -34,7 +36,7 @@ where
 pub struct DogApp<R, P = ()>
 where
     R: Send + 'static,
-    P: Send + 'static,
+    P: Send + Clone + 'static,
 {
     inner: Arc<DogAppInner<R, P>>,
 }
@@ -42,7 +44,7 @@ where
 impl<R, P> Clone for DogApp<R, P>
 where
     R: Send + 'static,
-    P: Send + 'static,
+    P: Send + Clone + 'static,
 {
     fn clone(&self) -> Self {
         Self {
@@ -54,7 +56,7 @@ where
 impl<R, P> DogApp<R, P>
 where
     R: Send + 'static,
-    P: Send + 'static,
+    P: Send + Clone + 'static,
 {
     pub fn new() -> Self {
         Self {
@@ -64,6 +66,7 @@ where
                 service_hooks: RwLock::new(HashMap::new()),
                 config: RwLock::new(DogConfig::new()),
                 any_services: RwLock::new(HashMap::new()),
+                events: RwLock::new(DogEventHub::new()),
             }),
         }
     }
@@ -147,12 +150,72 @@ where
         let cfg = self.inner.config.read().unwrap();
         cfg.snapshot()
     }
+
+}
+
+impl<R, P> DogApp<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    /// app.on("messages", ServiceEventKind::Created, Arc::new(|data, ctx| { /* ... */ }));
+    pub fn on(
+        &self,
+        path: impl Into<String>,
+        event: ServiceEventKind,
+        listener: crate::events::EventListener<R, P>,
+    ) {
+        self.inner.events.write().unwrap().on_exact(path, event, listener);
+    }
+
+    pub fn on_str(
+        &self,
+        pattern: &str,
+        listener: crate::events::EventListener<R, P>,
+    ) -> anyhow::Result<()> {
+        let pat = crate::events::parse_event_pattern(pattern)?;
+        self.inner.events.write().unwrap().on_pattern(pat, listener);
+        Ok(())
+    }
+
+    pub async fn emit_custom(
+        &self,
+        path: &str,
+        event_name: impl Into<String>,
+        payload: Arc<dyn Any + Send + Sync>,
+        ctx: &HookContext<R, P>,
+    ) {
+        let event = ServiceEventKind::Custom(event_name.into());
+        let data = ServiceEventData::Custom(&payload);
+
+        let (listeners, once_ids) = {
+            let hub = self.inner.events.read().unwrap();
+            hub.snapshot_emit(path, &event, &data, ctx)
+        };
+
+        for f in &listeners {
+            let _ = f(&data, ctx).await;
+        }
+
+        {
+            let mut hub = self.inner.events.write().unwrap();
+            hub.finalize_once_removals(&once_ids);
+        }
+    }
+
+    pub fn publish(&self, f: PublishFn<R, P>) {
+        self.inner.events.write().unwrap().set_publish(f);
+    }
+
+    pub fn clear_publish(&self) {
+        self.inner.events.write().unwrap().clear_publish();
+    }
 }
 
 pub struct ServiceHandle<R, P>
 where
     R: Send + 'static,
-    P: Send + 'static,
+    P: Send + Clone + 'static,
 {
     app: DogApp<R, P>,
     name: String,
@@ -162,7 +225,7 @@ where
 impl<R, P> ServiceHandle<R, P>
 where
     R: Send + 'static,
-    P: Send + 'static,
+    P: Send + Clone + 'static,
 {
     pub fn hooks<F>(self, f: F) -> Self
     where
@@ -175,7 +238,45 @@ where
     pub fn inner(&self) -> &Arc<dyn DogService<R, P>> {
         &self.service
     }
+
 }
+
+impl<R, P> ServiceHandle<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+
+    /// app.service("messages")?.on(ServiceEventKind::Created, Arc::new(|data, ctx| { /* ... */ }));
+    pub fn on(
+        &self,
+        event: ServiceEventKind,
+        listener: crate::events::EventListener<R, P>,
+    ) {
+        self.app.on(self.name.clone(), event, listener);
+    }
+    pub fn on_str(
+        &self,
+        event: &str,
+        listener: crate::events::EventListener<R, P>,
+    ) -> anyhow::Result<()> {
+        // allow "*", "created", "customThing"
+        let ev = if event.trim() == "*" {
+            crate::events::EventPat::Any
+        } else {
+            crate::events::EventPat::Exact(crate::events::parse_event_kind(event)?)
+        };
+
+        let pat = crate::events::ServiceEventPattern {
+            service: crate::events::ServiceNamePat::Exact(self.name.clone()),
+            event: ev,
+        };
+
+        self.app.inner.events.write().unwrap().on_pattern(pat, listener);
+        Ok(())
+    }
+}
+
 
 // ──────────────────────────────────────────────────────────────
 // Pipeline helper (extracted)
@@ -288,9 +389,10 @@ where
             };
         }
 
-        // Execute and apply ERROR hooks if needed
+        // Execute (around/before/service/after)
         let res = next.run(&mut ctx).await;
 
+        // If error, run error hooks
         if let Err(e) = res {
             ctx.error = Some(e);
 
@@ -298,12 +400,39 @@ where
                 let _ = h.run(&mut ctx).await;
             }
 
+            // If still error, return it
             if let Some(err) = ctx.error.take() {
                 return Err(err);
             }
         }
 
+        // ✅ SUCCESS PATH: AFTER hooks are complete here.
+        // Emit standard Feathers event only now.
+        if ctx.error.is_none() {
+            if let Some(event) = method_to_standard_event(&method) {
+                if let Some(result) = ctx.result.as_ref() {
+                    let data = ServiceEventData::Standard(result);
+
+                    let (listeners, once_ids) = {
+                        let hub = self.app.inner.events.read().unwrap();
+                        hub.snapshot_emit(&self.name, &event, &data, &ctx)
+                    };
+
+                    for f in &listeners {
+                        let _ = f(&data, &ctx).await;
+                    }
+
+                    {
+                        let mut hub = self.app.inner.events.write().unwrap();
+                        hub.finalize_once_removals(&once_ids);
+                    }
+                }
+            }
+        }
+
+
         Ok(ctx)
+
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -540,7 +669,7 @@ where
 pub struct ServiceCaller<R, P>
 where
     R: Send + 'static,
-    P: Send + 'static,
+    P: Send + Clone + 'static,
 {
     app: DogApp<R, P>,
 }
@@ -554,24 +683,26 @@ where
         Self { app }
     }
 
-    /// Feathers-style runtime service lookup:
-    /// ctx.services.service::<User, UserParams>("users")?
     pub fn service<R2, P2>(&self, name: &str) -> Result<Arc<dyn DogService<R2, P2>>>
     where
         R2: Send + 'static,
-        P2: Send + Clone + 'static,
+        P2: Send + 'static,
     {
         let map = self.app.inner.any_services.read().unwrap();
 
+        // ✅ this is &Box<dyn Any + Send + Sync>
         let any = map
             .get(name)
             .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))?;
 
+        // Box<dyn Any> -> &dyn Any -> downcast_ref(...)
         let stored = any
+            .as_ref()
             .downcast_ref::<Arc<dyn DogService<R2, P2>>>()
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "DogService type mismatch for '{name}'. You requested a different <R,P> than what was registered."
+                    "DogService type mismatch for '{name}'. \
+                     You requested a different <R,P> than what was registered."
                 )
             })?;
 

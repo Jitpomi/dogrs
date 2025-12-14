@@ -212,7 +212,7 @@ where
 
 
 
-pub type HookFut<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+pub type HookFut<'a> = Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
 
 /// Around hooks wrap the entire pipeline (like Feathers `around.all`)
 pub struct Next<R, P>
