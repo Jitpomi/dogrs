@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -18,6 +19,9 @@ where
     global_hooks: RwLock<ServiceHooks<R, P>>,
     service_hooks: RwLock<HashMap<String, ServiceHooks<R, P>>>,
     config: RwLock<DogConfig>,
+
+    // Store the concrete: Arc<dyn DogService<R,P>> as Box<dyn Any>
+    any_services: RwLock<HashMap<String, Box<dyn Any + Send + Sync>>>,
 }
 
 /// DogApp is the central application container for DogRS.
@@ -59,6 +63,7 @@ where
                 global_hooks: RwLock::new(ServiceHooks::new()),
                 service_hooks: RwLock::new(HashMap::new()),
                 config: RwLock::new(DogConfig::new()),
+                any_services: RwLock::new(HashMap::new()),
             }),
         }
     }
@@ -67,7 +72,21 @@ where
     where
         S: Into<String>,
     {
-        self.inner.registry.write().unwrap().register(name, service);
+        let name = name.into();
+
+        // typed registry
+        self.inner
+            .registry
+            .write()
+            .unwrap()
+            .register(name.clone(), service.clone());
+
+        // any registry: store the concrete Arc<dyn DogService<R,P>>
+        self.inner
+            .any_services
+            .write()
+            .unwrap()
+            .insert(name, Box::new(service));
     }
 
     /// Feathers: `app.hooks({ ... })`
@@ -123,6 +142,11 @@ where
         let cfg = self.inner.config.read().unwrap();
         cfg.get(key).map(|v| v.to_string())
     }
+
+    pub fn config_snapshot(&self) -> crate::DogConfigSnapshot {
+        let cfg = self.inner.config.read().unwrap();
+        cfg.snapshot()
+    }
 }
 
 pub struct ServiceHandle<R, P>
@@ -154,7 +178,7 @@ where
 }
 
 // ──────────────────────────────────────────────────────────────
-// Pipeline helper (the important extraction)
+// Pipeline helper (extracted)
 // ──────────────────────────────────────────────────────────────
 
 impl<R, P> ServiceHandle<R, P>
@@ -173,7 +197,6 @@ where
         Vec<Arc<dyn crate::DogAfterHook<R, P>>>,
         Vec<Arc<dyn crate::DogErrorHook<R, P>>>,
     ) {
-        // Snapshot (clone Arcs) while locks are held, then drop locks
         let g = self.app.inner.global_hooks.read().unwrap();
         let map = self.app.inner.service_hooks.read().unwrap();
         let s = map.get(&self.name);
@@ -184,7 +207,7 @@ where
         let mut after = collect_method_hooks(&g.after_all, &g.after_by_method, method);
         let mut error = collect_method_hooks(&g.error_all, &g.error_by_method, method);
 
-        // SERVICE (append after global, Feathers-style)
+        // SERVICE (append after global)
         if let Some(h) = s {
             around.extend(collect_method_hooks(
                 &h.around_all,
@@ -217,31 +240,33 @@ where
         &self,
         method: ServiceMethodKind,
         mut ctx: HookContext<R, P>,
-        service_call: impl for<'a> Fn(Arc<dyn DogService<R, P>>, &'a mut HookContext<R, P>) -> HookFut<'a>
-            + Send
-            + 'static,
+        service_call: Arc<
+            dyn for<'a> Fn(Arc<dyn DogService<R, P>>, &'a mut HookContext<R, P>) -> HookFut<'a>
+                + Send
+                + Sync,
+        >,
     ) -> Result<HookContext<R, P>> {
         let (around, before, after, error) = self.collect_hooks_for_method(&method);
 
-        // Inner: BEFORE -> service_call -> AFTER
         let svc = self.service.clone();
+        let service_call_inner = service_call.clone();
 
+        // Inner: BEFORE -> service_call -> AFTER
         let mut next: Next<R, P> = Next {
             call: Box::new(move |ctx: &mut HookContext<R, P>| -> HookFut<'_> {
                 let before = before.clone();
                 let after = after.clone();
                 let svc = svc.clone();
+                let service_call = service_call_inner.clone();
 
                 Box::pin(async move {
-                    // BEFORE (in order)
                     for h in &before {
                         h.run(ctx).await?;
                     }
 
-                    // SERVICE CALL (sets ctx.result)
-                    service_call(svc, ctx).await?;
+                    // sets ctx.result
+                    (service_call)(svc, ctx).await?;
 
-                    // AFTER (reverse order)
                     for h in after.iter().rev() {
                         h.run(ctx).await?;
                     }
@@ -269,12 +294,10 @@ where
         if let Err(e) = res {
             ctx.error = Some(e);
 
-            // ERROR hooks (in order)
             for h in &error {
                 let _ = h.run(&mut ctx).await;
             }
 
-            // If still error, return it
             if let Some(err) = ctx.error.take() {
                 return Err(err);
             }
@@ -284,21 +307,28 @@ where
     }
 
     // ──────────────────────────────────────────────────────────────
-    // FIND wired through helper
+    // Methods wired through helper
     // ──────────────────────────────────────────────────────────────
 
     pub async fn find(&self, tenant: TenantContext, params: P) -> Result<Vec<R>> {
         let method = ServiceMethodKind::Find;
-        let ctx = HookContext::new(tenant, method.clone(), params);
+
+        let services = ServiceCaller::new(self.app.clone());
+        let config = self.app.config_snapshot();
+        let ctx = HookContext::new(tenant, method.clone(), params, services, config);
 
         let ctx = self
-            .run_pipeline(method, ctx, move |svc, ctx| {
-                Box::pin(async move {
-                    let records = svc.find(&ctx.tenant, ctx.params.clone()).await?;
-                    ctx.result = Some(HookResult::Many(records));
-                    Ok(())
-                })
-            })
+            .run_pipeline(
+                method,
+                ctx,
+                Arc::new(|svc, ctx| {
+                    Box::pin(async move {
+                        let records = svc.find(&ctx.tenant, ctx.params.clone()).await?;
+                        ctx.result = Some(HookResult::Many(records));
+                        Ok(())
+                    })
+                }),
+            )
             .await?;
 
         match ctx.result {
@@ -313,21 +343,25 @@ where
     pub async fn get(&self, tenant: TenantContext, id: &str, params: P) -> Result<R> {
         let method = ServiceMethodKind::Get;
 
-        // ctx carries params + tenant through hooks
-        let ctx = HookContext::new(tenant, method.clone(), params);
+        let services = ServiceCaller::new(self.app.clone());
+        let config = self.app.config_snapshot();
+        let ctx = HookContext::new(tenant, method.clone(), params, services, config);
 
-        // we must own the id inside the pipeline closure
         let id = id.to_string();
 
         let ctx = self
-            .run_pipeline(method, ctx, move |svc, ctx| {
-                let id = id.clone();
-                Box::pin(async move {
-                    let record = svc.get(&ctx.tenant, &id, ctx.params.clone()).await?;
-                    ctx.result = Some(HookResult::One(record));
-                    Ok(())
-                })
-            })
+            .run_pipeline(
+                method,
+                ctx,
+                Arc::new(move |svc, ctx| {
+                    let id = id.clone();
+                    Box::pin(async move {
+                        let record = svc.get(&ctx.tenant, &id, ctx.params.clone()).await?;
+                        ctx.result = Some(HookResult::One(record));
+                        Ok(())
+                    })
+                }),
+            )
             .await?;
 
         match ctx.result {
@@ -342,24 +376,28 @@ where
     pub async fn create(&self, tenant: TenantContext, data: R, params: P) -> Result<R> {
         let method = ServiceMethodKind::Create;
 
-        // Feathers-style: data lives on the context for before hooks to mutate/replace.
-        let mut ctx = HookContext::new(tenant, method.clone(), params);
+        let services = ServiceCaller::new(self.app.clone());
+        let config = self.app.config_snapshot();
+        let mut ctx = HookContext::new(tenant, method.clone(), params, services, config);
         ctx.data = Some(data);
 
         let ctx = self
-            .run_pipeline(method, ctx, move |svc, ctx| {
-                Box::pin(async move {
-                    // Pull (possibly modified) data from ctx (set by caller, mutated by before hooks)
-                    let data = ctx
-                        .data
-                        .take()
-                        .ok_or_else(|| anyhow::anyhow!("create() requires ctx.data"))?;
+            .run_pipeline(
+                method,
+                ctx,
+                Arc::new(|svc, ctx| {
+                    Box::pin(async move {
+                        let data = ctx
+                            .data
+                            .take()
+                            .ok_or_else(|| anyhow::anyhow!("create() requires ctx.data"))?;
 
-                    let created = svc.create(&ctx.tenant, data, ctx.params.clone()).await?;
-                    ctx.result = Some(HookResult::One(created));
-                    Ok(())
-                })
-            })
+                        let created = svc.create(&ctx.tenant, data, ctx.params.clone()).await?;
+                        ctx.result = Some(HookResult::One(created));
+                        Ok(())
+                    })
+                }),
+            )
             .await?;
 
         match ctx.result {
@@ -370,6 +408,7 @@ where
             None => Err(anyhow::anyhow!("create() produced no result")),
         }
     }
+
     pub async fn patch(
         &self,
         tenant: TenantContext,
@@ -379,30 +418,34 @@ where
     ) -> Result<R> {
         let method = ServiceMethodKind::Patch;
 
-        // Put incoming data onto context so before hooks can mutate it (Feathers-style)
-        let mut ctx = HookContext::new(tenant, method.clone(), params);
+        let services = ServiceCaller::new(self.app.clone());
+        let config = self.app.config_snapshot();
+        let mut ctx = HookContext::new(tenant, method.clone(), params, services, config);
         ctx.data = Some(data);
 
-        // Own the id for the async closure
         let id: Option<String> = id.map(|s| s.to_string());
 
         let ctx = self
-            .run_pipeline(method, ctx, move |svc, ctx| {
-                let id = id.clone();
-                Box::pin(async move {
-                    let data = ctx
-                        .data
-                        .take()
-                        .ok_or_else(|| anyhow::anyhow!("patch() requires ctx.data"))?;
+            .run_pipeline(
+                method,
+                ctx,
+                Arc::new(move |svc, ctx| {
+                    let id = id.clone();
+                    Box::pin(async move {
+                        let data = ctx
+                            .data
+                            .take()
+                            .ok_or_else(|| anyhow::anyhow!("patch() requires ctx.data"))?;
 
-                    let patched = svc
-                        .patch(&ctx.tenant, id.as_deref(), data, ctx.params.clone())
-                        .await?;
+                        let patched = svc
+                            .patch(&ctx.tenant, id.as_deref(), data, ctx.params.clone())
+                            .await?;
 
-                    ctx.result = Some(HookResult::One(patched));
-                    Ok(())
-                })
-            })
+                        ctx.result = Some(HookResult::One(patched));
+                        Ok(())
+                    })
+                }),
+            )
             .await?;
 
         match ctx.result {
@@ -417,30 +460,34 @@ where
     pub async fn update(&self, tenant: TenantContext, id: &str, data: R, params: P) -> Result<R> {
         let method = ServiceMethodKind::Update;
 
-        // Feathers-style: data is on ctx so before hooks can modify it
-        let mut ctx = HookContext::new(tenant, method.clone(), params);
+        let services = ServiceCaller::new(self.app.clone());
+        let config = self.app.config_snapshot();
+        let mut ctx = HookContext::new(tenant, method.clone(), params, services, config);
         ctx.data = Some(data);
 
-        // Own id for async closure
         let id = id.to_string();
 
         let ctx = self
-            .run_pipeline(method, ctx, move |svc, ctx| {
-                let id = id.clone();
-                Box::pin(async move {
-                    let data = ctx
-                        .data
-                        .take()
-                        .ok_or_else(|| anyhow::anyhow!("update() requires ctx.data"))?;
+            .run_pipeline(
+                method,
+                ctx,
+                Arc::new(move |svc, ctx| {
+                    let id = id.clone();
+                    Box::pin(async move {
+                        let data = ctx
+                            .data
+                            .take()
+                            .ok_or_else(|| anyhow::anyhow!("update() requires ctx.data"))?;
 
-                    let updated = svc
-                        .update(&ctx.tenant, &id, data, ctx.params.clone())
-                        .await?;
+                        let updated = svc
+                            .update(&ctx.tenant, &id, data, ctx.params.clone())
+                            .await?;
 
-                    ctx.result = Some(HookResult::One(updated));
-                    Ok(())
-                })
-            })
+                        ctx.result = Some(HookResult::One(updated));
+                        Ok(())
+                    })
+                }),
+            )
             .await?;
 
         match ctx.result {
@@ -451,26 +498,32 @@ where
             None => Err(anyhow::anyhow!("update() produced no result")),
         }
     }
+
     pub async fn remove(&self, tenant: TenantContext, id: Option<&str>, params: P) -> Result<R> {
         let method = ServiceMethodKind::Remove;
 
-        let ctx = HookContext::new(tenant, method.clone(), params);
+        let services = ServiceCaller::new(self.app.clone());
+        let config = self.app.config_snapshot();
+        let ctx = HookContext::new(tenant, method.clone(), params, services, config);
 
-        // Own id for async closure
         let id: Option<String> = id.map(|s| s.to_string());
 
         let ctx = self
-            .run_pipeline(method, ctx, move |svc, ctx| {
-                let id = id.clone();
-                Box::pin(async move {
-                    let removed = svc
-                        .remove(&ctx.tenant, id.as_deref(), ctx.params.clone())
-                        .await?;
+            .run_pipeline(
+                method,
+                ctx,
+                Arc::new(move |svc, ctx| {
+                    let id = id.clone();
+                    Box::pin(async move {
+                        let removed = svc
+                            .remove(&ctx.tenant, id.as_deref(), ctx.params.clone())
+                            .await?;
 
-                    ctx.result = Some(HookResult::One(removed));
-                    Ok(())
-                })
-            })
+                        ctx.result = Some(HookResult::One(removed));
+                        Ok(())
+                    })
+                }),
+            )
             .await?;
 
         match ctx.result {
@@ -480,5 +533,48 @@ where
             )),
             None => Err(anyhow::anyhow!("remove() produced no result")),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct ServiceCaller<R, P>
+where
+    R: Send + 'static,
+    P: Send + 'static,
+{
+    app: DogApp<R, P>,
+}
+
+impl<R, P> ServiceCaller<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    pub fn new(app: DogApp<R, P>) -> Self {
+        Self { app }
+    }
+
+    /// Feathers-style runtime service lookup:
+    /// ctx.services.service::<User, UserParams>("users")?
+    pub fn service<R2, P2>(&self, name: &str) -> Result<Arc<dyn DogService<R2, P2>>>
+    where
+        R2: Send + 'static,
+        P2: Send + Clone + 'static,
+    {
+        let map = self.app.inner.any_services.read().unwrap();
+
+        let any = map
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))?;
+
+        let stored = any
+            .downcast_ref::<Arc<dyn DogService<R2, P2>>>()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "DogService type mismatch for '{name}'. You requested a different <R,P> than what was registered."
+                )
+            })?;
+
+        Ok(stored.clone())
     }
 }

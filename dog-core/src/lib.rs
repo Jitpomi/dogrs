@@ -9,10 +9,10 @@ pub mod registry;
 pub mod service;
 pub mod tenant;
 
-pub use app::DogApp;
-pub use config::DogConfig;
+pub use app::{DogApp, ServiceCaller};
+pub use config::{DogConfig, DogConfigSnapshot };
 pub use hooks::{
-    DogAfterHook, DogAroundHook, DogBeforeHook, DogErrorHook, HookContext, Next, ServiceHooks, HookResult
+    DogAfterHook, DogAroundHook, DogBeforeHook, DogErrorHook, HookContext, Next, ServiceHooks, HookResult,
 };
 pub use registry::DogServiceRegistry;
 pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};

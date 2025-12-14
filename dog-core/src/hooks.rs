@@ -1,3 +1,141 @@
+//! # Hooks: Dependency Injection (DogRS style)
+//!
+//! DogRS is **DI-first**: hooks should be small, portable, testable,
+//! and not depend on hidden global state.
+//!
+//! In FeathersJS, hooks often reach for `context.app` to access
+//! config/services. In DogRS, the **default** approach is:
+//! **inject what you need at construction time**.
+//!
+//! However, DogRS also supports an **optional, Feathers-like** runtime access
+//! pattern via `ctx.config` and `ctx.services` for cases where DI is awkward.
+//!
+//! ---
+//!
+//! ## The two supported styles
+//!
+//! ### A) Preferred: Dependency Injection (most hooks should do this)
+//! ✅ Best for: validation, auth policy checks (if cheap), input shaping,
+//! audit stamping, pagination clamping, etc.
+//!
+//! ```rust
+//! use std::sync::Arc;
+//! use anyhow::Result;
+//! use async_trait::async_trait;
+//! use dog_core::{DogBeforeHook, HookContext};
+//!
+//! struct EnforceMaxPage {
+//!     max: usize,
+//! }
+//!
+//! #[async_trait]
+//! impl<R, P> DogBeforeHook<R, P> for EnforceMaxPage
+//! where
+//!     R: Send + 'static,
+//!     P: Send + 'static,
+//! {
+//!     async fn run(&self, _ctx: &mut HookContext<R, P>) -> Result<()> {
+//!         // clamp pagination, etc...
+//!         Ok(())
+//!     }
+//! }
+//!
+//! // Registration:
+//! // let max = app.config_snapshot().get_usize("paginate.max").unwrap_or(50);
+//! // app.hooks(|h| { h.before_all(Arc::new(EnforceMaxPage { max })); });
+//! ```
+//!
+//! ### B) Optional: Context services/config (Feathers-like escape hatch)
+//! ✅ Best for: logging, auditing, light enrichment, or policy checks that
+//! genuinely need a separate service and DI is too rigid.
+//!
+//! DogRS may populate the hook context with:
+//! - `ctx.config`: a snapshot of app config at call time
+//! - `ctx.services`: a runtime service caller (typed downcast)
+//!
+//! ```rust
+//! use std::sync::Arc;
+//! use anyhow::Result;
+//! use async_trait::async_trait;
+//! use dog_core::{DogBeforeHook, HookContext};
+//!
+//! // Example types
+//! #[derive(Clone)]
+//! struct User { id: String }
+//! #[derive(Clone)]
+//! struct UserParams;
+//!
+//! struct AttachUser;
+//!
+//! #[async_trait]
+//! impl<Message, Params> DogBeforeHook<Message, Params> for AttachUser
+//! where
+//!     Message: Send + 'static,
+//!     Params: Send + Clone + 'static,
+//! {
+//!     async fn run(&self, ctx: &mut HookContext<Message, Params>) -> Result<()> {
+//!         // Read config snapshot (if provided by the app pipeline):
+//!         let _max = ctx.config.get_usize("paginate.max").unwrap_or(50);
+//!
+//!         // Runtime lookup of another service (typed):
+//!         let users = ctx.services.service::<User, UserParams>("users")?;
+//!
+//!         // NOTE: calling other services from hooks is powerful but risky.
+//!         // users.get(...).await?;
+//!         Ok(())
+//!     }
+//! }
+//! ```
+//!
+//! ---
+//!
+//! ## Why `ctx.services` (and not `ctx.service("...")`)?
+//!
+//! We keep the surface explicit:
+//! - `ctx` remains a *pure* per-call context
+//! - service lookup is grouped under `ctx.services` so it’s obvious when you’re
+//!   reaching outside the hook into the service graph.
+//!
+//! This mirrors the Feathers mental model (`context.app.service(...)`) without
+//! putting the whole `app` onto the hook context.
+//!
+//! ---
+//!
+//! ## Important warnings (read this if you use `ctx.services`)
+//!
+//! Service-to-service calls **inside hooks** can be dangerous because they can:
+//! - create hidden coupling (harder to reason about the dependency graph)
+//! - accidentally trigger nested hook pipelines (surprising behavior)
+//! - form cycles (A hook calls B which triggers a hook that calls A…)
+//! - cause performance cliffs (N+1 calls in hooks)
+//!
+//! Prefer service-to-service calls inside the **service implementation**
+//! (domain logic) rather than inside hooks.
+//!
+//! Use `ctx.services` inside hooks only for:
+//! - logging/auditing
+//! - lightweight enrichment that cannot live in the service
+//! - authorization checks that must query a separate policy service
+//!
+//! If you do it:
+//! - keep it fast and side-effect safe
+//! - avoid calling the *same* service you’re currently executing
+//! - avoid cascading calls (hook calls service which calls service which…)
+//!
+//! ---
+//!
+//! ## Type safety and mismatches
+//!
+//! `ctx.services.service::<R2, P2>("name")` performs a typed downcast.
+//! If you request a different `<R2, P2>` than what was registered,
+//! it returns a clear **type mismatch** error.
+//!
+//! This is deliberate: DogRS remains strongly typed even when providing
+//! a Feathers-like runtime lookup experience.
+//!
+
+
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -17,7 +155,15 @@ pub enum HookResult<R> {
 ///
 /// This context flows through:
 /// around → before → service → after → error
-pub struct HookContext<R, P> {
+/// A typed, Feathers-inspired hook context.
+///
+/// This context flows through:
+/// around → before → service → after → error
+pub struct HookContext<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
     pub tenant: TenantContext,
     pub method: ServiceMethodKind,
     pub params: P,
@@ -30,10 +176,26 @@ pub struct HookContext<R, P> {
 
     /// Error captured during execution
     pub error: Option<anyhow::Error>,
+
+    /// Feathers-style access to other services (runtime lookup)
+    pub services: crate::ServiceCaller<R, P>,
+
+    /// Immutable snapshot of app config for this call
+    pub config: crate::DogConfigSnapshot,
 }
 
-impl<R, P> HookContext<R, P> {
-    pub fn new(tenant: TenantContext, method: ServiceMethodKind, params: P) -> Self {
+impl<R, P> HookContext<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    pub fn new(
+        tenant: TenantContext,
+        method: ServiceMethodKind,
+        params: P,
+        services: crate::ServiceCaller<R, P>,
+        config: crate::DogConfigSnapshot,
+    ) -> Self {
         Self {
             tenant,
             method,
@@ -41,42 +203,73 @@ impl<R, P> HookContext<R, P> {
             data: None,
             result: None,
             error: None,
+            services,
+            config,
         }
     }
 }
 
-#[async_trait]
-pub trait DogBeforeHook<R, P>: Send + Sync {
-    async fn run(&self, ctx: &mut HookContext<R, P>) -> Result<()>;
-}
 
-#[async_trait]
-pub trait DogAfterHook<R, P>: Send + Sync {
-    async fn run(&self, ctx: &mut HookContext<R, P>) -> Result<()>;
-}
 
-#[async_trait]
-pub trait DogErrorHook<R, P>: Send + Sync {
-    async fn run(&self, ctx: &mut HookContext<R, P>) -> Result<()>;
-}
 
 pub type HookFut<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
 /// Around hooks wrap the entire pipeline (like Feathers `around.all`)
-pub struct Next<R, P> {
+pub struct Next<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
     pub(crate) call: Box<dyn for<'a> FnOnce(&'a mut HookContext<R, P>) -> HookFut<'a> + Send>,
 }
 
-impl<R, P> Next<R, P> {
+impl<R, P> Next<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
     pub async fn run<'a>(self, ctx: &'a mut HookContext<R, P>) -> Result<()> {
         (self.call)(ctx).await
     }
 }
 
+
 #[async_trait]
-pub trait DogAroundHook<R, P>: Send + Sync {
+pub trait DogBeforeHook<R, P>: Send + Sync
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    async fn run(&self, ctx: &mut HookContext<R, P>) -> Result<()>;
+}
+
+#[async_trait]
+pub trait DogAfterHook<R, P>: Send + Sync
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    async fn run(&self, ctx: &mut HookContext<R, P>) -> Result<()>;
+}
+
+#[async_trait]
+pub trait DogErrorHook<R, P>: Send + Sync
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    async fn run(&self, ctx: &mut HookContext<R, P>) -> Result<()>;
+}
+
+#[async_trait]
+pub trait DogAroundHook<R, P>: Send + Sync
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
     async fn run(&self, ctx: &mut HookContext<R, P>, next: Next<R, P>) -> Result<()>;
 }
+
 
 /// Feathers-style hooks container:
 ///

@@ -93,4 +93,34 @@ impl DogConfig {
     pub fn has(&self, key: &str) -> bool {
         self.values.contains_key(key)
     }
+    pub fn snapshot(&self) -> DogConfigSnapshot {
+        DogConfigSnapshot::new(self.values.clone())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DogConfigSnapshot {
+    map: HashMap<String, String>,
+}
+
+impl DogConfigSnapshot {
+    pub(crate) fn new(map: HashMap<String, String>) -> Self {
+        Self { map }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.map.get(key).map(|s| s.as_str())
+    }
+
+    pub fn get_string(&self, key: &str) -> Option<String> {
+        self.map.get(key).cloned()
+    }
+
+    pub fn get_usize(&self, key: &str) -> Option<usize> {
+        self.get(key).and_then(|v| v.parse::<usize>().ok())
+    }
+
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
+        self.get(key).and_then(|v| v.parse::<bool>().ok())
+    }
 }
