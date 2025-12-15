@@ -10,6 +10,7 @@ pub mod service;
 pub mod tenant;
 pub mod events;
 pub mod errors;
+pub mod schema;
 
 pub use app::{DogApp, ServiceCaller};
 pub use config::{DogConfig, DogConfigSnapshot };
@@ -21,3 +22,4 @@ pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};
 pub use tenant::{TenantContext, TenantId};
 pub use events::{DogEventHub, ServiceEventKind, ServiceEventData, method_to_standard_event, };
 pub use errors::{DogError, ErrorKind};
+pub use schema::{HookMeta, ResolveData, Rules, SchemaHooksExt, ValidateData, WriteMethods};

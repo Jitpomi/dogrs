@@ -665,13 +665,26 @@ where
     }
 }
 
-#[derive(Clone)]
+
 pub struct ServiceCaller<R, P>
 where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
     app: DogApp<R, P>,
+}
+
+
+impl<R, P> Clone for ServiceCaller<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            app: self.app.clone(),
+        }
+    }
 }
 
 impl<R, P> ServiceCaller<R, P>
