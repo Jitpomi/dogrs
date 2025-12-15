@@ -14,6 +14,9 @@ use std::fmt;
 
 use anyhow::Error as AnyError;
 
+/// A convenience result type for DogRS core APIs.
+pub type DogResult<T> = std::result::Result<T, AnyError>;
+
 /// Feathers-ish error class names + status codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
@@ -175,20 +178,13 @@ impl DogError {
     }
 
     /// Turn any error into a DogError:
-    /// - if it’s already a DogError, keep it
+    /// - if it’s already a DogError, keep it (lossless)
     /// - otherwise wrap as GeneralError
     pub fn normalize(err: AnyError) -> DogError {
-        if let Some(d) = err.downcast_ref::<DogError>() {
-            return DogError {
-                kind: d.kind,
-                message: d.message.clone(),
-                data: d.data.clone(),
-                errors: d.errors.clone(),
-                source: d.source.as_ref().map(|e| AnyError::msg(e.to_string())),
-            };
+        match err.downcast::<DogError>() {
+            Ok(dog) => dog,
+            Err(other) => DogError::new(ErrorKind::GeneralError, other.to_string()).with_source(other),
         }
-
-        DogError::new(ErrorKind::GeneralError, err.to_string()).with_source(err)
     }
 
     /// A “safe” version suitable for returning to clients:
@@ -258,7 +254,6 @@ impl DogError {
 
 impl fmt::Display for DogError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // keep it simple; transport can serialize richer fields
         write!(f, "{} ({}): {}", self.name(), self.code(), self.message)
     }
 }

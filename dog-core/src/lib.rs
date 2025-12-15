@@ -21,5 +21,5 @@ pub use registry::DogServiceRegistry;
 pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};
 pub use tenant::{TenantContext, TenantId};
 pub use events::{DogEventHub, ServiceEventKind, ServiceEventData, method_to_standard_event, };
-pub use errors::{DogError, ErrorKind};
+pub use errors::{DogError, ErrorKind, DogResult};
 pub use schema::{HookMeta, ResolveData, Rules, SchemaHooksExt, ValidateData, WriteMethods};
