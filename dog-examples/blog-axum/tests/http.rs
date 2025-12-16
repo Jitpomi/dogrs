@@ -198,6 +198,278 @@ async fn posts_are_isolated_by_tenant() {
 }
 
 #[tokio::test]
+async fn posts_create_with_invalid_author_id_is_422() {
+    let ax = build().unwrap();
+
+    let res = ax
+        .router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/posts")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    "{\"title\":\"Hello\",\"body\":\"x\",\"author_id\":\"author:does-not-exist\"}",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status().as_u16(), 422);
+    let body = json_body(res).await;
+    assert_eq!(body["name"], "Unprocessable");
+    assert_eq!(body["errors"]["author_id"][0], "author not found");
+}
+
+#[tokio::test]
+async fn posts_find_expand_author_embeds_author() {
+    let ax = build().unwrap();
+
+    // Create author
+    let author_res = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/authors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    "{\"name\":\"Alice\",\"email\":\"alice@example.com\",\"profile\":{\"display_name\":\"Alice A\"},\"tags\":[{\"email\":\"tag@example.com\"}]}",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(author_res.status().as_u16(), 200);
+    let author = json_body(author_res).await;
+    let author_id = author["id"].as_str().unwrap().to_string();
+
+    // Create post referencing author
+    let post_res = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/posts")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    "{{\"title\":\"Hello\",\"body\":\"x\",\"author_id\":\"{}\",\"published\":true}}",
+                    author_id
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(post_res.status().as_u16(), 200);
+
+    // Find with expand
+    let res = ax
+        .router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/posts?expand=author")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let body = json_body(res).await;
+    let arr = body.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["author"]["id"], Value::String(author_id));
+}
+
+#[tokio::test]
+async fn authors_on_delete_restrict_blocks_when_posts_reference() {
+    let ax = build().unwrap();
+
+    // Create author
+    let author_res = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/authors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    "{\"name\":\"Alice\",\"email\":\"alice@example.com\",\"profile\":{\"display_name\":\"Alice A\"},\"tags\":[{\"email\":\"tag@example.com\"}]}",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let author = json_body(author_res).await;
+    let author_id = author["id"].as_str().unwrap().to_string();
+
+    // Create published post referencing author
+    let _ = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/posts")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    "{{\"title\":\"Hello\",\"body\":\"x\",\"author_id\":\"{}\",\"published\":true}}",
+                    author_id
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Attempt delete with restrict
+    let res = ax
+        .router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/authors/{}?onDelete=restrict", author_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status().as_u16(), 409);
+}
+
+#[tokio::test]
+async fn authors_on_delete_cascade_removes_posts() {
+    let ax = build().unwrap();
+
+    let author_res = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/authors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    "{\"name\":\"Alice\",\"email\":\"alice@example.com\",\"profile\":{\"display_name\":\"Alice A\"},\"tags\":[{\"email\":\"tag@example.com\"}]}",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let author = json_body(author_res).await;
+    let author_id = author["id"].as_str().unwrap().to_string();
+
+    let _ = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/posts")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    "{{\"title\":\"Hello\",\"body\":\"x\",\"author_id\":\"{}\",\"published\":true}}",
+                    author_id
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let res = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/authors/{}?onDelete=cascade", author_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+
+    let res = ax
+        .router
+        .oneshot(Request::builder().method("GET").uri("/posts").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let body = json_body(res).await;
+    assert_eq!(body.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn authors_on_delete_nullify_clears_author_id_on_posts() {
+    let ax = build().unwrap();
+
+    let author_res = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/authors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    "{\"name\":\"Alice\",\"email\":\"alice@example.com\",\"profile\":{\"display_name\":\"Alice A\"},\"tags\":[{\"email\":\"tag@example.com\"}]}",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let author = json_body(author_res).await;
+    let author_id = author["id"].as_str().unwrap().to_string();
+
+    let _ = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/posts")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    "{{\"title\":\"Hello\",\"body\":\"x\",\"author_id\":\"{}\",\"published\":true}}",
+                    author_id
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let res = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/authors/{}?onDelete=nullify", author_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+
+    let res = ax
+        .router
+        .oneshot(Request::builder().method("GET").uri("/posts").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let body = json_body(res).await;
+    let arr = body.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert!(arr[0].get("author_id").is_none());
+}
+
+#[tokio::test]
 async fn authors_nested_validation_errors_have_world_class_paths() {
     let ax = build().unwrap();
 

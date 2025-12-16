@@ -10,6 +10,9 @@ pub mod posts_schema {
         #[dog(trim, min_len(1))]
         pub body: String,
 
+        #[dog(optional, trim, min_len(1))]
+        pub author_id: Option<String>,
+
         #[dog(default = false)]
         pub published: bool,
     }
@@ -21,6 +24,9 @@ pub mod posts_schema {
 
         #[dog(optional, trim, min_len(1))]
         pub body: Option<String>,
+
+        #[dog(optional, trim, min_len(1))]
+        pub author_id: Option<String>,
 
         #[dog(optional)]
         pub published: Option<bool>,
