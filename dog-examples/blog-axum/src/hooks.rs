@@ -4,13 +4,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::hooks::{DogAfterHook, DogAroundHook, HookContext, Next};
 
-use crate::services::RelayParams;
+use crate::services::BlogParams;
 
 pub struct LogAround;
 
 #[async_trait]
-impl DogAroundHook<serde_json::Value, RelayParams> for LogAround {
-    async fn run(&self, ctx: &mut HookContext<serde_json::Value, RelayParams>, next: Next<serde_json::Value, RelayParams>) -> Result<()> {
+impl DogAroundHook<serde_json::Value, BlogParams> for LogAround {
+    async fn run(&self, ctx: &mut HookContext<serde_json::Value, BlogParams>, next: Next<serde_json::Value, BlogParams>) -> Result<()> {
         let provider = ctx.params.provider.clone();
         let path = ctx.params.path.clone();
         let method = ctx.params.method.clone();
@@ -26,8 +26,8 @@ impl DogAroundHook<serde_json::Value, RelayParams> for LogAround {
 pub struct LogAfter;
 
 #[async_trait]
-impl DogAfterHook<serde_json::Value, RelayParams> for LogAfter {
-    async fn run(&self, ctx: &mut HookContext<serde_json::Value, RelayParams>) -> Result<()> {
+impl DogAfterHook<serde_json::Value, BlogParams> for LogAfter {
+    async fn run(&self, ctx: &mut HookContext<serde_json::Value, BlogParams>) -> Result<()> {
         if let Some(err) = &ctx.error {
             eprintln!("[relay] <- ERROR: {err}");
         } else {
@@ -38,7 +38,7 @@ impl DogAfterHook<serde_json::Value, RelayParams> for LogAfter {
     }
 }
 
-pub fn global_hooks(app: &dog_core::DogApp<serde_json::Value, RelayParams>) {
+pub fn global_hooks(app: &dog_core::DogApp<serde_json::Value, BlogParams>) {
     app.hooks(|h| {
         h.around_all(Arc::new(LogAround));
         h.after_all(Arc::new(LogAfter));

@@ -74,3 +74,67 @@ async fn posts_create_defaults_published_false_and_sets_request_id() {
     assert_eq!(body["body"], "x");
     assert_eq!(body["published"], json!(false));
 }
+
+#[tokio::test]
+async fn posts_find_respects_include_drafts_query_param() {
+    let ax = build().unwrap();
+
+    // draft
+    let _ = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/posts")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"title\":\"Draft\",\"body\":\"x\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // published
+    let _ = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/posts")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    "{\"title\":\"Published\",\"body\":\"x\",\"published\":true}",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Default: do not include drafts
+    let res = ax
+        .router
+        .clone()
+        .oneshot(Request::builder().method("GET").uri("/posts").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let body = json_body(res).await;
+    assert_eq!(body.as_array().unwrap().len(), 1);
+
+    // Explicitly include drafts
+    let res = ax
+        .router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/posts?includeDrafts=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let body = json_body(res).await;
+    assert_eq!(body.as_array().unwrap().len(), 2);
+}

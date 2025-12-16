@@ -7,7 +7,9 @@ use dog_core::hooks::{DogAfterHook, HookContext, HookResult};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::services::RelayParams;
+use crate::services::BlogParams;
+
+use super::PostParams;
 
 fn now_ts() -> String {
     Utc::now().to_rfc3339()
@@ -54,12 +56,18 @@ fn normalize_one(v: Value, default_body: &str) -> Value {
 pub struct NormalizePostsResult;
 
 #[async_trait]
-impl DogAfterHook<Value, RelayParams> for NormalizePostsResult {
-    async fn run(&self, ctx: &mut HookContext<Value, RelayParams>) -> Result<()> {
-        let default_body = ctx
-            .config
-            .get_string("posts.defaultBody")
-            .unwrap_or_else(|| "No body".to_string());
+impl DogAfterHook<Value, BlogParams> for NormalizePostsResult {
+    async fn run(&self, ctx: &mut HookContext<Value, BlogParams>) -> Result<()> {
+        let post_params = PostParams::from(&ctx.params);
+        let default_body = if post_params.include_drafts {
+            ctx.config
+                .get_string("posts.defaultBodyDrafts")
+                .unwrap_or_else(|| "No body".to_string())
+        } else {
+            ctx.config
+                .get_string("posts.defaultBody")
+                .unwrap_or_else(|| "No body".to_string())
+        };
 
         let Some(res) = ctx.result.take() else {
             return Ok(());

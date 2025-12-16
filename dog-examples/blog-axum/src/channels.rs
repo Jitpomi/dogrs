@@ -1,5 +1,5 @@
-use crate::services::RelayParams;
+use crate::services::BlogParams;
 
-pub fn configure(_app: &dog_core::DogApp<serde_json::Value, RelayParams>) -> anyhow::Result<()> {
+pub fn configure(_app: &dog_core::DogApp<serde_json::Value, BlogParams>) -> anyhow::Result<()> {
     Ok(())
 }

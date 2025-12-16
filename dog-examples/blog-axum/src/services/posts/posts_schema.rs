@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use validator::Validate;
 
-use crate::services::RelayParams;
+use crate::services::BlogParams;
 
 #[derive(Debug, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +36,7 @@ struct PostsLimits {
     body_max_len: usize,
 }
 
-fn limits(meta: &HookMeta<Value, RelayParams>) -> PostsLimits {
+fn limits(meta: &HookMeta<Value, BlogParams>) -> PostsLimits {
     PostsLimits {
         title_min_len: meta.config.get_usize("posts.titleMinLen").unwrap_or(1),
         body_min_len: meta.config.get_usize("posts.bodyMinLen").unwrap_or(0),
@@ -105,7 +105,7 @@ where
     Ok(parsed)
 }
 
-fn resolve_all(data: &mut Value, _meta: &HookMeta<Value, RelayParams>) -> Result<()> {
+fn resolve_all(data: &mut Value, _meta: &HookMeta<Value, BlogParams>) -> Result<()> {
     let Some(obj) = data.as_object_mut() else {
         return Ok(());
     };
@@ -152,7 +152,7 @@ fn enforce_limits(
     Ok(())
 }
 
-pub fn resolve_create(data: &mut Value, meta: &HookMeta<Value, RelayParams>) -> Result<()> {
+pub fn resolve_create(data: &mut Value, meta: &HookMeta<Value, BlogParams>) -> Result<()> {
     resolve_all(data, meta)?;
 
     let Some(obj) = data.as_object_mut() else {
@@ -166,7 +166,7 @@ pub fn resolve_create(data: &mut Value, meta: &HookMeta<Value, RelayParams>) -> 
     Ok(())
 }
 
-pub fn validate_create(data: &Value, meta: &HookMeta<Value, RelayParams>) -> Result<()> {
+pub fn validate_create(data: &Value, meta: &HookMeta<Value, BlogParams>) -> Result<()> {
     let parsed: CreatePostData = parse_validated(data)?;
     let _ = parsed.published;
     enforce_limits(
@@ -176,7 +176,7 @@ pub fn validate_create(data: &Value, meta: &HookMeta<Value, RelayParams>) -> Res
     )
 }
 
-pub fn validate_patch(data: &Value, meta: &HookMeta<Value, RelayParams>) -> Result<()> {
+pub fn validate_patch(data: &Value, meta: &HookMeta<Value, BlogParams>) -> Result<()> {
     let parsed: PatchPostData = parse_validated(data)?;
     let _ = parsed.published;
     enforce_limits(parsed.title.as_deref(), parsed.body.as_deref(), limits(meta))

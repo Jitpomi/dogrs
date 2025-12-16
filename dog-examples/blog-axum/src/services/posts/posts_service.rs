@@ -8,21 +8,22 @@ use dog_core::{DogService, ServiceCapabilities};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::services::{BlogState, RelayParams};
+use crate::services::{BlogParams, BlogState};
 
 use super::posts_shared;
+use super::PostParams;
 
 pub struct PostsService {
     pub state: Arc<BlogState>,
 }
 
 #[async_trait]
-impl DogService<Value, RelayParams> for PostsService {
+impl DogService<Value, BlogParams> for PostsService {
     fn capabilities(&self) -> ServiceCapabilities {
         posts_shared::crud_capabilities()
     }
 
-    async fn create(&self, _ctx: &TenantContext, data: Value, _params: RelayParams) -> Result<Value> {
+    async fn create(&self, _ctx: &TenantContext, data: Value, _params: BlogParams) -> Result<Value> {
         let mut obj = data.as_object().cloned().unwrap_or_default();
 
         let id = obj
@@ -38,19 +39,27 @@ impl DogService<Value, RelayParams> for PostsService {
         Ok(value)
     }
 
-    async fn find(&self, _ctx: &TenantContext, _params: RelayParams) -> Result<Vec<Value>> {
+    async fn find(&self, _ctx: &TenantContext, _params: BlogParams) -> Result<Vec<Value>> {
+        let post_params = PostParams::from(&_params);
         let map = self.state.posts.read().await;
-        Ok(map.values().cloned().collect())
+        Ok(map
+            .values()
+            .cloned()
+            .filter(|v| {
+                post_params.include_drafts
+                    || v.get("published").and_then(|v| v.as_bool()).unwrap_or(false)
+            })
+            .collect())
     }
 
-    async fn get(&self, _ctx: &TenantContext, _id: &str, _params: RelayParams) -> Result<Value> {
+    async fn get(&self, _ctx: &TenantContext, _id: &str, _params: BlogParams) -> Result<Value> {
         let map = self.state.posts.read().await;
         map.get(_id)
             .cloned()
             .ok_or_else(|| DogError::not_found(format!("Post not found: {_id}")).into_anyhow())
     }
 
-    async fn update(&self, _ctx: &TenantContext, _id: &str, _data: Value, _params: RelayParams) -> Result<Value> {
+    async fn update(&self, _ctx: &TenantContext, _id: &str, _data: Value, _params: BlogParams) -> Result<Value> {
         let mut map = self.state.posts.write().await;
         if !map.contains_key(_id) {
             return Err(DogError::not_found(format!("Post not found: {_id}")).into_anyhow());
@@ -63,7 +72,7 @@ impl DogService<Value, RelayParams> for PostsService {
         Ok(value)
     }
 
-    async fn patch(&self, _ctx: &TenantContext, _id: Option<&str>, _data: Value, _params: RelayParams) -> Result<Value> {
+    async fn patch(&self, _ctx: &TenantContext, _id: Option<&str>, _data: Value, _params: BlogParams) -> Result<Value> {
         let Some(id) = _id else {
             return Err(DogError::bad_request("Patch requires an id").into_anyhow());
         };
@@ -90,7 +99,7 @@ impl DogService<Value, RelayParams> for PostsService {
         Ok(value)
     }
 
-    async fn remove(&self, _ctx: &TenantContext, _id: Option<&str>, _params: RelayParams) -> Result<Value> {
+    async fn remove(&self, _ctx: &TenantContext, _id: Option<&str>, _params: BlogParams) -> Result<Value> {
         let Some(id) = _id else {
             return Err(DogError::bad_request("Remove requires an id").into_anyhow());
         };

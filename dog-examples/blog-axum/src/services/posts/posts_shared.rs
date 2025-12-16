@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use dog_core::schema::SchemaHooksExt;
 
-use crate::services::RelayParams;
+use crate::services::BlogParams;
 
 pub fn crud_capabilities() -> ServiceCapabilities {
     ServiceCapabilities::from_methods(vec![
@@ -16,7 +16,7 @@ pub fn crud_capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, RelayParams>) -> anyhow::Result<()> {
+pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, BlogParams>) -> anyhow::Result<()> {
     app.service("posts")?.hooks(|h| {
         h.schema(|s| {
             s.on_create()
