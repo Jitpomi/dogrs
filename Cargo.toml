@@ -2,6 +2,7 @@
 members = [
     "dog-core",
     "dog-axum",
+    "dog-examples/blog-axum",
 ]
 
 resolver = "2"

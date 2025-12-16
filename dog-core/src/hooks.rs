@@ -32,7 +32,7 @@
 //! impl<R, P> DogBeforeHook<R, P> for EnforceMaxPage
 //! where
 //!     R: Send + 'static,
-//!     P: Send + 'static,
+//!     P: Send + Clone + 'static,
 //! {
 //!     async fn run(&self, _ctx: &mut HookContext<R, P>) -> Result<()> {
 //!         // clamp pagination, etc...
@@ -209,10 +209,24 @@ where
     }
 }
 
+/// Helper used by the pipeline:
+/// returns `all + method` hooks in that order.
+pub(crate) fn collect_method_hooks<T>(
+    all: &[T],
+    by_method: &std::collections::HashMap<crate::ServiceMethodKind, Vec<T>>,
+    method: &crate::ServiceMethodKind,
+) -> Vec<T>
+where
+    T: Clone,
+{
+    let mut hooks = all.to_vec();
+    if let Some(method_hooks) = by_method.get(method) {
+        hooks.extend(method_hooks.clone());
+    }
+    hooks
+}
 
-
-
-pub type HookFut<'a> = Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
+pub type HookFut<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
 /// Around hooks wrap the entire pipeline (like Feathers `around.all`)
 pub struct Next<R, P>
@@ -412,22 +426,3 @@ impl<R, P> ServiceHooks<R, P> {
         self
     }
 }
-
-/// Helper used by the pipeline:
-/// returns `all + method` hooks in that order.
-pub(crate) fn collect_method_hooks<T>(
-    all: &[T],
-    by_method: &std::collections::HashMap<crate::ServiceMethodKind, Vec<T>>,
-    method: &crate::ServiceMethodKind,
-) -> Vec<T>
-where
-    T: Clone,
-{
-    let mut out = Vec::new();
-    out.extend_from_slice(all);
-    if let Some(v) = by_method.get(method) {
-        out.extend_from_slice(v);
-    }
-    out
-}
-

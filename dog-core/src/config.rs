@@ -7,6 +7,7 @@
 //!
 //! ## Setting and reading values
 //! ```rust
+//! use dog_core::DogApp;
 //! let mut app = DogApp::<(), ()>::new();
 //!
 //! app.set("paginate.default", "10");
@@ -22,10 +23,11 @@
 //! Here is a recommended helper:
 //!
 //! ```rust
+//! use dog_core::DogApp;
 //! pub fn load_env_config<R, P>(app: &mut DogApp<R, P>, prefix: &str)
 //! where
 //!     R: Send + 'static,
-//!     P: Send + 'static,
+//!     P: Send + Clone + 'static,
 //! {
 //!     for (key, value) in std::env::vars() {
 //!         if let Some(stripped) = key.strip_prefix(prefix) {

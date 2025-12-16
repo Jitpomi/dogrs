@@ -5,10 +5,12 @@
 //! This crate will expose helpers to build Axum routers
 //! from DogRS services and apps.
 
-use axum::Router;
+pub mod app;
+pub mod params;
+pub mod rest;
+pub mod state;
+mod error;
+pub use error::DogAxumError;
+pub use state::DogAxumState;
 
-/// For now, just expose a minimal router constructor.
-/// Later we’ll make this take a DogRS app/registry.
-pub fn new_router() -> Router {
-    Router::new()
-}
+pub use app::{axum, AxumApp};
