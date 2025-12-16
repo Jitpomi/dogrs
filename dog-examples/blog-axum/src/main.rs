@@ -1,27 +1,12 @@
-mod app;
-mod hooks;
-mod channels;
-mod services;
-
-use std::sync::Arc;
 use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let ax = app::relay_app()?;
-    let state = Arc::new(services::RelayState::default());
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
 
-    hooks::global_hooks(ax.app.as_ref());
-    channels::configure(ax.app.as_ref())?;
-
-    let posts = services::configure(
-        ax.app.as_ref(),
-        Arc::clone(&state),
-    )?;
-
-    let ax = ax
-        .use_service("/posts", posts)
-        .service("/health", || async {"ok" });
+    let ax = blog_axum::build()?;
 
     let host = ax
         .app
