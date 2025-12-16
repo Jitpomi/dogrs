@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::services::BlogParams;
 
 pub fn build() -> Result<AxumApp<Value, BlogParams>> {
-    let ax = app::relay_app()?;
+    let ax = app::blog_app()?;
     let state = Arc::new(services::BlogState::default());
 
     hooks::global_hooks(ax.app.as_ref());
