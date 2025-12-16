@@ -29,5 +29,5 @@ impl FromRestParams for BlogParams {
 
 #[derive(Default)]
 pub struct BlogState {
-    pub posts: RwLock<HashMap<String, serde_json::Value>>,
+    pub posts_by_tenant: RwLock<HashMap<String, HashMap<String, serde_json::Value>>>,
 }

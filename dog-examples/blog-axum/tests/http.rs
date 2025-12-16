@@ -138,3 +138,61 @@ async fn posts_find_respects_include_drafts_query_param() {
     let body = json_body(res).await;
     assert_eq!(body.as_array().unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn posts_are_isolated_by_tenant() {
+    let ax = build().unwrap();
+
+    // Create a published post in tenant A
+    let _ = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/posts")
+                .header("x-tenant-id", "tenant-a")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    "{\"title\":\"A\",\"body\":\"x\",\"published\":true}",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Tenant A can see it
+    let res = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/posts")
+                .header("x-tenant-id", "tenant-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let body = json_body(res).await;
+    assert_eq!(body.as_array().unwrap().len(), 1);
+
+    // Tenant B cannot see tenant A's post
+    let res = ax
+        .router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/posts")
+                .header("x-tenant-id", "tenant-b")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let body = json_body(res).await;
+    assert_eq!(body.as_array().unwrap().len(), 0);
+}

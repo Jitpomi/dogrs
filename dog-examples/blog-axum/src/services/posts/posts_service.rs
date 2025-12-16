@@ -23,7 +23,7 @@ impl DogService<Value, BlogParams> for PostsService {
         posts_shared::crud_capabilities()
     }
 
-    async fn create(&self, _ctx: &TenantContext, data: Value, _params: BlogParams) -> Result<Value> {
+    async fn create(&self, ctx: &TenantContext, data: Value, _params: BlogParams) -> Result<Value> {
         let mut obj = data.as_object().cloned().unwrap_or_default();
 
         let id = obj
@@ -35,15 +35,24 @@ impl DogService<Value, BlogParams> for PostsService {
         obj.insert("id".to_string(), Value::String(id.clone()));
 
         let value = Value::Object(obj);
-        self.state.posts.write().await.insert(id, value.clone());
+
+        let tenant = ctx.tenant_id.0.clone();
+        let mut by_tenant = self.state.posts_by_tenant.write().await;
+        by_tenant
+            .entry(tenant)
+            .or_default()
+            .insert(id, value.clone());
         Ok(value)
     }
 
-    async fn find(&self, _ctx: &TenantContext, _params: BlogParams) -> Result<Vec<Value>> {
+    async fn find(&self, ctx: &TenantContext, _params: BlogParams) -> Result<Vec<Value>> {
         let post_params = PostParams::from(&_params);
-        let map = self.state.posts.read().await;
+        let tenant = ctx.tenant_id.0.clone();
+        let by_tenant = self.state.posts_by_tenant.read().await;
+        let map = by_tenant.get(&tenant);
         Ok(map
-            .values()
+            .into_iter()
+            .flat_map(|m| m.values())
             .cloned()
             .filter(|v| {
                 post_params.include_drafts
@@ -52,15 +61,19 @@ impl DogService<Value, BlogParams> for PostsService {
             .collect())
     }
 
-    async fn get(&self, _ctx: &TenantContext, _id: &str, _params: BlogParams) -> Result<Value> {
-        let map = self.state.posts.read().await;
-        map.get(_id)
+    async fn get(&self, ctx: &TenantContext, _id: &str, _params: BlogParams) -> Result<Value> {
+        let tenant = ctx.tenant_id.0.clone();
+        let by_tenant = self.state.posts_by_tenant.read().await;
+        let map = by_tenant.get(&tenant);
+        map.and_then(|m| m.get(_id))
             .cloned()
             .ok_or_else(|| DogError::not_found(format!("Post not found: {_id}")).into_anyhow())
     }
 
-    async fn update(&self, _ctx: &TenantContext, _id: &str, _data: Value, _params: BlogParams) -> Result<Value> {
-        let mut map = self.state.posts.write().await;
+    async fn update(&self, ctx: &TenantContext, _id: &str, _data: Value, _params: BlogParams) -> Result<Value> {
+        let tenant = ctx.tenant_id.0.clone();
+        let mut by_tenant = self.state.posts_by_tenant.write().await;
+        let map = by_tenant.entry(tenant).or_default();
         if !map.contains_key(_id) {
             return Err(DogError::not_found(format!("Post not found: {_id}")).into_anyhow());
         }
@@ -72,12 +85,14 @@ impl DogService<Value, BlogParams> for PostsService {
         Ok(value)
     }
 
-    async fn patch(&self, _ctx: &TenantContext, _id: Option<&str>, _data: Value, _params: BlogParams) -> Result<Value> {
+    async fn patch(&self, ctx: &TenantContext, _id: Option<&str>, _data: Value, _params: BlogParams) -> Result<Value> {
         let Some(id) = _id else {
             return Err(DogError::bad_request("Patch requires an id").into_anyhow());
         };
 
-        let mut map = self.state.posts.write().await;
+        let tenant = ctx.tenant_id.0.clone();
+        let mut by_tenant = self.state.posts_by_tenant.write().await;
+        let map = by_tenant.entry(tenant).or_default();
         let existing = map
             .get(id)
             .cloned()
@@ -99,12 +114,14 @@ impl DogService<Value, BlogParams> for PostsService {
         Ok(value)
     }
 
-    async fn remove(&self, _ctx: &TenantContext, _id: Option<&str>, _params: BlogParams) -> Result<Value> {
+    async fn remove(&self, ctx: &TenantContext, _id: Option<&str>, _params: BlogParams) -> Result<Value> {
         let Some(id) = _id else {
             return Err(DogError::bad_request("Remove requires an id").into_anyhow());
         };
 
-        let mut map = self.state.posts.write().await;
+        let tenant = ctx.tenant_id.0.clone();
+        let mut by_tenant = self.state.posts_by_tenant.write().await;
+        let map = by_tenant.entry(tenant).or_default();
         map.remove(id)
             .ok_or_else(|| DogError::not_found(format!("Post not found: {id}")).into_anyhow())
     }
