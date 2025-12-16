@@ -228,13 +228,15 @@ where
 
 pub type HookFut<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 
+type NextCall<R, P> = dyn for<'a> FnOnce(&'a mut HookContext<R, P>) -> HookFut<'a> + Send;
+
 /// Around hooks wrap the entire pipeline (like Feathers `around.all`)
 pub struct Next<R, P>
 where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    pub(crate) call: Box<dyn for<'a> FnOnce(&'a mut HookContext<R, P>) -> HookFut<'a> + Send>,
+    pub(crate) call: Box<NextCall<R, P>>,
 }
 
 impl<R, P> Next<R, P>
@@ -242,7 +244,7 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    pub async fn run<'a>(self, ctx: &'a mut HookContext<R, P>) -> Result<()> {
+    pub async fn run(self, ctx: &mut HookContext<R, P>) -> Result<()> {
         (self.call)(ctx).await
     }
 }
@@ -303,6 +305,12 @@ pub struct ServiceHooks<R, P> {
     pub before_by_method: HashMap<ServiceMethodKind, Vec<Arc<dyn DogBeforeHook<R, P>>>>,
     pub after_by_method: HashMap<ServiceMethodKind, Vec<Arc<dyn DogAfterHook<R, P>>>>,
     pub error_by_method: HashMap<ServiceMethodKind, Vec<Arc<dyn DogErrorHook<R, P>>>>,
+}
+
+impl<R, P> Default for ServiceHooks<R, P> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<R, P> ServiceHooks<R, P> {

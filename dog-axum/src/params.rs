@@ -52,6 +52,6 @@ impl FromRestParams for RestParams {
 
 impl FromRestParams for () {
     fn from_rest_params(_params: RestParams) -> Self {
-        ()
+        
     }
 }

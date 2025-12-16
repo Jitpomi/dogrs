@@ -41,6 +41,29 @@ where
     inner: Arc<DogAppInner<R, P>>,
 }
 
+type HooksForMethod<R, P> = (
+    Vec<Arc<dyn crate::DogAroundHook<R, P>>>,
+    Vec<Arc<dyn crate::DogBeforeHook<R, P>>>,
+    Vec<Arc<dyn crate::DogAfterHook<R, P>>>,
+    Vec<Arc<dyn crate::DogErrorHook<R, P>>>,
+);
+
+type ServiceCall<R, P> = Arc<
+    dyn for<'a> Fn(Arc<dyn DogService<R, P>>, &'a mut HookContext<R, P>) -> HookFut<'a>
+        + Send
+        + Sync,
+>;
+
+impl<R, P> Default for DogApp<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<R, P> Clone for DogApp<R, P>
 where
     R: Send + 'static,
@@ -109,7 +132,7 @@ where
         let mut map = self.inner.service_hooks.write().unwrap();
         let hooks = map
             .entry(service_name.to_string())
-            .or_insert_with(ServiceHooks::new);
+            .or_default();
         f(hooks);
     }
 
@@ -292,12 +315,7 @@ where
     fn collect_hooks_for_method(
         &self,
         method: &ServiceMethodKind,
-    ) -> (
-        Vec<Arc<dyn crate::DogAroundHook<R, P>>>,
-        Vec<Arc<dyn crate::DogBeforeHook<R, P>>>,
-        Vec<Arc<dyn crate::DogAfterHook<R, P>>>,
-        Vec<Arc<dyn crate::DogErrorHook<R, P>>>,
-    ) {
+    ) -> HooksForMethod<R, P> {
         let g = self.app.inner.global_hooks.read().unwrap();
         let map = self.app.inner.service_hooks.read().unwrap();
         let s = map.get(&self.name);
@@ -341,11 +359,7 @@ where
         &self,
         method: ServiceMethodKind,
         mut ctx: HookContext<R, P>,
-        service_call: Arc<
-            dyn for<'a> Fn(Arc<dyn DogService<R, P>>, &'a mut HookContext<R, P>) -> HookFut<'a>
-                + Send
-                + Sync,
-        >,
+        service_call: ServiceCall<R, P>,
     ) -> Result<HookContext<R, P>> {
         let (around, before, after, error) = self.collect_hooks_for_method(&method);
 

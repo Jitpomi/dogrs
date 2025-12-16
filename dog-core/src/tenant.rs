@@ -1,4 +1,4 @@
-/// Core multi-tenant types for DogRS.
+//! Core multi-tenant types for DogRS.
 
 /// A simple tenant identifier.
 /// Later this can be a UUID, slug, or composite key.
