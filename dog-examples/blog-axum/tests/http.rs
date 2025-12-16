@@ -196,3 +196,108 @@ async fn posts_are_isolated_by_tenant() {
     let body = json_body(res).await;
     assert_eq!(body.as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn authors_nested_validation_errors_have_world_class_paths() {
+    let ax = build().unwrap();
+
+    let res = ax
+        .router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/authors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    "{\"name\":\"Alice\",\"email\":\"alice@example.com\",\"profile\":{\"display_name\":\"x\"},\"tags\":[{\"email\":\"not-an-email\"}]}",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status().as_u16(), 422);
+    let body = json_body(res).await;
+
+    assert_eq!(body["errors"]["profile.display_name"][0], "display_name must be at least 2 chars");
+    assert_eq!(body["errors"]["tags[0].email"][0], "tag email must be a valid email");
+}
+
+#[tokio::test]
+async fn authors_create_missing_name_is_422() {
+    let ax = build().unwrap();
+
+    let res = ax
+        .router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/authors")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"email\":\"a@example.com\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status().as_u16(), 422);
+    let body = json_body(res).await;
+    assert_eq!(body["name"], "Unprocessable");
+    assert_eq!(body["code"], 422);
+    assert_eq!(body["className"], "unprocessable");
+}
+
+#[tokio::test]
+async fn authors_are_isolated_by_tenant() {
+    let ax = build().unwrap();
+
+    let _ = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/authors")
+                .header("x-tenant-id", "tenant-a")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    "{\"name\":\"Alice\",\"email\":\"alice@example.com\",\"profile\":{\"display_name\":\"Alice A\"},\"tags\":[{\"email\":\"tag@example.com\"}]}",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let res = ax
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/authors")
+                .header("x-tenant-id", "tenant-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let body = json_body(res).await;
+    assert_eq!(body.as_array().unwrap().len(), 1);
+
+    let res = ax
+        .router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/authors")
+                .header("x-tenant-id", "tenant-b")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let body = json_body(res).await;
+    assert_eq!(body.as_array().unwrap().len(), 0);
+}

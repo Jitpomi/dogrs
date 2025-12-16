@@ -4,6 +4,7 @@ members = [
     "dog-axum",
     "dog-schema",
     "dog-schema-macros",
+    "dog-schema-validator",
     "dog-examples/blog-axum",
 ]
 

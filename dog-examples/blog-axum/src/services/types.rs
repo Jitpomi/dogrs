@@ -6,4 +6,5 @@ use tokio::sync::RwLock;
 #[derive(Default)]
 pub struct BlogState {
     pub posts_by_tenant: RwLock<HashMap<String, HashMap<String, serde_json::Value>>>,
+    pub authors_by_tenant: RwLock<HashMap<String, HashMap<String, serde_json::Value>>>,
 }

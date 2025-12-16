@@ -18,10 +18,11 @@ pub fn build() -> Result<AxumApp<Value, BlogParams>> {
     hooks::global_hooks(ax.app.as_ref());
     channels::configure(ax.app.as_ref())?;
 
-    let posts = services::configure(ax.app.as_ref(), Arc::clone(&state))?;
+    let svcs = services::configure(ax.app.as_ref(), Arc::clone(&state))?;
 
     let ax = ax
-        .use_service("/posts", posts)
+        .use_service("/posts", svcs.posts)
+        .use_service("/authors", svcs.authors)
         .service("/health", || async { "ok" });
 
     Ok(ax)

@@ -7,6 +7,7 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
     let mut service: Option<LitStr> = None;
     let mut error_message: Option<LitStr> = None;
+    let mut backend: Option<LitStr> = None;
 
     let mut module = parse_macro_input!(item as ItemMod);
 
@@ -22,6 +23,11 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
                     error_message = Some(s);
                 }
             }
+            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("backend") => {
+                if let syn::Lit::Str(s) = nv.lit {
+                    backend = Some(s);
+                }
+            }
             _ => {}
         }
     }
@@ -29,6 +35,7 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     let service = service.unwrap_or_else(|| LitStr::new("", proc_macro2::Span::call_site()));
     let error_message = error_message
         .unwrap_or_else(|| LitStr::new("Schema validation failed", proc_macro2::Span::call_site()));
+    let backend = backend.unwrap_or_else(|| LitStr::new("built_in", proc_macro2::Span::call_site()));
 
     let (_, items) = match &mut module.content {
         Some((brace, items)) => (brace, items),
@@ -64,11 +71,17 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     // They are only inputs to this macro.
     strip_internal_attrs(items);
 
+    let create_ident = create_struct.ident.clone();
+    let patch_ident = patch_struct.as_ref().map(|s| s.ident.clone());
+
     let resolve_create_fn = gen_resolve_create(&create_rules, &error_message);
-    let validate_create_fn = gen_validate_create(&create_rules, &error_message);
+    let validate_create_fn = gen_validate_create(&create_rules, &error_message, &backend, &create_ident);
     let validate_patch_fn = patch_rules
         .as_ref()
-        .map(|rules| gen_validate_patch(rules, &error_message))
+        .map(|rules| {
+            let patch_ident = patch_ident.as_ref().expect("patch rules implies patch struct");
+            gen_validate_patch(rules, &error_message, &backend, patch_ident)
+        })
         .unwrap_or_else(|| quote! {});
 
     let register_fn = gen_register_fn(&service, patch_rules.is_some());
@@ -289,7 +302,27 @@ fn gen_resolve_create(rules: &[FieldRule], _error_message: &LitStr) -> proc_macr
     }
 }
 
-fn gen_validate_create(rules: &[FieldRule], error_message: &LitStr) -> proc_macro2::TokenStream {
+fn gen_validate_create(
+    rules: &[FieldRule],
+    error_message: &LitStr,
+    backend: &LitStr,
+    create_ident: &syn::Ident,
+) -> proc_macro2::TokenStream {
+    if backend.value() == "validator" {
+        return quote! {
+            pub fn validate_create<P>(
+                data: &serde_json::Value,
+                _meta: &dog_core::schema::HookMeta<serde_json::Value, P>,
+            ) -> anyhow::Result<()>
+            where
+                P: Send + Clone + 'static,
+            {
+                let _parsed: #create_ident = dog_schema_validator::validate::<#create_ident>(data, #error_message)?;
+                Ok(())
+            }
+        };
+    }
+
     let checks = rules.iter().map(|r| {
         let key = &r.json_key;
         let min_len = r.min_len;
@@ -393,7 +426,27 @@ fn gen_validate_create(rules: &[FieldRule], error_message: &LitStr) -> proc_macr
     }
 }
 
-fn gen_validate_patch(rules: &[FieldRule], error_message: &LitStr) -> proc_macro2::TokenStream {
+fn gen_validate_patch(
+    rules: &[FieldRule],
+    error_message: &LitStr,
+    backend: &LitStr,
+    patch_ident: &syn::Ident,
+) -> proc_macro2::TokenStream {
+    if backend.value() == "validator" {
+        return quote! {
+            pub fn validate_patch<P>(
+                data: &serde_json::Value,
+                _meta: &dog_core::schema::HookMeta<serde_json::Value, P>,
+            ) -> anyhow::Result<()>
+            where
+                P: Send + Clone + 'static,
+            {
+                let _parsed: #patch_ident = dog_schema_validator::validate::<#patch_ident>(data, #error_message)?;
+                Ok(())
+            }
+        };
+    }
+
     let checks = rules.iter().map(|r| {
         let key = &r.json_key;
         let min_len = r.min_len;
