@@ -21,28 +21,28 @@ impl DogService<Value, BlogParams> for AuthorsService {
         authors_shared::crud_capabilities()
     }
 
-    async fn create(&self, ctx: &TenantContext, data: Value, _params: BlogParams) -> Result<Value> {
-        self.adapter._create(ctx, data, _params).await
+    async fn create(&self, ctx: &TenantContext, data: Value, params: BlogParams) -> Result<Value> {
+        self.adapter._create(ctx, data, params).await
     }
 
-    async fn find(&self, ctx: &TenantContext, _params: BlogParams) -> Result<Vec<Value>> {
-        self.adapter._find(ctx, _params).await
+    async fn find(&self, ctx: &TenantContext, params: BlogParams) -> Result<Vec<Value>> {
+        self.adapter._find(ctx, params).await
     }
 
-    async fn get(&self, ctx: &TenantContext, id: &str, _params: BlogParams) -> Result<Value> {
-        self.adapter._get(ctx, id, _params).await
+    async fn get(&self, ctx: &TenantContext, id: &str, params: BlogParams) -> Result<Value> {
+        self.adapter._get(ctx, id, params).await
     }
 
-    async fn update(&self, ctx: &TenantContext, id: &str, data: Value, _params: BlogParams) -> Result<Value> {
-        self.adapter._update(ctx, id, data, _params).await
+    async fn update(&self, ctx: &TenantContext, id: &str, data: Value, params: BlogParams) -> Result<Value> {
+        self.adapter._update(ctx, id, data, params).await
     }
 
-    async fn patch(&self, ctx: &TenantContext, id: Option<&str>, data: Value, _params: BlogParams) -> Result<Value> {
-        self.adapter._patch(ctx, id, data, _params).await
+    async fn patch(&self, ctx: &TenantContext, id: Option<&str>, data: Value, params: BlogParams) -> Result<Value> {
+        self.adapter._patch(ctx, id, data, params).await
     }
 
-    async fn remove(&self, ctx: &TenantContext, id: Option<&str>, _params: BlogParams) -> Result<Value> {
-        self.adapter._remove(ctx, id, _params).await
+    async fn remove(&self, ctx: &TenantContext, id: Option<&str>, params: BlogParams) -> Result<Value> {
+        self.adapter._remove(ctx, id, params).await
     }
 }
 
