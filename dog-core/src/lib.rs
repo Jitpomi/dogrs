@@ -12,6 +12,9 @@ pub mod events;
 pub mod errors;
 pub mod schema;
 
+#[cfg(feature = "adapters")]
+pub mod adapters;
+
 pub use app::{DogApp, ServiceCaller};
 pub use config::{DogConfig, DogConfigSnapshot };
 pub use hooks::{

@@ -9,7 +9,7 @@ async-trait = "0.1.89"
 axum = { version = "0.8.7", features = ["macros", "json"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 dog-axum = { path = "../../dog-axum" }
-dog-core = { path = "../../dog-core", features = ["serde"] }
+dog-core = { path = "../../dog-core", features = ["serde", "adapters"] }
 dog-schema = { path = "../../dog-schema" }
 dog-schema-validator = { path = "../../dog-schema-validator" }
 futures = "0.3.31"
