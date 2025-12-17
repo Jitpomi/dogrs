@@ -17,7 +17,7 @@ pub enum StoreKind {
     Authors,
 }
 
-pub struct TenantCrudService {
+pub struct BlogAdapter {
     pub state: Arc<BlogState>,
     pub store: StoreKind,
     pub id_prefix: &'static str,
@@ -25,7 +25,7 @@ pub struct TenantCrudService {
     pub capabilities: ServiceCapabilities,
 }
 
-impl TenantCrudService {
+impl BlogAdapter {
     fn map_for(&self) -> &RwLock<HashMap<String, HashMap<String, Value>>> {
         match self.store {
             StoreKind::Posts => &self.state.posts_by_tenant,
@@ -141,7 +141,7 @@ impl TenantCrudService {
 }
 
 dog_core::dog_adapter!(
-    TenantCrudService,
+    BlogAdapter,
     serde_json::Value,
     crate::services::BlogParams
 );

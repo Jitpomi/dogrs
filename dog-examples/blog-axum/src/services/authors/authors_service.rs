@@ -6,13 +6,13 @@ use dog_core::tenant::TenantContext;
 use dog_core::{DogService, ServiceCapabilities};
 use serde_json::Value;
 
-use crate::services::adapters::blog_adapter::{StoreKind, TenantCrudService};
+use crate::services::adapters::blog_adapter::{BlogAdapter, StoreKind};
 use crate::services::{BlogParams, BlogState};
 
 use super::authors_shared;
 
 pub struct AuthorsService {
-    pub adapter: TenantCrudService,
+    pub adapter: BlogAdapter,
 }
 
 #[async_trait]
@@ -49,7 +49,7 @@ impl DogService<Value, BlogParams> for AuthorsService {
 impl AuthorsService {
     pub fn new(state: Arc<BlogState>) -> Self {
         Self {
-            adapter: TenantCrudService {
+            adapter: BlogAdapter {
                 state,
                 store: StoreKind::Authors,
                 id_prefix: "author",
