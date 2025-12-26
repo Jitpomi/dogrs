@@ -1,0 +1,24 @@
+[package]
+name = "dog-typedb"
+version = "0.1.0"
+edition = "2021"
+description = "TypeDB adapter utilities for DogRS"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+
+[package.metadata.ferrisup]
+component_type = "library"
+
+[dependencies]
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+dog-core = { path = "../dog-core" }
+serde_json = "1.0.145"
+typedb-driver = "3.7.0"
+
+[dev-dependencies]
+
+[lib]
+name = "dog_typedb"
+path = "src/lib.rs"
