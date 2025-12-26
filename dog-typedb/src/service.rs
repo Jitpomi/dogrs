@@ -180,6 +180,16 @@ impl DogService<serde_json::Value, serde_json::Value> for TypeDBService {
 
         handler(ctx, &self.driver, &self.database, id, params).await
     }
+
+    async fn custom(
+        &self,
+        _ctx: &TenantContext,
+        _method: &str,
+        _data: Option<serde_json::Value>,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        Err(anyhow!("Custom methods not implemented by this TypeDB service"))
+    }
 }
 
 pub struct TypeDBDriverFactory;

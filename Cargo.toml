@@ -2,10 +2,12 @@
 members = [
     "dog-core",
     "dog-axum",
+    "dog-typedb",
     "dog-schema",
     "dog-schema-macros",
     "dog-schema-validator",
     "dog-examples/blog-axum",
+    "dog-examples/social-typedb",
 ]
 
 resolver = "2"

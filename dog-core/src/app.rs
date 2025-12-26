@@ -23,7 +23,60 @@ where
     config: RwLock<DogConfig>,
     // Store the concrete: Arc<dyn DogService<R,P>> as Box<dyn Any>
     any_services: RwLock<HashMap<String, Box<dyn Any + Send + Sync>>>,
+    // Arbitrary application state, stored as Arc<T> in a Box<dyn Any>
+    any_state: RwLock<HashMap<String, Box<dyn Any + Send + Sync>>>,
     events: RwLock<DogEventHub<R, P>>,
+}
+
+// Polymorphic app.set/app.get support types
+pub enum AppValue {
+    Str(String),
+    Any(Box<dyn Any + Send + Sync>),
+}
+
+pub trait IntoAppValue {
+    fn into_value(self) -> AppValue;
+}
+
+impl IntoAppValue for String {
+    fn into_value(self) -> AppValue {
+        AppValue::Str(self)
+    }
+}
+
+impl IntoAppValue for &str {
+    fn into_value(self) -> AppValue {
+        AppValue::Str(self.to_string())
+    }
+}
+
+impl<T> IntoAppValue for Arc<T>
+where
+    T: Any + Send + Sync + 'static,
+{
+    fn into_value(self) -> AppValue {
+        AppValue::Any(Box::new(self))
+    }
+}
+
+pub trait FromAppValue: Sized {
+    fn from_config(_s: &str) -> Option<Self> { None }
+    fn from_any(_b: &Box<dyn Any + Send + Sync>) -> Option<Self> { None }
+}
+
+impl FromAppValue for String {
+    fn from_config(s: &str) -> Option<Self> {
+        Some(s.to_string())
+    }
+}
+
+impl<T> FromAppValue for Arc<T>
+where
+    T: Any + Send + Sync + 'static,
+{
+    fn from_any(b: &Box<dyn Any + Send + Sync>) -> Option<Self> {
+        b.downcast_ref::<Arc<T>>().cloned()
+    }
 }
 
 /// DogApp is the central application container for DogRS.
@@ -89,6 +142,7 @@ where
                 service_hooks: RwLock::new(HashMap::new()),
                 config: RwLock::new(DogConfig::new()),
                 any_services: RwLock::new(HashMap::new()),
+                any_state: RwLock::new(HashMap::new()),
                 events: RwLock::new(DogEventHub::new()),
             }),
         }
@@ -154,20 +208,51 @@ where
         })
     }
 
-    /// Feathers: `app.set(key, value)`
+    /// Feathers: `app.set(key, value)` — now polymorphic.
+    /// - If value is a string (`&str`/`String`), stores in config.
+    /// - If value is `Arc<T>`, stores in typed any-state.
     pub fn set<K, V>(&self, key: K, value: V)
     where
         K: Into<String>,
-        V: Into<String>,
+        V: IntoAppValue,
     {
-        self.inner.config.write().unwrap().set(key, value);
+        match value.into_value() {
+            AppValue::Str(s) => {
+                self.inner.config.write().unwrap().set(key, s);
+            }
+            AppValue::Any(b) => {
+                self.inner
+                    .any_state
+                    .write()
+                    .unwrap()
+                    .insert(key.into(), b);
+            }
+        }
     }
 
-    /// Feathers: `app.get(key)`
-    pub fn get(&self, key: &str) -> Option<String> {
-        let cfg = self.inner.config.read().unwrap();
-        cfg.get(key).map(|v| v.to_string())
+    /// Feathers: `app.get(key)` — now polymorphic via type inference.
+    /// - `let s: Option<String> = app.get("k");` reads config.
+    /// - `let db: Option<Arc<T>> = app.get("k");` reads typed any-state.
+    pub fn get<T>(&self, key: &str) -> Option<T>
+    where
+        T: FromAppValue,
+    {
+        // Try config first
+        if let Some(s) = self.inner.config.read().unwrap().get(key) {
+            if let Some(v) = T::from_config(s) {
+                return Some(v);
+            }
+        }
+        // Fallback to any_state
+        self.inner
+            .any_state
+            .read()
+            .unwrap()
+            .get(key)
+            .and_then(|b| T::from_any(b))
     }
+
+    // Back-compat helpers remain available via generic set/get; dedicated any-state APIs removed.
 
     pub fn config_snapshot(&self) -> crate::DogConfigSnapshot {
         let cfg = self.inner.config.read().unwrap();

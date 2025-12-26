@@ -1,0 +1,243 @@
+# Sample Data for Social TypeDB Network
+# This file contains TypeQL insert queries to populate the database with test data
+
+# Insert Persons
+insert
+$alice isa person, has username "alice_smith", has email "alice@example.com", has full-name "Alice Smith";
+$bob isa person, has username "bob_jones", has email "bob@example.com", has full-name "Bob Jones";
+$charlie isa person, has username "charlie_brown", has email "charlie@example.com", has full-name "Charlie Brown";
+$diana isa person, has username "diana_prince", has email "diana@example.com", has full-name "Diana Prince";
+$eve isa person, has username "eve_adams", has email "eve@example.com", has full-name "Eve Adams";
+$frank isa person, has username "frank_miller", has email "frank@example.com", has full-name "Frank Miller";
+$grace isa person, has username "grace_hopper", has email "grace@example.com", has full-name "Grace Hopper";
+$henry isa person, has username "henry_ford", has email "henry@example.com", has full-name "Henry Ford";
+$iris isa person, has username "iris_watson", has email "iris@example.com", has full-name "Iris Watson";
+$jack isa person, has username "jack_sparrow", has email "jack@example.com", has full-name "Jack Sparrow";
+
+# Insert Organizations
+insert
+$techcorp isa organization, has name "TechCorp Inc", has organization-type "company";
+$university isa organization, has name "State University", has organization-type "educational-institute";
+$charity isa organization, has name "Help Foundation", has organization-type "charity";
+$startup isa organization, has name "InnovateLab", has organization-type "company";
+$hospital isa organization, has name "City Hospital", has organization-type "company";
+
+# Insert Groups
+insert
+$developers isa group, has name "Developers United", has description "A group for software developers";
+$photographers isa group, has name "Photo Enthusiasts", has description "Photography lovers community";
+$runners isa group, has name "Morning Runners", has description "Early morning running group";
+$bookclub isa group, has name "Book Club", has description "Monthly book reading discussions";
+$gamers isa group, has name "Gaming Squad", has description "Video game enthusiasts";
+
+# Insert Posts
+insert
+$post1 isa post, has title "Welcome to TypeDB!", has content "Just started learning TypeDB and it's amazing!", has created-at 2024-01-15T10:30:00;
+$post2 isa post, has title "Morning Run Complete", has content "Just finished a 5K run in the park. Beautiful weather today!", has created-at 2024-01-15T08:15:00;
+$post3 isa post, has title "New Project Launch", has content "Excited to announce our new AI project at TechCorp!", has created-at 2024-01-14T16:45:00;
+$post4 isa post, has title "Book Recommendation", has content "Just finished reading 'The Pragmatic Programmer'. Highly recommend!", has created-at 2024-01-14T20:30:00;
+$post5 isa post, has title "Photography Tips", has content "Golden hour is the best time for outdoor portraits. Here are my top 5 tips...", has created-at 2024-01-13T18:20:00;
+$post6 isa post, has title "University Lecture", has content "Gave a guest lecture on database systems today. Students were very engaged!", has created-at 2024-01-13T14:00:00;
+$post7 isa post, has title "Charity Event Success", has content "Our fundraising event raised $50,000 for local families. Thank you all!", has created-at 2024-01-12T19:15:00;
+$post8 isa post, has title "Gaming Tournament", has content "Won first place in the local esports tournament! Team work makes the dream work.", has created-at 2024-01-12T22:45:00;
+$post9 isa post, has title "Startup Life", has content "Working 16 hour days but loving every minute of building something new.", has created-at 2024-01-11T23:30:00;
+$post10 isa post, has title "Medical Breakthrough", has content "Our research team made a significant discovery in cancer treatment.", has created-at 2024-01-11T12:00:00;
+
+# Insert Comments
+insert
+$comment1 isa comment, has content "Great post! TypeDB is indeed powerful.", has created-at 2024-01-15T11:00:00;
+$comment2 isa comment, has content "I should start running too. Any tips for beginners?", has created-at 2024-01-15T08:30:00;
+$comment3 isa comment, has content "Congratulations on the project launch!", has created-at 2024-01-14T17:00:00;
+$comment4 isa comment, has content "Added to my reading list. Thanks for the recommendation!", has created-at 2024-01-14T21:00:00;
+$comment5 isa comment, has content "Love your photography work! These tips are gold.", has created-at 2024-01-13T19:00:00;
+$comment6 isa comment, has content "Wish I could have attended your lecture!", has created-at 2024-01-13T15:00:00;
+$comment7 isa comment, has content "Amazing work by the foundation. Proud to be part of this!", has created-at 2024-01-12T20:00:00;
+$comment8 isa comment, has content "Well deserved win! Your team played amazingly.", has created-at 2024-01-12T23:00:00;
+$comment9 isa comment, has content "The startup grind is real! Keep pushing forward.", has created-at 2024-01-12T00:00:00;
+$comment10 isa comment, has content "This could change so many lives. Incredible work!", has created-at 2024-01-11T13:00:00;
+
+# Insert Relationships - Authorship (Person -> Post)
+insert
+$alice isa person, has username "alice_smith";
+$post1 isa post, has title "Welcome to TypeDB!";
+(author: $alice, content: $post1) isa authorship;
+
+insert
+$bob isa person, has username "bob_jones";
+$post2 isa post, has title "Morning Run Complete";
+(author: $bob, content: $post2) isa authorship;
+
+insert
+$charlie isa person, has username "charlie_brown";
+$post3 isa post, has title "New Project Launch";
+(author: $charlie, content: $post3) isa authorship;
+
+insert
+$diana isa person, has username "diana_prince";
+$post4 isa post, has title "Book Recommendation";
+(author: $diana, content: $post4) isa authorship;
+
+insert
+$eve isa person, has username "eve_adams";
+$post5 isa post, has title "Photography Tips";
+(author: $eve, content: $post5) isa authorship;
+
+insert
+$frank isa person, has username "frank_miller";
+$post6 isa post, has title "University Lecture";
+(author: $frank, content: $post6) isa authorship;
+
+insert
+$grace isa person, has username "grace_hopper";
+$post7 isa post, has title "Charity Event Success";
+(author: $grace, content: $post7) isa authorship;
+
+insert
+$henry isa person, has username "henry_ford";
+$post8 isa post, has title "Gaming Tournament";
+(author: $henry, content: $post8) isa authorship;
+
+insert
+$iris isa person, has username "iris_watson";
+$post9 isa post, has title "Startup Life";
+(author: $iris, content: $post9) isa authorship;
+
+insert
+$jack isa person, has username "jack_sparrow";
+$post10 isa post, has title "Medical Breakthrough";
+(author: $jack, content: $post10) isa authorship;
+
+# Insert Commenting Relationships (Person -> Comment -> Post)
+insert
+$bob isa person, has username "bob_jones";
+$comment1 isa comment, has content "Great post! TypeDB is indeed powerful.";
+$post1 isa post, has title "Welcome to TypeDB!";
+(commenter: $bob, comment: $comment1) isa commenting;
+(commented-content: $post1, comment: $comment1) isa commenting;
+
+insert
+$alice isa person, has username "alice_smith";
+$comment2 isa comment, has content "I should start running too. Any tips for beginners?";
+$post2 isa post, has title "Morning Run Complete";
+(commenter: $alice, comment: $comment2) isa commenting;
+(commented-content: $post2, comment: $comment2) isa commenting;
+
+insert
+$diana isa person, has username "diana_prince";
+$comment3 isa comment, has content "Congratulations on the project launch!";
+$post3 isa post, has title "New Project Launch";
+(commenter: $diana, comment: $comment3) isa commenting;
+(commented-content: $post3, comment: $comment3) isa commenting;
+
+insert
+$charlie isa person, has username "charlie_brown";
+$comment4 isa comment, has content "Added to my reading list. Thanks for the recommendation!";
+$post4 isa post, has title "Book Recommendation";
+(commenter: $charlie, comment: $comment4) isa commenting;
+(commented-content: $post4, comment: $comment4) isa commenting;
+
+insert
+$frank isa person, has username "frank_miller";
+$comment5 isa comment, has content "Love your photography work! These tips are gold.";
+$post5 isa post, has title "Photography Tips";
+(commenter: $frank, comment: $comment5) isa commenting;
+(commented-content: $post5, comment: $comment5) isa commenting;
+
+# Insert Employment Relationships (Person -> Organization)
+insert
+$charlie isa person, has username "charlie_brown";
+$techcorp isa organization, has name "TechCorp Inc";
+(employee: $charlie, employer: $techcorp) isa employment;
+
+insert
+$frank isa person, has username "frank_miller";
+$university isa organization, has name "State University";
+(employee: $frank, employer: $university) isa employment;
+
+insert
+$grace isa person, has username "grace_hopper";
+$charity isa organization, has name "Help Foundation";
+(employee: $grace, employer: $charity) isa employment;
+
+insert
+$iris isa person, has username "iris_watson";
+$startup isa organization, has name "InnovateLab";
+(employee: $iris, employer: $startup) isa employment;
+
+insert
+$jack isa person, has username "jack_sparrow";
+$hospital isa organization, has name "City Hospital";
+(employee: $jack, employer: $hospital) isa employment;
+
+# Insert Group Memberships (Person -> Group)
+insert
+$alice isa person, has username "alice_smith";
+$developers isa group, has name "Developers United";
+(member: $alice, group: $developers) isa group-membership;
+
+insert
+$charlie isa person, has username "charlie_brown";
+$developers isa group, has name "Developers United";
+(member: $charlie, group: $developers) isa group-membership;
+
+insert
+$eve isa person, has username "eve_adams";
+$photographers isa group, has name "Photo Enthusiasts";
+(member: $eve, group: $photographers) isa group-membership;
+
+insert
+$bob isa person, has username "bob_jones";
+$runners isa group, has name "Morning Runners";
+(member: $bob, group: $runners) isa group-membership;
+
+insert
+$diana isa person, has username "diana_prince";
+$bookclub isa group, has name "Book Club";
+(member: $diana, group: $bookclub) isa group-membership;
+
+insert
+$henry isa person, has username "henry_ford";
+$gamers isa group, has name "Gaming Squad";
+(member: $henry, group: $gamers) isa group-membership;
+
+# Insert Friendship Relationships
+insert
+$alice isa person, has username "alice_smith";
+$bob isa person, has username "bob_jones";
+(friend: $alice, friend: $bob) isa friendship;
+
+insert
+$charlie isa person, has username "charlie_brown";
+$diana isa person, has username "diana_prince";
+(friend: $charlie, friend: $diana) isa friendship;
+
+insert
+$eve isa person, has username "eve_adams";
+$frank isa person, has username "frank_miller";
+(friend: $eve, friend: $frank) isa friendship;
+
+insert
+$grace isa person, has username "grace_hopper";
+$henry isa person, has username "henry_ford";
+(friend: $grace, friend: $henry) isa friendship;
+
+insert
+$iris isa person, has username "iris_watson";
+$jack isa person, has username "jack_sparrow";
+(friend: $iris, friend: $jack) isa friendship;
+
+# Cross-friendships for more connected network
+insert
+$alice isa person, has username "alice_smith";
+$charlie isa person, has username "charlie_brown";
+(friend: $alice, friend: $charlie) isa friendship;
+
+insert
+$bob isa person, has username "bob_jones";
+$eve isa person, has username "eve_adams";
+(friend: $bob, friend: $eve) isa friendship;
+
+insert
+$diana isa person, has username "diana_prince";
+$grace isa person, has username "grace_hopper";
+(friend: $diana, friend: $grace) isa friendship;

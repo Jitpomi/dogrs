@@ -6,6 +6,11 @@ Cargo.lock
 
 # VSCode
 .vscode/
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/c_cpp_properties.json
 
 # JetBrains / WebStorm / CLion / RustRover
 .idea/
