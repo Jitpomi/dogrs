@@ -168,7 +168,10 @@ async function loadFeed() {
                     // Get view count for this post
                     const viewCount = await getPostViewCount(postId);
                     
-                    const postCard = createPostCard(authorName, initials, text, timeAgo, postId, likeCount, isLiked, viewCount);
+                    // Get comment count for this post
+                    const commentCount = await getPostCommentCount(postId);
+                    
+                    const postCard = createPostCard(authorName, initials, text, timeAgo, postId, likeCount, isLiked, viewCount, commentCount);
                     console.log('Created post card for:', authorName);
                     return postCard;
                 } catch (error) {
@@ -218,6 +221,62 @@ async function loadFeed() {
                 }
             });
         });
+
+        // Add event listeners for comment buttons
+        const commentButtons = document.querySelectorAll('.comment-btn');
+        console.log('Found comment buttons:', commentButtons.length);
+        commentButtons.forEach(button => {
+            button.addEventListener('click', async function() {
+                const postId = this.getAttribute('data-post-id');
+                const commentSection = document.querySelector(`.comment-section[data-post-id="${postId}"]`);
+                
+                if (commentSection.classList.contains('hidden')) {
+                    // Show comment section and load comments
+                    commentSection.classList.remove('hidden');
+                    await loadCommentsForPost(postId);
+                } else {
+                    // Hide comment section
+                    commentSection.classList.add('hidden');
+                }
+            });
+        });
+
+        // Add event listeners for submit comment buttons
+        const submitCommentButtons = document.querySelectorAll('.submit-comment-btn');
+        console.log('Found submit comment buttons:', submitCommentButtons.length);
+        submitCommentButtons.forEach(button => {
+            button.addEventListener('click', async function() {
+                const postId = this.getAttribute('data-post-id');
+                const commentInput = document.querySelector(`.comment-input[data-post-id="${postId}"]`);
+                const commentText = commentInput.value.trim();
+                
+                if (!commentText) {
+                    showNotification('Please enter a comment', 'error');
+                    return;
+                }
+
+                // Disable button during request
+                this.disabled = true;
+                this.textContent = 'Posting...';
+
+                try {
+                    const success = await addComment(postId, commentText);
+                    if (success) {
+                        commentInput.value = '';
+                        await loadCommentsForPost(postId);
+                        
+                        // Update comment count display
+                        const newCommentCount = await getPostCommentCount(postId);
+                        updateCommentButton(postId, newCommentCount);
+                    }
+                } catch (error) {
+                    console.error('Error submitting comment:', error);
+                } finally {
+                    this.disabled = false;
+                    this.textContent = 'Post Comment';
+                }
+            });
+        });
         
         // Load suggested connections and trending topics
         await loadSuggestedConnections();
@@ -249,7 +308,7 @@ async function loadFeed() {
     hideLoading();
 }
 
-function createPostCard(authorName, authorInitials, content, timeAgo, postId, likeCount = 0, isLiked = false, viewCount = 0) {
+function createPostCard(authorName, authorInitials, content, timeAgo, postId, likeCount = 0, isLiked = false, viewCount = 0, commentCount = 0) {
     const likeIcon = isLiked ? 'fas fa-thumbs-up' : 'far fa-thumbs-up';
     const likeColor = isLiked ? 'text-blue-600' : 'text-neutral-500 hover:text-blue-600';
     const likeText = likeCount > 0 ? `${likeCount}` : '';
@@ -272,9 +331,10 @@ function createPostCard(authorName, authorInitials, content, timeAgo, postId, li
                                 <span class="text-body font-medium">Like</span>
                                 ${likeText ? `<span class="like-count text-sm">${likeText}</span>` : ''}
                             </button>
-                            <button class="flex items-center space-x-2 text-neutral-500 hover:text-green-600 transition-colors duration-150 p-2 rounded-lg hover:bg-green-50">
+                            <button class="comment-btn flex items-center space-x-2 text-neutral-500 hover:text-green-600 transition-colors duration-150 p-2 rounded-lg hover:bg-green-50" data-post-id="${postId}">
                                 <i class="far fa-comment text-lg"></i>
                                 <span class="text-body font-medium">Comment</span>
+                                ${commentCount > 0 ? `<span class="comment-count text-sm">${commentCount}</span>` : ''}
                             </button>
                             <button class="flex items-center space-x-2 text-neutral-500 hover:text-purple-600 transition-colors duration-150 p-2 rounded-lg hover:bg-purple-50">
                                 <i class="fas fa-share text-lg"></i>
@@ -286,10 +346,80 @@ function createPostCard(authorName, authorInitials, content, timeAgo, postId, li
                             <span>${viewCount} views</span>
                         </div>
                     </div>
+                    
+                    <!-- Comment Section -->
+                    <div class="comment-section mt-4 hidden" data-post-id="${postId}">
+                        <div class="border-t border-neutral-100 pt-4">
+                            <!-- Comment Input -->
+                            <div class="flex items-start space-x-3 mb-4">
+                                <div class="avatar-sm">U</div>
+                                <div class="flex-1">
+                                    <textarea class="comment-input w-full p-3 border border-neutral-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" 
+                                              rows="2" 
+                                              placeholder="Write a comment..." 
+                                              data-post-id="${postId}"></textarea>
+                                    <div class="flex justify-end mt-2">
+                                        <button class="submit-comment-btn btn-primary-sm" data-post-id="${postId}">Post Comment</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Comments List -->
+                            <div class="comments-list" data-post-id="${postId}">
+                                <!-- Comments will be loaded here -->
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     `;
+}
+
+// Load and display comments for a specific post
+async function loadCommentsForPost(postId) {
+    try {
+        const commentsList = document.querySelector(`.comments-list[data-post-id="${postId}"]`);
+        if (!commentsList) return;
+
+        // Show loading state
+        commentsList.innerHTML = '<div class="text-center py-2 text-neutral-500">Loading comments...</div>';
+
+        // Get comments from database
+        const comments = await getPostComments(postId);
+
+        if (comments.length === 0) {
+            commentsList.innerHTML = '<div class="text-center py-4 text-neutral-500">No comments yet. Be the first to comment!</div>';
+            return;
+        }
+
+        // Generate comments HTML
+        const commentsHTML = comments.map(comment => {
+            const initials = comment.authorName.split(' ').map(n => n[0]).join('').toUpperCase();
+            const timeAgo = getTimeAgo(comment.timestamp);
+            
+            return `
+                <div class="flex items-start space-x-3 mb-3 pb-3 border-b border-neutral-100 last:border-b-0">
+                    <div class="avatar-sm">${initials}</div>
+                    <div class="flex-1">
+                        <div class="flex items-center space-x-2 mb-1">
+                            <span class="font-semibold text-sm" style="color: var(--neutral-900);">${comment.authorName}</span>
+                            <span class="text-xs" style="color: var(--neutral-400);">${timeAgo}</span>
+                        </div>
+                        <p class="text-sm" style="color: var(--neutral-700); line-height: 1.4;">${comment.text}</p>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        commentsList.innerHTML = commentsHTML;
+    } catch (error) {
+        console.error('Error loading comments:', error);
+        const commentsList = document.querySelector(`.comments-list[data-post-id="${postId}"]`);
+        if (commentsList) {
+            commentsList.innerHTML = '<div class="text-center py-2 text-red-500">Failed to load comments</div>';
+        }
+    }
 }
 
 function getSamplePosts() {

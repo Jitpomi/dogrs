@@ -108,6 +108,41 @@
             height: 80px;
             font-size: 24px;
         }
+        
+        .avatar-sm {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--primary-blue) 0%, var(--secondary-blue) 100%);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 12px;
+            flex-shrink: 0;
+        }
+        
+        .btn-primary-sm {
+            background: var(--primary-blue);
+            color: white;
+            padding: 6px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        
+        .btn-primary-sm:hover {
+            background: var(--primary-blue-hover);
+        }
+        
+        .btn-primary-sm:disabled {
+            background: var(--neutral-300);
+            cursor: not-allowed;
+        }
         .nav-item {
             display: flex;
             align-items: center;

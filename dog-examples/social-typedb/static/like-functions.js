@@ -15,17 +15,13 @@ async function getPostLikeInfo(postId) {
             select $r;
         `);
         
-        // Get current user (first available user for now)
-        const currentUserCheck = await makeQuery('posts', `
-            match $person isa person, has username $username;
-            select $person, $username;
-            limit 1;
-        `);
-        
-        let currentUsername = "jasonc"; // fallback
-        if (currentUserCheck.ok?.answers && currentUserCheck.ok.answers.length > 0) {
-            currentUsername = currentUserCheck.ok.answers[0].data.username?.value || currentUserCheck.ok.answers[0].data.username;
+        // Get current user dynamically
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for like status check');
+            return { likeCount: 0, isLiked: false };
         }
+        const currentUsername = currentUser.username;
         
         // Query to check if current user has liked this specific post
         const userLikeData = await makeQuery('posts', `
@@ -37,9 +33,7 @@ async function getPostLikeInfo(postId) {
             select $r;
         `);
         
-        // Debug: Log the like results
-        console.log('Like count query result:', likeCountData);
-        console.log('User like query result:', userLikeData);
+        
         
         if (likeCountData.ok?.answers) {
             console.log(`Post ${postId} - Found ${likeCountData.ok.answers.length} reactions:`);
@@ -72,16 +66,12 @@ async function togglePostLike(postId) {
         
         if (isLiked) {
             // Get current user for unlike operation
-            const currentUserCheck = await makeQuery('posts', `
-                match $person isa person, has username $username;
-                select $person, $username;
-                limit 1;
-            `);
-            
-            let currentUsername = "jasonc"; // fallback
-            if (currentUserCheck.ok?.answers && currentUserCheck.ok.answers.length > 0) {
-                currentUsername = currentUserCheck.ok.answers[0].data.username?.value || currentUserCheck.ok.answers[0].data.username;
+            const currentUser = await getCurrentUser();
+            if (!currentUser) {
+                console.error('No current user found for unlike operation');
+                return isLiked;
             }
+            const currentUsername = currentUser.username;
             
             // Unlike the post - delete the reaction
             const unlikeData = await makeQuery('posts', `
@@ -105,22 +95,14 @@ async function togglePostLike(postId) {
             // Like the post - insert new reaction
             console.log('Inserting like for post:', postId);
             
-            // First find existing users to get a valid username
-            const allUsersCheck = await makeQuery('posts', `
-                match $person isa person, has username $username;
-                select $person, $username;
-            `);
-            console.log('All users in database:', allUsersCheck);
-            
-            if (!allUsersCheck.ok?.answers || allUsersCheck.ok.answers.length === 0) {
-                console.error('No users found in database!');
-                showNotification('No users found - cannot like post', 'error');
+            // Get current user for like operation
+            const currentUser = await getCurrentUser();
+            if (!currentUser) {
+                console.error('No current user found for like operation');
+                showNotification('User not found - cannot like post', 'error');
                 return isLiked;
             }
-            
-            // Use the first available username
-            const firstUser = allUsersCheck.ok.answers[0];
-            const validUsername = firstUser.data.username?.value || firstUser.data.username;
+            const validUsername = currentUser.username;
             console.log('Using username:', validUsername);
             
             const likeData = await makeQuery('posts', `
@@ -175,18 +157,13 @@ async function trackPostView(postId) {
     // Run view tracking in background without blocking feed loading
     setTimeout(async () => {
         try {
-            // Get current user (first available user for now)
-            const currentUserCheck = await makeQuery('posts', `
-                match $person isa person, has username $username;
-                select $person, $username;
-                limit 1;
-            `);
-            
-            if (!currentUserCheck.ok?.answers || currentUserCheck.ok.answers.length === 0) {
+            // Get current user dynamically
+            const currentUser = await getCurrentUser();
+            if (!currentUser) {
                 return;
             }
             
-            const currentUsername = currentUserCheck.ok.answers[0].data.username?.value || currentUserCheck.ok.answers[0].data.username;
+            const currentUsername = currentUser.username;
             
             // Check if this user has already viewed this post to avoid duplicate views
             const existingViewCheck = await makeQuery('posts', `
@@ -234,6 +211,197 @@ async function getPostViewCount(postId) {
     } catch (error) {
         console.error('Error getting post view count for', postId, ':', error);
         return 0;
+    }
+}
+
+// Get comment count for a specific post
+async function getPostCommentCount(postId) {
+    try {
+        // Query to get comment count for the specific post using commenting relation
+        const commentCountData = await makeQuery('posts', `
+            match
+            $post isa post, has post-id "${postId}";
+            $commenting isa commenting;
+            $commenting links (parent: $post, comment: $comment, author: $author);
+            $comment has comment-id $commentId;
+            select $comment, $commentId;
+        `);
+        
+        if (commentCountData.ok && commentCountData.ok.answers) {
+            // Remove duplicates based on comment ID to get accurate count
+            const seenCommentIds = new Set();
+            const uniqueComments = commentCountData.ok.answers.filter(answer => {
+                const commentId = answer.data.commentId?.value || answer.data.commentId;
+                if (seenCommentIds.has(commentId)) {
+                    return false;
+                }
+                seenCommentIds.add(commentId);
+                return true;
+            });
+            
+            return uniqueComments.length;
+        }
+        
+        return 0;
+    } catch (error) {
+        console.error('Error getting post comment count for', postId, ':', error);
+        return 0;
+    }
+}
+
+// Get current user - this would normally come from authentication/session
+async function getCurrentUser() {
+    try {
+        // In a real app, this would check authentication context/session
+        // For now, we'll determine the current user based on the profile shown in UI
+        // This could be enhanced to use localStorage, session, or API call
+        
+        // Try to get the user shown in the profile section
+        const profileData = await makeQuery('posts', `
+            match $me isa person, has name "Jason Clark", has username $username;
+            select $me, $username;
+        `);
+        
+        if (profileData.ok?.answers && profileData.ok.answers.length > 0) {
+            return {
+                username: profileData.ok.answers[0].data.username?.value || profileData.ok.answers[0].data.username,
+                name: "Jason Clark"
+            };
+        }
+        
+        // Fallback to first available user if Jason Clark not found
+        const fallbackData = await makeQuery('posts', `
+            match $person isa person, has username $username, has name $name;
+            select $person, $username, $name;
+            limit 1;
+        `);
+        
+        if (fallbackData.ok?.answers && fallbackData.ok.answers.length > 0) {
+            return {
+                username: fallbackData.ok.answers[0].data.username?.value || fallbackData.ok.answers[0].data.username,
+                name: fallbackData.ok.answers[0].data.name?.value || fallbackData.ok.answers[0].data.name
+            };
+        }
+        
+        return null;
+    } catch (error) {
+        console.error('Error getting current user:', error);
+        return null;
+    }
+}
+
+// Add a comment to a specific post
+async function addComment(postId, commentText) {
+    try {
+        // Get current user dynamically
+        const currentUser = await getCurrentUser();
+        
+        if (!currentUser) {
+            console.error('No current user found for commenting');
+            return false;
+        }
+        
+        const currentUsername = currentUser.username;
+        
+        // Generate unique comment ID
+        const commentId = `comment_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Insert comment entity and commenting relation
+        const commentData = await makeQuery('posts', `
+            match
+            $post isa post, has post-id "${postId}";
+            $person isa person, has username "${currentUsername}";
+            insert
+            $comment isa comment, 
+                has comment-id "${commentId}",
+                has comment-text "${commentText}",
+                has creation-timestamp ${new Date().toISOString().slice(0, 19)};
+            $commenting isa commenting (parent: $post, comment: $comment, author: $person);
+        `, 'Write');
+        
+        if (commentData.ok) {
+            console.log('Comment added successfully:', commentId);
+            showNotification('Comment added', 'success');
+            return true;
+        } else {
+            console.error('Failed to add comment:', commentData);
+            showNotification('Failed to add comment', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error adding comment:', error);
+        showNotification('Error adding comment', 'error');
+        return false;
+    }
+}
+
+// Get comments for a specific post
+async function getPostComments(postId) {
+    try {
+        // Query to get all comments for the post with author information
+        const commentsData = await makeQuery('posts', `
+            match
+            $post isa post, has post-id "${postId}";
+            $commenting isa commenting;
+            $commenting links (parent: $post, comment: $comment, author: $author);
+            $comment has comment-text $text, has creation-timestamp $time, has comment-id $commentId;
+            $author has name $authorName;
+            select $comment, $text, $time, $authorName, $commentId;
+        `);
+        
+        if (commentsData.ok && commentsData.ok.answers) {
+            // Remove duplicates based on comment ID
+            const seenCommentIds = new Set();
+            const uniqueComments = commentsData.ok.answers.filter(answer => {
+                const commentId = answer.data.commentId?.value || answer.data.commentId;
+                if (seenCommentIds.has(commentId)) {
+                    return false;
+                }
+                seenCommentIds.add(commentId);
+                return true;
+            });
+            
+            const comments = uniqueComments.map(answer => ({
+                id: answer.data.commentId?.value || answer.data.commentId || '',
+                text: answer.data.text?.value || answer.data.text || '',
+                authorName: answer.data.authorName?.value || answer.data.authorName || 'Unknown',
+                timestamp: answer.data.time?.value || answer.data.time || new Date().toISOString()
+            }));
+            
+            // Sort comments by timestamp (newest first)
+            comments.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+            
+            return comments;
+        }
+        
+        return [];
+    } catch (error) {
+        console.error('Error getting post comments:', error);
+        return [];
+    }
+}
+
+// Update comment button UI with new count
+function updateCommentButton(postId, commentCount) {
+    const commentButton = document.querySelector(`.comment-btn[data-post-id="${postId}"]`);
+    if (!commentButton) return;
+
+    // Find existing comment count span or create new one
+    let commentCountSpan = commentButton.querySelector('.comment-count');
+    
+    if (commentCount > 0) {
+        if (!commentCountSpan) {
+            // Create new comment count span
+            commentCountSpan = document.createElement('span');
+            commentCountSpan.className = 'comment-count text-sm';
+            commentButton.appendChild(commentCountSpan);
+        }
+        commentCountSpan.textContent = commentCount;
+    } else {
+        // Remove comment count span if count is 0
+        if (commentCountSpan) {
+            commentCountSpan.remove();
+        }
     }
 }
 
