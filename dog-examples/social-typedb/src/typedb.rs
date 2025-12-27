@@ -4,6 +4,7 @@ use tokio::sync::Mutex;
 use anyhow::Result;
 use dog_core::DogApp;
 use typedb_driver::{TypeDBDriver, Credentials, DriverOptions};
+use dog_typedb::adapter::TypeDBState as TypeDBStateTrait;
 
 use super::SocialParams;
 
@@ -13,6 +14,16 @@ pub struct TypeDBState {
     pub driver: Arc<TypeDBDriver>,
     pub database: String,
     pub operation_mutex: Arc<Mutex<()>>,
+}
+
+impl TypeDBStateTrait for TypeDBState {
+    fn driver(&self) -> &Arc<TypeDBDriver> {
+        &self.driver
+    }
+    
+    fn database(&self) -> &str {
+        &self.database
+    }
 }
 
 impl TypeDBState {

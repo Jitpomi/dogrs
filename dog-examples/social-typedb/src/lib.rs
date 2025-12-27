@@ -22,6 +22,10 @@ pub async fn build() -> anyhow::Result<AxumApp<Value, SocialParams>> {
 
     let ax = ax
         .use_service("/persons", svcs.persons)
+        .use_service("/organizations", svcs.organizations)
+        .use_service("/groups", svcs.groups)
+        .use_service("/posts", svcs.posts)
+        .use_service("/comments", svcs.comments)
 
         .service("/health", || async { "ok" });
 

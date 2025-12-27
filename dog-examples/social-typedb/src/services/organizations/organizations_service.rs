@@ -7,13 +7,13 @@ use serde_json::Value;
 use crate::typedb::TypeDBState;
 use crate::services::SocialParams;
 use dog_typedb::TypeDBAdapter;
-use super::persons_shared;
+use super::organizations_shared;
 
-pub struct PersonsService {
+pub struct OrganizationsService {
     adapter: TypeDBAdapter,
 }
 
-impl PersonsService {
+impl OrganizationsService {
     pub fn new(state: Arc<TypeDBState>) -> Self {
         Self {
             adapter: TypeDBAdapter::new(state),
@@ -22,9 +22,9 @@ impl PersonsService {
 }
 
 #[async_trait]
-impl DogService<Value, SocialParams> for PersonsService {
+impl DogService<Value, SocialParams> for OrganizationsService {
     fn capabilities(&self) -> ServiceCapabilities {
-        persons_shared::capabilities()
+        organizations_shared::capabilities()
     }
 
     async fn custom(
@@ -49,9 +49,7 @@ impl DogService<Value, SocialParams> for PersonsService {
                     Err(anyhow::anyhow!("Read method requires data with query"))
                 }
             }
-            _ => {
-                Err(anyhow::anyhow!("Unknown custom method: {}", method))
-            }
+            _ => Err(anyhow::anyhow!("Unsupported method: {}", method)),
         }
     }
 }

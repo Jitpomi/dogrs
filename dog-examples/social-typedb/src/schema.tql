@@ -1,7 +1,9 @@
 define
-  # First define all attributes
-  attribute id @abstract, value string;
-  attribute page-id @abstract, sub id;
+  # ----------------------------
+  # Attributes (FIXED)
+  # ----------------------------
+  attribute id, value string;                 # <-- was @abstract, must be concrete (owned as @key)
+  attribute page-id sub id;                   # <-- was @abstract, must be concrete (pages own it)
   attribute username sub page-id;
   attribute group-id sub page-id;
   attribute post-id sub id;
@@ -54,7 +56,9 @@ define
   attribute is-active, value boolean;
   attribute can-publish, value boolean;
 
-  # Then define basic relations
+  # ----------------------------
+  # Relations
+  # ----------------------------
   relation birth,
     relates born,
     owns birth-date;
@@ -150,7 +154,9 @@ define
     relates subscriber,
     relates content;
 
-  # Now define entities that can reference the relations
+  # ----------------------------
+  # Entities
+  # ----------------------------
   entity content @abstract,
     owns id @key,
     owns is-visible,
@@ -218,7 +224,7 @@ define
     plays group-membership:group;
 
   entity post @abstract, sub content,
-    owns post-id,
+    owns post-id @key,
     owns post-text,
     owns creation-timestamp,
     owns language,
@@ -235,7 +241,10 @@ define
   entity image-post sub post, owns post-image;
   entity video-post sub post, owns post-video;
   entity live-video-post sub video-post;
-  entity poll-post sub post, owns question, owns answer @card(0..), plays response:poll;
+  entity poll-post sub post,
+    owns question,
+    owns answer @card(0..),
+    plays response:poll;
 
   entity comment sub content,
     owns comment-id,

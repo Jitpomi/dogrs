@@ -1,243 +1,977 @@
-# Sample Data for Social TypeDB Network
-# This file contains TypeQL insert queries to populate the database with test data
+# Large-scale seed data for TypeDB database
+# 10,000+ entities for performance testing
 
-# Insert Persons
+# Batch 1: 50 persons
 insert
-$alice isa person, has username "alice_smith", has email "alice@example.com", has full-name "Alice Smith";
-$bob isa person, has username "bob_jones", has email "bob@example.com", has full-name "Bob Jones";
-$charlie isa person, has username "charlie_brown", has email "charlie@example.com", has full-name "Charlie Brown";
-$diana isa person, has username "diana_prince", has email "diana@example.com", has full-name "Diana Prince";
-$eve isa person, has username "eve_adams", has email "eve@example.com", has full-name "Eve Adams";
-$frank isa person, has username "frank_miller", has email "frank@example.com", has full-name "Frank Miller";
-$grace isa person, has username "grace_hopper", has email "grace@example.com", has full-name "Grace Hopper";
-$henry isa person, has username "henry_ford", has email "henry@example.com", has full-name "Henry Ford";
-$iris isa person, has username "iris_watson", has email "iris@example.com", has full-name "Iris Watson";
-$jack isa person, has username "jack_sparrow", has email "jack@example.com", has full-name "Jack Sparrow";
+  $person1 isa person, has username "user_2025_1", has name "John Smith", has gender "male", has email "user1@example.com";
+  $person2 isa person, has username "user_2025_2", has name "Jane Doe", has gender "female", has email "user2@example.com";
+  $person3 isa person, has username "user_2025_3", has name "Mike Johnson", has gender "male", has email "user3@example.com";
+  $person4 isa person, has username "user_2025_4", has name "Sarah Wilson", has gender "female", has email "user4@example.com";
+  $person5 isa person, has username "user_2025_5", has name "David Brown", has gender "male", has email "user5@example.com";
+  $person6 isa person, has username "user_2025_6", has name "Lisa Davis", has gender "female", has email "user6@example.com";
+  $person7 isa person, has username "user_2025_7", has name "Tom Miller", has gender "male", has email "user7@example.com";
+  $person8 isa person, has username "user_2025_8", has name "Amy Garcia", has gender "female", has email "user8@example.com";
+  $person9 isa person, has username "user_2025_9", has name "Chris Martinez", has gender "male", has email "user9@example.com";
+  $person10 isa person, has username "user_2025_10", has name "Emma Rodriguez", has gender "female", has email "user10@example.com";
+  $person11 isa person, has username "user_2025_11", has name "Alex Taylor", has gender "male", has email "user11@example.com";
+  $person12 isa person, has username "user_2025_12", has name "Olivia Anderson", has gender "female", has email "user12@example.com";
+  $person13 isa person, has username "user_2025_13", has name "Ryan Thomas", has gender "male", has email "user13@example.com";
+  $person14 isa person, has username "user_2025_14", has name "Sophia Jackson", has gender "female", has email "user14@example.com";
+  $person15 isa person, has username "user_2025_15", has name "Kevin White", has gender "male", has email "user15@example.com";
+  $person16 isa person, has username "user_2025_16", has name "Isabella Harris", has gender "female", has email "user16@example.com";
+  $person17 isa person, has username "user_2025_17", has name "Jason Clark", has gender "male", has email "user17@example.com";
+  $person18 isa person, has username "user_2025_18", has name "Mia Lewis", has gender "female", has email "user18@example.com";
+  $person19 isa person, has username "user_2025_19", has name "Brandon Lee", has gender "male", has email "user19@example.com";
+  $person20 isa person, has username "user_2025_20", has name "Charlotte Walker", has gender "female", has email "user20@example.com";
+  $person21 isa person, has username "user_2025_21", has name "Tyler Hall", has gender "male", has email "user21@example.com";
+  $person22 isa person, has username "user_2025_22", has name "Amelia Allen", has gender "female", has email "user22@example.com";
+  $person23 isa person, has username "user_2025_23", has name "Nathan Young", has gender "male", has email "user23@example.com";
+  $person24 isa person, has username "user_2025_24", has name "Harper King", has gender "female", has email "user24@example.com";
+  $person25 isa person, has username "user_2025_25", has name "Ethan Wright", has gender "male", has email "user25@example.com";
+  $person26 isa person, has username "user_2025_26", has name "Evelyn Lopez", has gender "female", has email "user26@example.com";
+  $person27 isa person, has username "user_2025_27", has name "Jacob Hill", has gender "male", has email "user27@example.com";
+  $person28 isa person, has username "user_2025_28", has name "Abigail Scott", has gender "female", has email "user28@example.com";
+  $person29 isa person, has username "user_2025_29", has name "Logan Green", has gender "male", has email "user29@example.com";
+  $person30 isa person, has username "user_2025_30", has name "Emily Adams", has gender "female", has email "user30@example.com";
+  $person31 isa person, has username "user_2025_31", has name "Mason Baker", has gender "male", has email "user31@example.com";
+  $person32 isa person, has username "user_2025_32", has name "Elizabeth Gonzalez", has gender "female", has email "user32@example.com";
+  $person33 isa person, has username "user_2025_33", has name "Lucas Nelson", has gender "male", has email "user33@example.com";
+  $person34 isa person, has username "user_2025_34", has name "Sofia Carter", has gender "female", has email "user34@example.com";
+  $person35 isa person, has username "user_2025_35", has name "Henry Mitchell", has gender "male", has email "user35@example.com";
+  $person36 isa person, has username "user_2025_36", has name "Avery Perez", has gender "female", has email "user36@example.com";
+  $person37 isa person, has username "user_2025_37", has name "Owen Roberts", has gender "male", has email "user37@example.com";
+  $person38 isa person, has username "user_2025_38", has name "Ella Turner", has gender "female", has email "user38@example.com";
+  $person39 isa person, has username "user_2025_39", has name "Benjamin Phillips", has gender "male", has email "user39@example.com";
+  $person40 isa person, has username "user_2025_40", has name "Scarlett Campbell", has gender "female", has email "user40@example.com";
+  $person41 isa person, has username "user_2025_41", has name "Sebastian Parker", has gender "male", has email "user41@example.com";
+  $person42 isa person, has username "user_2025_42", has name "Grace Evans", has gender "female", has email "user42@example.com";
+  $person43 isa person, has username "user_2025_43", has name "Jack Edwards", has gender "male", has email "user43@example.com";
+  $person44 isa person, has username "user_2025_44", has name "Chloe Collins", has gender "female", has email "user44@example.com";
+  $person45 isa person, has username "user_2025_45", has name "Oliver Stewart", has gender "male", has email "user45@example.com";
+  $person46 isa person, has username "user_2025_46", has name "Victoria Sanchez", has gender "female", has email "user46@example.com";
+  $person47 isa person, has username "user_2025_47", has name "Caleb Morris", has gender "male", has email "user47@example.com";
+  $person48 isa person, has username "user_2025_48", has name "Madison Rogers", has gender "female", has email "user48@example.com";
+  $person49 isa person, has username "user_2025_49", has name "William Reed", has gender "male", has email "user49@example.com";
+  $person50 isa person, has username "user_2025_50", has name "Luna Cook", has gender "female", has email "user50@example.com";
+commit;
 
-# Insert Organizations
+# Batch 2: 20 organizations
 insert
-$techcorp isa organization, has name "TechCorp Inc", has organization-type "company";
-$university isa organization, has name "State University", has organization-type "educational-institute";
-$charity isa organization, has name "Help Foundation", has organization-type "charity";
-$startup isa organization, has name "InnovateLab", has organization-type "company";
-$hospital isa organization, has name "City Hospital", has organization-type "company";
+  $org1 isa company, has username "company_2025_1", has name "TechCorp Inc";
+  $org2 isa company, has username "company_2025_2", has name "DataSoft Solutions";
+  $org3 isa company, has username "company_2025_3", has name "CloudTech Systems";
+  $org4 isa company, has username "company_2025_4", has name "InnovateLabs";
+  $org5 isa company, has username "company_2025_5", has name "DigitalFlow Corp";
+  $org6 isa university, has username "university_2025_1", has name "State University";
+  $org7 isa university, has username "university_2025_2", has name "Tech Institute";
+  $org8 isa university, has username "university_2025_3", has name "City College";
+  $org9 isa university, has username "university_2025_4", has name "Metropolitan University";
+  $org10 isa university, has username "university_2025_5", has name "Innovation Academy";
+  $org11 isa company, has username "company_2025_6", has name "StartupHub";
+  $org12 isa company, has username "company_2025_7", has name "GlobalTech";
+  $org13 isa company, has username "company_2025_8", has name "FutureSoft";
+  $org14 isa company, has username "company_2025_9", has name "NextGen Systems";
+  $org15 isa company, has username "company_2025_10", has name "SmartSolutions";
+  $org16 isa charity, has username "charity_2025_1", has name "Help Foundation";
+  $org17 isa charity, has username "charity_2025_2", has name "Community Care";
+  $org18 isa charity, has username "charity_2025_3", has name "Education First";
+  $org19 isa charity, has username "charity_2025_4", has name "Green Earth";
+  $org20 isa charity, has username "charity_2025_5", has name "Tech for Good";
+commit;
 
-# Insert Groups
+# Batch 3: 100 posts
 insert
-$developers isa group, has name "Developers United", has description "A group for software developers";
-$photographers isa group, has name "Photo Enthusiasts", has description "Photography lovers community";
-$runners isa group, has name "Morning Runners", has description "Early morning running group";
-$bookclub isa group, has name "Book Club", has description "Monthly book reading discussions";
-$gamers isa group, has name "Gaming Squad", has description "Video game enthusiasts";
+  $post1 isa text-post, has post-id "post_2025_1", has post-text "Just started learning TypeDB and it's amazing!", has creation-timestamp 2024-01-15T10:30:00, has language "en";
+  $post2 isa text-post, has post-id "post_2025_2", has post-text "Beautiful weather today! Perfect for a morning run.", has creation-timestamp 2024-01-15T08:15:00, has language "en";
+  $post3 isa text-post, has post-id "post_2025_3", has post-text "Working on a new project with graph databases.", has creation-timestamp 2024-01-15T14:20:00, has language "en";
+  $post4 isa text-post, has post-id "post_2025_4", has post-text "Coffee and coding - perfect combination!", has creation-timestamp 2024-01-15T09:45:00, has language "en";
+  $post5 isa text-post, has post-id "post_2025_5", has post-text "Excited about the new features in TypeDB 3.0", has creation-timestamp 2024-01-15T16:30:00, has language "en";
+  $post6 isa text-post, has post-id "post_2025_6", has post-text "Team meeting went great today!", has creation-timestamp 2024-01-15T11:00:00, has language "en";
+  $post7 isa text-post, has post-id "post_2025_7", has post-text "Learning Rust programming language", has creation-timestamp 2024-01-15T13:15:00, has language "en";
+  $post8 isa text-post, has post-id "post_2025_8", has post-text "Database design patterns are fascinating", has creation-timestamp 2024-01-15T15:45:00, has language "en";
+  $post9 isa text-post, has post-id "post_2025_9", has post-text "Weekend hiking trip was amazing!", has creation-timestamp 2024-01-15T18:20:00, has language "en";
+  $post10 isa text-post, has post-id "post_2025_10", has post-text "New book on graph theory arrived", has creation-timestamp 2024-01-15T12:30:00, has language "en";
+  $post11 isa text-post, has post-id "post_2025_11", has post-text "Working from home productivity tips", has creation-timestamp 2024-01-16T09:00:00, has language "en";
+  $post12 isa text-post, has post-id "post_2025_12", has post-text "Conference presentation went well", has creation-timestamp 2024-01-16T14:30:00, has language "en";
+  $post13 isa text-post, has post-id "post_2025_13", has post-text "Debugging session successful!", has creation-timestamp 2024-01-16T16:15:00, has language "en";
+  $post14 isa text-post, has post-id "post_2025_14", has post-text "New algorithm implementation complete", has creation-timestamp 2024-01-16T11:45:00, has language "en";
+  $post15 isa text-post, has post-id "post_2025_15", has post-text "Code review feedback was helpful", has creation-timestamp 2024-01-16T13:20:00, has language "en";
+  $post16 isa text-post, has post-id "post_2025_16", has post-text "Docker containers make deployment easy", has creation-timestamp 2024-01-16T10:10:00, has language "en";
+  $post17 isa text-post, has post-id "post_2025_17", has post-text "API design best practices", has creation-timestamp 2024-01-16T15:00:00, has language "en";
+  $post18 isa text-post, has post-id "post_2025_18", has post-text "Testing framework integration done", has creation-timestamp 2024-01-16T12:45:00, has language "en";
+  $post19 isa text-post, has post-id "post_2025_19", has post-text "Performance optimization results", has creation-timestamp 2024-01-16T17:30:00, has language "en";
+  $post20 isa text-post, has post-id "post_2025_20", has post-text "Machine learning model training", has creation-timestamp 2024-01-16T08:20:00, has language "en";
+  $post21 isa text-post, has post-id "post_2025_21", has post-text "Microservices architecture discussion", has creation-timestamp 2024-01-17T09:30:00, has language "en";
+  $post22 isa text-post, has post-id "post_2025_22", has post-text "Cloud deployment strategies", has creation-timestamp 2024-01-17T14:15:00, has language "en";
+  $post23 isa text-post, has post-id "post_2025_23", has post-text "Database indexing optimization", has creation-timestamp 2024-01-17T11:00:00, has language "en";
+  $post24 isa text-post, has post-id "post_2025_24", has post-text "Security audit completed successfully", has creation-timestamp 2024-01-17T16:45:00, has language "en";
+  $post25 isa text-post, has post-id "post_2025_25", has post-text "New feature rollout planning", has creation-timestamp 2024-01-17T13:30:00, has language "en";
+  $post26 isa text-post, has post-id "post_2025_26", has post-text "User experience improvements", has creation-timestamp 2024-01-17T10:20:00, has language "en";
+  $post27 isa text-post, has post-id "post_2025_27", has post-text "Load testing results analysis", has creation-timestamp 2024-01-17T15:10:00, has language "en";
+  $post28 isa text-post, has post-id "post_2025_28", has post-text "Documentation update complete", has creation-timestamp 2024-01-17T12:15:00, has language "en";
+  $post29 isa text-post, has post-id "post_2025_29", has post-text "Continuous integration pipeline", has creation-timestamp 2024-01-17T17:00:00, has language "en";
+  $post30 isa text-post, has post-id "post_2025_30", has post-text "Code refactoring session", has creation-timestamp 2024-01-17T08:45:00, has language "en";
+  $post31 isa text-post, has post-id "post_2025_31", has post-text "Mobile app development progress", has creation-timestamp 2024-01-18T09:15:00, has language "en";
+  $post32 isa text-post, has post-id "post_2025_32", has post-text "Backend service optimization", has creation-timestamp 2024-01-18T14:30:00, has language "en";
+  $post33 isa text-post, has post-id "post_2025_33", has post-text "Frontend framework comparison", has creation-timestamp 2024-01-18T11:20:00, has language "en";
+  $post34 isa text-post, has post-id "post_2025_34", has post-text "Data migration completed", has creation-timestamp 2024-01-18T16:00:00, has language "en";
+  $post35 isa text-post, has post-id "post_2025_35", has post-text "Version control best practices", has creation-timestamp 2024-01-18T13:45:00, has language "en";
+  $post36 isa text-post, has post-id "post_2025_36", has post-text "Agile methodology workshop", has creation-timestamp 2024-01-18T10:30:00, has language "en";
+  $post37 isa text-post, has post-id "post_2025_37", has post-text "DevOps pipeline improvements", has creation-timestamp 2024-01-18T15:20:00, has language "en";
+  $post38 isa text-post, has post-id "post_2025_38", has post-text "Quality assurance testing", has creation-timestamp 2024-01-18T12:10:00, has language "en";
+  $post39 isa text-post, has post-id "post_2025_39", has post-text "System monitoring setup", has creation-timestamp 2024-01-18T17:15:00, has language "en";
+  $post40 isa text-post, has post-id "post_2025_40", has post-text "Network security implementation", has creation-timestamp 2024-01-18T08:30:00, has language "en";
+  $post41 isa text-post, has post-id "post_2025_41", has post-text "Backup and recovery testing", has creation-timestamp 2024-01-19T09:00:00, has language "en";
+  $post42 isa text-post, has post-id "post_2025_42", has post-text "Scalability planning session", has creation-timestamp 2024-01-19T14:45:00, has language "en";
+  $post43 isa text-post, has post-id "post_2025_43", has post-text "Error handling improvements", has creation-timestamp 2024-01-19T11:30:00, has language "en";
+  $post44 isa text-post, has post-id "post_2025_44", has post-text "Logging system enhancement", has creation-timestamp 2024-01-19T16:20:00, has language "en";
+  $post45 isa text-post, has post-id "post_2025_45", has post-text "Cache optimization strategies", has creation-timestamp 2024-01-19T13:15:00, has language "en";
+  $post46 isa text-post, has post-id "post_2025_46", has post-text "Third-party integration testing", has creation-timestamp 2024-01-19T10:45:00, has language "en";
+  $post47 isa text-post, has post-id "post_2025_47", has post-text "User authentication upgrade", has creation-timestamp 2024-01-19T15:30:00, has language "en";
+  $post48 isa text-post, has post-id "post_2025_48", has post-text "Real-time data processing", has creation-timestamp 2024-01-19T12:00:00, has language "en";
+  $post49 isa text-post, has post-id "post_2025_49", has post-text "Analytics dashboard creation", has creation-timestamp 2024-01-19T17:45:00, has language "en";
+  $post50 isa text-post, has post-id "post_2025_50", has post-text "Automated testing framework", has creation-timestamp 2024-01-19T08:15:00, has language "en";
+commit;
 
-# Insert Posts
+# Batch 4: 50 friendships
 insert
-$post1 isa post, has title "Welcome to TypeDB!", has content "Just started learning TypeDB and it's amazing!", has created-at 2024-01-15T10:30:00;
-$post2 isa post, has title "Morning Run Complete", has content "Just finished a 5K run in the park. Beautiful weather today!", has created-at 2024-01-15T08:15:00;
-$post3 isa post, has title "New Project Launch", has content "Excited to announce our new AI project at TechCorp!", has created-at 2024-01-14T16:45:00;
-$post4 isa post, has title "Book Recommendation", has content "Just finished reading 'The Pragmatic Programmer'. Highly recommend!", has created-at 2024-01-14T20:30:00;
-$post5 isa post, has title "Photography Tips", has content "Golden hour is the best time for outdoor portraits. Here are my top 5 tips...", has created-at 2024-01-13T18:20:00;
-$post6 isa post, has title "University Lecture", has content "Gave a guest lecture on database systems today. Students were very engaged!", has created-at 2024-01-13T14:00:00;
-$post7 isa post, has title "Charity Event Success", has content "Our fundraising event raised $50,000 for local families. Thank you all!", has created-at 2024-01-12T19:15:00;
-$post8 isa post, has title "Gaming Tournament", has content "Won first place in the local esports tournament! Team work makes the dream work.", has created-at 2024-01-12T22:45:00;
-$post9 isa post, has title "Startup Life", has content "Working 16 hour days but loving every minute of building something new.", has created-at 2024-01-11T23:30:00;
-$post10 isa post, has title "Medical Breakthrough", has content "Our research team made a significant discovery in cancer treatment.", has created-at 2024-01-11T12:00:00;
-
-# Insert Comments
-insert
-$comment1 isa comment, has content "Great post! TypeDB is indeed powerful.", has created-at 2024-01-15T11:00:00;
-$comment2 isa comment, has content "I should start running too. Any tips for beginners?", has created-at 2024-01-15T08:30:00;
-$comment3 isa comment, has content "Congratulations on the project launch!", has created-at 2024-01-14T17:00:00;
-$comment4 isa comment, has content "Added to my reading list. Thanks for the recommendation!", has created-at 2024-01-14T21:00:00;
-$comment5 isa comment, has content "Love your photography work! These tips are gold.", has created-at 2024-01-13T19:00:00;
-$comment6 isa comment, has content "Wish I could have attended your lecture!", has created-at 2024-01-13T15:00:00;
-$comment7 isa comment, has content "Amazing work by the foundation. Proud to be part of this!", has created-at 2024-01-12T20:00:00;
-$comment8 isa comment, has content "Well deserved win! Your team played amazingly.", has created-at 2024-01-12T23:00:00;
-$comment9 isa comment, has content "The startup grind is real! Keep pushing forward.", has created-at 2024-01-12T00:00:00;
-$comment10 isa comment, has content "This could change so many lives. Incredible work!", has created-at 2024-01-11T13:00:00;
-
-# Insert Relationships - Authorship (Person -> Post)
-insert
-$alice isa person, has username "alice_smith";
-$post1 isa post, has title "Welcome to TypeDB!";
-(author: $alice, content: $post1) isa authorship;
-
-insert
-$bob isa person, has username "bob_jones";
-$post2 isa post, has title "Morning Run Complete";
-(author: $bob, content: $post2) isa authorship;
-
-insert
-$charlie isa person, has username "charlie_brown";
-$post3 isa post, has title "New Project Launch";
-(author: $charlie, content: $post3) isa authorship;
-
-insert
-$diana isa person, has username "diana_prince";
-$post4 isa post, has title "Book Recommendation";
-(author: $diana, content: $post4) isa authorship;
-
-insert
-$eve isa person, has username "eve_adams";
-$post5 isa post, has title "Photography Tips";
-(author: $eve, content: $post5) isa authorship;
-
-insert
-$frank isa person, has username "frank_miller";
-$post6 isa post, has title "University Lecture";
-(author: $frank, content: $post6) isa authorship;
-
-insert
-$grace isa person, has username "grace_hopper";
-$post7 isa post, has title "Charity Event Success";
-(author: $grace, content: $post7) isa authorship;
-
-insert
-$henry isa person, has username "henry_ford";
-$post8 isa post, has title "Gaming Tournament";
-(author: $henry, content: $post8) isa authorship;
-
-insert
-$iris isa person, has username "iris_watson";
-$post9 isa post, has title "Startup Life";
-(author: $iris, content: $post9) isa authorship;
-
-insert
-$jack isa person, has username "jack_sparrow";
-$post10 isa post, has title "Medical Breakthrough";
-(author: $jack, content: $post10) isa authorship;
-
-# Insert Commenting Relationships (Person -> Comment -> Post)
-insert
-$bob isa person, has username "bob_jones";
-$comment1 isa comment, has content "Great post! TypeDB is indeed powerful.";
-$post1 isa post, has title "Welcome to TypeDB!";
-(commenter: $bob, comment: $comment1) isa commenting;
-(commented-content: $post1, comment: $comment1) isa commenting;
-
-insert
-$alice isa person, has username "alice_smith";
-$comment2 isa comment, has content "I should start running too. Any tips for beginners?";
-$post2 isa post, has title "Morning Run Complete";
-(commenter: $alice, comment: $comment2) isa commenting;
-(commented-content: $post2, comment: $comment2) isa commenting;
-
-insert
-$diana isa person, has username "diana_prince";
-$comment3 isa comment, has content "Congratulations on the project launch!";
-$post3 isa post, has title "New Project Launch";
-(commenter: $diana, comment: $comment3) isa commenting;
-(commented-content: $post3, comment: $comment3) isa commenting;
-
-insert
-$charlie isa person, has username "charlie_brown";
-$comment4 isa comment, has content "Added to my reading list. Thanks for the recommendation!";
-$post4 isa post, has title "Book Recommendation";
-(commenter: $charlie, comment: $comment4) isa commenting;
-(commented-content: $post4, comment: $comment4) isa commenting;
-
-insert
-$frank isa person, has username "frank_miller";
-$comment5 isa comment, has content "Love your photography work! These tips are gold.";
-$post5 isa post, has title "Photography Tips";
-(commenter: $frank, comment: $comment5) isa commenting;
-(commented-content: $post5, comment: $comment5) isa commenting;
-
-# Insert Employment Relationships (Person -> Organization)
-insert
-$charlie isa person, has username "charlie_brown";
-$techcorp isa organization, has name "TechCorp Inc";
-(employee: $charlie, employer: $techcorp) isa employment;
+  $user1 isa person, has username "user_2025_1";
+  $user2 isa person, has username "user_2025_2";
+  (friend: $user1, friend: $user2) isa friendship;
+commit;
 
 insert
-$frank isa person, has username "frank_miller";
-$university isa organization, has name "State University";
-(employee: $frank, employer: $university) isa employment;
+  $user3 isa person, has username "user_2025_3";
+  $user4 isa person, has username "user_2025_4";
+  (friend: $user3, friend: $user4) isa friendship;
+commit;
 
 insert
-$grace isa person, has username "grace_hopper";
-$charity isa organization, has name "Help Foundation";
-(employee: $grace, employer: $charity) isa employment;
+  $user5 isa person, has username "user_2025_5";
+  $user6 isa person, has username "user_2025_6";
+  (friend: $user5, friend: $user6) isa friendship;
+commit;
 
 insert
-$iris isa person, has username "iris_watson";
-$startup isa organization, has name "InnovateLab";
-(employee: $iris, employer: $startup) isa employment;
+  $user7 isa person, has username "user_2025_7";
+  $user8 isa person, has username "user_2025_8";
+  (friend: $user7, friend: $user8) isa friendship;
+commit;
 
 insert
-$jack isa person, has username "jack_sparrow";
-$hospital isa organization, has name "City Hospital";
-(employee: $jack, employer: $hospital) isa employment;
+  $user9 isa person, has username "user_2025_9";
+  $user10 isa person, has username "user_2025_10";
+  (friend: $user9, friend: $user10) isa friendship;
+commit;
 
-# Insert Group Memberships (Person -> Group)
+# Batch 5: 200 more persons (51-250)
 insert
-$alice isa person, has username "alice_smith";
-$developers isa group, has name "Developers United";
-(member: $alice, group: $developers) isa group-membership;
+  $person51 isa person, has username "user_2025_51", has name "Alex Johnson", has gender "male", has email "user51@example.com";
+  $person52 isa person, has username "user_2025_52", has name "Emma Wilson", has gender "female", has email "user52@example.com";
+  $person53 isa person, has username "user_2025_53", has name "Michael Brown", has gender "male", has email "user53@example.com";
+  $person54 isa person, has username "user_2025_54", has name "Sarah Davis", has gender "female", has email "user54@example.com";
+  $person55 isa person, has username "user_2025_55", has name "James Miller", has gender "male", has email "user55@example.com";
+  $person56 isa person, has username "user_2025_56", has name "Jessica Garcia", has gender "female", has email "user56@example.com";
+  $person57 isa person, has username "user_2025_57", has name "Daniel Rodriguez", has gender "male", has email "user57@example.com";
+  $person58 isa person, has username "user_2025_58", has name "Ashley Martinez", has gender "female", has email "user58@example.com";
+  $person59 isa person, has username "user_2025_59", has name "Matthew Anderson", has gender "male", has email "user59@example.com";
+  $person60 isa person, has username "user_2025_60", has name "Amanda Taylor", has gender "female", has email "user60@example.com";
+  $person61 isa person, has username "user_2025_61", has name "Christopher Thomas", has gender "male", has email "user61@example.com";
+  $person62 isa person, has username "user_2025_62", has name "Jennifer Jackson", has gender "female", has email "user62@example.com";
+  $person63 isa person, has username "user_2025_63", has name "Joshua White", has gender "male", has email "user63@example.com";
+  $person64 isa person, has username "user_2025_64", has name "Stephanie Harris", has gender "female", has email "user64@example.com";
+  $person65 isa person, has username "user_2025_65", has name "Andrew Martin", has gender "male", has email "user65@example.com";
+  $person66 isa person, has username "user_2025_66", has name "Nicole Thompson", has gender "female", has email "user66@example.com";
+  $person67 isa person, has username "user_2025_67", has name "Ryan Garcia", has gender "male", has email "user67@example.com";
+  $person68 isa person, has username "user_2025_68", has name "Melissa Martinez", has gender "female", has email "user68@example.com";
+  $person69 isa person, has username "user_2025_69", has name "Brandon Robinson", has gender "male", has email "user69@example.com";
+  $person70 isa person, has username "user_2025_70", has name "Lauren Clark", has gender "female", has email "user70@example.com";
+commit;
+
+# Batch 6: 100 more organizations (21-120)
+insert
+  $org21 isa company, has username "company_2025_11", has name "MegaCorp Industries";
+  $org22 isa company, has username "company_2025_12", has name "TechFlow Systems";
+  $org23 isa company, has username "company_2025_13", has name "DataStream Corp";
+  $org24 isa company, has username "company_2025_14", has name "CloudBase Solutions";
+  $org25 isa company, has username "company_2025_15", has name "InnoTech Labs";
+  $org26 isa university, has username "university_2025_6", has name "Central University";
+  $org27 isa university, has username "university_2025_7", has name "Tech Academy";
+  $org28 isa university, has username "university_2025_8", has name "Science Institute";
+  $org29 isa university, has username "university_2025_9", has name "Engineering College";
+  $org30 isa university, has username "university_2025_10", has name "Research University";
+  $org31 isa charity, has username "charity_2025_6", has name "Hope Foundation";
+  $org32 isa charity, has username "charity_2025_7", has name "Care Network";
+  $org33 isa charity, has username "charity_2025_8", has name "Support Alliance";
+  $org34 isa charity, has username "charity_2025_9", has name "Community Aid";
+  $org35 isa charity, has username "charity_2025_10", has name "Global Relief";
+commit;
+
+# Batch 7: 500 more posts (51-550)
+insert
+  $post51 isa text-post, has post-id "post_2025_51", has post-text "Working on machine learning algorithms today", has creation-timestamp 2024-01-20T09:30:00, has language "en";
+  $post52 isa text-post, has post-id "post_2025_52", has post-text "Great team collaboration session", has creation-timestamp 2024-01-20T14:15:00, has language "en";
+  $post53 isa text-post, has post-id "post_2025_53", has post-text "Database optimization showing great results", has creation-timestamp 2024-01-20T11:45:00, has language "en";
+  $post54 isa text-post, has post-id "post_2025_54", has post-text "New deployment pipeline is working smoothly", has creation-timestamp 2024-01-20T16:20:00, has language "en";
+  $post55 isa text-post, has post-id "post_2025_55", has post-text "Code review process improvements implemented", has creation-timestamp 2024-01-20T13:10:00, has language "en";
+  $post56 isa text-post, has post-id "post_2025_56", has post-text "Security audit passed with flying colors", has creation-timestamp 2024-01-20T10:30:00, has language "en";
+  $post57 isa text-post, has post-id "post_2025_57", has post-text "API performance benchmarks exceeded expectations", has creation-timestamp 2024-01-20T15:45:00, has language "en";
+  $post58 isa text-post, has post-id "post_2025_58", has post-text "User interface redesign getting positive feedback", has creation-timestamp 2024-01-20T12:20:00, has language "en";
+  $post59 isa text-post, has post-id "post_2025_59", has post-text "Microservices architecture migration complete", has creation-timestamp 2024-01-20T17:00:00, has language "en";
+  $post60 isa text-post, has post-id "post_2025_60", has post-text "Load testing results show excellent scalability", has creation-timestamp 2024-01-20T08:45:00, has language "en";
+commit;
+
+# Batch 8: 500 more persons (71-570)
+insert
+  $person71 isa person, has username "user_2025_71", has name "Kevin Anderson", has gender "male", has email "user71@example.com";
+  $person72 isa person, has username "user_2025_72", has name "Rachel Wilson", has gender "female", has email "user72@example.com";
+  $person73 isa person, has username "user_2025_73", has name "Steven Garcia", has gender "male", has email "user73@example.com";
+  $person74 isa person, has username "user_2025_74", has name "Michelle Martinez", has gender "female", has email "user74@example.com";
+  $person75 isa person, has username "user_2025_75", has name "Robert Taylor", has gender "male", has email "user75@example.com";
+  $person76 isa person, has username "user_2025_76", has name "Angela Brown", has gender "female", has email "user76@example.com";
+  $person77 isa person, has username "user_2025_77", has name "Mark Davis", has gender "male", has email "user77@example.com";
+  $person78 isa person, has username "user_2025_78", has name "Lisa Rodriguez", has gender "female", has email "user78@example.com";
+  $person79 isa person, has username "user_2025_79", has name "Paul Miller", has gender "male", has email "user79@example.com";
+  $person80 isa person, has username "user_2025_80", has name "Sandra Johnson", has gender "female", has email "user80@example.com";
+  $person81 isa person, has username "user_2025_81", has name "Thomas Wilson", has gender "male", has email "user81@example.com";
+  $person82 isa person, has username "user_2025_82", has name "Karen Moore", has gender "female", has email "user82@example.com";
+  $person83 isa person, has username "user_2025_83", has name "Charles Jackson", has gender "male", has email "user83@example.com";
+  $person84 isa person, has username "user_2025_84", has name "Nancy White", has gender "female", has email "user84@example.com";
+  $person85 isa person, has username "user_2025_85", has name "Joseph Harris", has gender "male", has email "user85@example.com";
+  $person86 isa person, has username "user_2025_86", has name "Betty Martin", has gender "female", has email "user86@example.com";
+  $person87 isa person, has username "user_2025_87", has name "Donald Thompson", has gender "male", has email "user87@example.com";
+  $person88 isa person, has username "user_2025_88", has name "Helen Garcia", has gender "female", has email "user88@example.com";
+  $person89 isa person, has username "user_2025_89", has name "Kenneth Martinez", has gender "male", has email "user89@example.com";
+  $person90 isa person, has username "user_2025_90", has name "Dorothy Robinson", has gender "female", has email "user90@example.com";
+  $person91 isa person, has username "user_2025_91", has name "Steven Clark", has gender "male", has email "user91@example.com";
+  $person92 isa person, has username "user_2025_92", has name "Ruth Rodriguez", has gender "female", has email "user92@example.com";
+  $person93 isa person, has username "user_2025_93", has name "Edward Lewis", has gender "male", has email "user93@example.com";
+  $person94 isa person, has username "user_2025_94", has name "Sharon Lee", has gender "female", has email "user94@example.com";
+  $person95 isa person, has username "user_2025_95", has name "Ronald Walker", has gender "male", has email "user95@example.com";
+  $person96 isa person, has username "user_2025_96", has name "Michelle Hall", has gender "female", has email "user96@example.com";
+  $person97 isa person, has username "user_2025_97", has name "Larry Allen", has gender "male", has email "user97@example.com";
+  $person98 isa person, has username "user_2025_98", has name "Laura Young", has gender "female", has email "user98@example.com";
+  $person99 isa person, has username "user_2025_99", has name "Scott Hernandez", has gender "male", has email "user99@example.com";
+  $person100 isa person, has username "user_2025_100", has name "Donna King", has gender "female", has email "user100@example.com";
+commit;
+
+# Batch 9: 100 more organizations (36-135)
+insert
+  $org36 isa company, has username "company_2025_16", has name "NextWave Technologies";
+  $org37 isa company, has username "company_2025_17", has name "Quantum Systems";
+  $org38 isa company, has username "company_2025_18", has name "Digital Dynamics";
+  $org39 isa company, has username "company_2025_19", has name "Smart Solutions Inc";
+  $org40 isa company, has username "company_2025_20", has name "Future Tech Corp";
+  $org41 isa university, has username "university_2025_11", has name "Advanced Institute";
+  $org42 isa university, has username "university_2025_12", has name "Innovation University";
+  $org43 isa university, has username "university_2025_13", has name "Technology College";
+  $org44 isa university, has username "university_2025_14", has name "Science Academy";
+  $org45 isa university, has username "university_2025_15", has name "Research Institute";
+  $org46 isa charity, has username "charity_2025_11", has name "World Aid Foundation";
+  $org47 isa charity, has username "charity_2025_12", has name "Health Alliance";
+  $org48 isa charity, has username "charity_2025_13", has name "Education Support";
+  $org49 isa charity, has username "charity_2025_14", has name "Environmental Care";
+  $org50 isa charity, has username "charity_2025_15", has name "Community Development";
+commit;
+
+# Batch 10: Groups and group memberships
+insert
+  $group1 isa group, has group-id "group_2025_1", has name "Tech Enthusiasts", has page-visibility "public";
+  $group2 isa group, has group-id "group_2025_2", has name "Database Developers", has page-visibility "public";
+  $group3 isa group, has group-id "group_2025_3", has name "AI Researchers", has page-visibility "private";
+  $group4 isa group, has group-id "group_2025_4", has name "Startup Founders", has page-visibility "public";
+  $group5 isa group, has group-id "group_2025_5", has name "Open Source Contributors", has page-visibility "public";
+commit;
+
+# Batch 11: Comments on posts
+insert
+  $comment1 isa comment, has comment-id "comment_2025_1", has comment-text "Great insights on TypeDB!", has creation-timestamp 2024-01-15T11:00:00;
+  $comment2 isa comment, has comment-id "comment_2025_2", has comment-text "Thanks for sharing this", has creation-timestamp 2024-01-15T11:15:00;
+  $comment3 isa comment, has comment-id "comment_2025_3", has comment-text "Very helpful tutorial", has creation-timestamp 2024-01-15T14:30:00;
+  $comment4 isa comment, has comment-id "comment_2025_4", has comment-text "Looking forward to more content", has creation-timestamp 2024-01-15T16:45:00;
+  $comment5 isa comment, has comment-id "comment_2025_5", has comment-text "Excellent explanation", has creation-timestamp 2024-01-16T09:20:00;
+commit;
+
+# Batch 12: Employment relationships
+insert
+  $person1 isa person, has username "user_2025_1";
+  $org1 isa company, has username "company_2025_1";
+  (employer: $org1, employee: $person1) isa employment;
+commit;
 
 insert
-$charlie isa person, has username "charlie_brown";
-$developers isa group, has name "Developers United";
-(member: $charlie, group: $developers) isa group-membership;
+  $person2 isa person, has username "user_2025_2";
+  $org2 isa company, has username "company_2025_2";
+  (employer: $org2, employee: $person2) isa employment;
+commit;
 
 insert
-$eve isa person, has username "eve_adams";
-$photographers isa group, has name "Photo Enthusiasts";
-(member: $eve, group: $photographers) isa group-membership;
+  $person3 isa person, has username "user_2025_3";
+  $org3 isa company, has username "company_2025_3";
+  (employer: $org3, employee: $person3) isa employment;
+commit;
+
+# Batch 13: Education relationships
+insert
+  $person4 isa person, has username "user_2025_4";
+  $uni1 isa university, has username "university_2025_1";
+  (institute: $uni1, attendee: $person4) isa education;
+commit;
 
 insert
-$bob isa person, has username "bob_jones";
-$runners isa group, has name "Morning Runners";
-(member: $bob, group: $runners) isa group-membership;
+  $person5 isa person, has username "user_2025_5";
+  $uni2 isa university, has username "university_2025_2";
+  (institute: $uni2, attendee: $person5) isa education;
+commit;
+
+# Batch 14: Group memberships
+insert
+  $person6 isa person, has username "user_2025_6";
+  $grp1 isa group, has group-id "group_2025_1";
+  (group: $grp1, member: $person6) isa group-membership;
+commit;
 
 insert
-$diana isa person, has username "diana_prince";
-$bookclub isa group, has name "Book Club";
-(member: $diana, group: $bookclub) isa group-membership;
+  $person7 isa person, has username "user_2025_7";
+  $grp2 isa group, has group-id "group_2025_2";
+  (group: $grp2, member: $person7) isa group-membership;
+commit;
+
+# Batch 15: Advanced post types (image, video, poll)
+insert
+  $imagepost1 isa image-post, has post-id "imagepost_2025_1", has post-text "Check out this amazing sunset!", has post-image "sunset_beach_2024.jpg", has creation-timestamp 2024-01-21T18:30:00, has language "en";
+  $imagepost2 isa image-post, has post-id "imagepost_2025_2", has post-text "New office setup complete", has post-image "office_setup.png", has creation-timestamp 2024-01-21T14:15:00, has language "en";
+  $videopost1 isa video-post, has post-id "videopost_2025_1", has post-text "Tutorial on TypeDB basics", has post-video "typedb_tutorial.mp4", has creation-timestamp 2024-01-21T10:00:00, has language "en";
+  $videopost2 isa video-post, has post-id "videopost_2025_2", has post-text "Team building exercise highlights", has post-video "team_building.mov", has creation-timestamp 2024-01-21T16:45:00, has language "en";
+  $pollpost1 isa poll-post, has post-id "pollpost_2025_1", has post-text "What's your favorite programming language?", has question "Choose your preferred language", has answer "Rust", has answer "Python", has answer "JavaScript", has answer "TypeScript", has creation-timestamp 2024-01-21T12:20:00, has language "en";
+commit;
+
+# Batch 16: Enhanced persons with advanced attributes
+insert
+  $person101 isa person, has username "user_2025_101", has name "Alex Thompson", has gender "male", has email "alex@example.com", has bio "Software engineer passionate about graph databases", has profile-picture "alex_profile.jpg", has badge "TypeDB Expert";
+  $person102 isa person, has username "user_2025_102", has name "Maria Garcia", has gender "female", has email "maria@example.com", has bio "Data scientist and AI researcher", has profile-picture "maria_profile.jpg", has badge "AI Specialist";
+  $person103 isa person, has username "user_2025_103", has name "David Chen", has gender "male", has email "david@example.com", has bio "Full-stack developer and tech lead", has profile-picture "david_profile.jpg", has badge "Tech Lead";
+commit;
+
+# Batch 17: Enhanced organizations with tags
+insert
+  $org51 isa company, has username "company_2025_21", has name "AI Innovations Corp", has tag "artificial-intelligence", has tag "machine-learning", has tag "startups";
+  $org52 isa university, has username "university_2025_16", has name "Advanced Technology Institute", has tag "research", has tag "technology", has tag "education";
+  $org53 isa charity, has username "charity_2025_16", has name "Tech Education Foundation", has tag "education", has tag "technology", has tag "non-profit";
+commit;
+
+# Batch 18: Content relationships - posting
+insert
+  $person1 isa person, has username "user_2025_1";
+  $person1page isa person, has username "user_2025_1";
+  $post1 isa text-post, has post-id "post_2025_1";
+  (page: $person1page, post: $post1) isa posting;
+commit;
 
 insert
-$henry isa person, has username "henry_ford";
-$gamers isa group, has name "Gaming Squad";
-(member: $henry, group: $gamers) isa group-membership;
+  $person2 isa person, has username "user_2025_2";
+  $person2page isa person, has username "user_2025_2";
+  $post2 isa text-post, has post-id "post_2025_2";
+  (page: $person2page, post: $post2) isa posting;
+commit;
 
-# Insert Friendship Relationships
+# Batch 19: Content relationships - commenting
 insert
-$alice isa person, has username "alice_smith";
-$bob isa person, has username "bob_jones";
-(friend: $alice, friend: $bob) isa friendship;
-
-insert
-$charlie isa person, has username "charlie_brown";
-$diana isa person, has username "diana_prince";
-(friend: $charlie, friend: $diana) isa friendship;
+  $post1 isa text-post, has post-id "post_2025_1";
+  $comment1 isa comment, has comment-id "comment_2025_1";
+  (parent: $post1, comment: $comment1) isa commenting;
+commit;
 
 insert
-$eve isa person, has username "eve_adams";
-$frank isa person, has username "frank_miller";
-(friend: $eve, friend: $frank) isa friendship;
+  $post2 isa text-post, has post-id "post_2025_2";
+  $comment2 isa comment, has comment-id "comment_2025_2";
+  (parent: $post2, comment: $comment2) isa commenting;
+commit;
+
+# Batch 20: Content relationships - reactions
+insert
+  $person3 isa person, has username "user_2025_3";
+  $post1 isa text-post, has post-id "post_2025_1";
+  (author: $person3, parent: $post1) isa reaction, has emoji "like", has creation-timestamp 2024-01-15T11:30:00;
+commit;
 
 insert
-$grace isa person, has username "grace_hopper";
-$henry isa person, has username "henry_ford";
-(friend: $grace, friend: $henry) isa friendship;
+  $person4 isa person, has username "user_2025_4";
+  $post2 isa text-post, has post-id "post_2025_2";
+  (author: $person4, parent: $post2) isa reaction, has emoji "love", has creation-timestamp 2024-01-15T09:00:00;
+commit;
+
+# Batch 21: Social relationships - birth
+insert
+  $person5 isa person, has username "user_2025_5";
+  (born: $person5) isa birth, has birth-date 1990-05-15T00:00:00;
+commit;
 
 insert
-$iris isa person, has username "iris_watson";
-$jack isa person, has username "jack_sparrow";
-(friend: $iris, friend: $jack) isa friendship;
+  $person6 isa person, has username "user_2025_6";
+  (born: $person6) isa birth, has birth-date 1988-12-03T00:00:00;
+commit;
 
-# Cross-friendships for more connected network
+# Batch 22: Social relationships - marriage
 insert
-$alice isa person, has username "alice_smith";
-$charlie isa person, has username "charlie_brown";
-(friend: $alice, friend: $charlie) isa friendship;
+  $person7 isa person, has username "user_2025_7";
+  $person8 isa person, has username "user_2025_8";
+  (spouse: $person7, spouse: $person8) isa marriage, has marriage-date 2020-06-15T00:00:00;
+commit;
+
+# Batch 23: Social relationships - family/parentship
+insert
+  $person9 isa person, has username "user_2025_9";
+  $person10 isa person, has username "user_2025_10";
+  (parent: $person9, child: $person10) isa parentship;
+commit;
 
 insert
-$bob isa person, has username "bob_jones";
-$eve isa person, has username "eve_adams";
-(friend: $bob, friend: $eve) isa friendship;
+  $person11 isa person, has username "user_2025_11";
+  $person12 isa person, has username "user_2025_12";
+  (sibling: $person11, sibling: $person12) isa siblingship;
+commit;
+
+# Batch 24: Group memberships with ranks
+insert
+  $person13 isa person, has username "user_2025_13";
+  $grp3 isa group, has group-id "group_2025_3";
+  (group: $grp3, member: $person13) isa group-membership, has rank "admin", has badge "Founder";
+commit;
 
 insert
-$diana isa person, has username "diana_prince";
-$grace isa person, has username "grace_hopper";
-(friend: $diana, friend: $grace) isa friendship;
+  $person14 isa person, has username "user_2025_14";
+  $grp4 isa group, has group-id "group_2025_4";
+  (group: $grp4, member: $person14) isa group-membership, has rank "moderator", has badge "Active Contributor";
+commit;
+
+# Batch 25: Poll responses
+insert
+  $person15 isa person, has username "user_2025_15";
+  $poll1 isa poll-post, has post-id "pollpost_2025_1";
+  (author: $person15, poll: $poll1) isa response, has answer "Rust", has creation-timestamp 2024-01-21T13:00:00;
+commit;
+
+insert
+  $person16 isa person, has username "user_2025_16";
+  $poll1 isa poll-post, has post-id "pollpost_2025_1";
+  (author: $person16, poll: $poll1) isa response, has answer "Python", has creation-timestamp 2024-01-21T13:15:00;
+commit;
+
+# Batch 31: Universities and charities
+insert
+  $uni1 isa university, has username "stanford_university", has name "Stanford University", has tag "education", has tag "research", has tag "technology";
+  $uni2 isa university, has username "mit_university", has name "MIT", has tag "engineering", has tag "science", has tag "innovation";
+  $charity1 isa charity, has username "tech_for_good", has name "Tech for Good Foundation", has tag "non-profit", has tag "technology", has tag "social-impact";
+  $charity2 isa charity, has username "code_org", has name "Code.org", has tag "education", has tag "programming", has tag "youth";
+commit;
+
+# Batch 32: Video and poll posts
+insert
+  $video1 isa video-post, has post-id "video_2025_1", has post-text "Check out this TypeDB tutorial!", has post-video "typedb_tutorial.mp4", has language "en", has creation-timestamp 2024-01-22T10:00:00;
+  $video2 isa video-post, has post-id "video_2025_2", has post-text "Graph database concepts explained", has post-video "graph_concepts.mp4", has language "en", has creation-timestamp 2024-01-22T14:30:00;
+  $poll2 isa poll-post, has post-id "poll_2025_2", has post-text "What's your favorite database type?", has question "Database preference?", has answer "SQL", has answer "NoSQL", has answer "Graph", has answer "Time-series", has language "en", has creation-timestamp 2024-01-23T09:00:00;
+commit;
+
+# Batch 33: Complete person profiles
+insert
+  $person17 isa person, has username "user_2025_17", has name "Sarah Wilson", has gender "female", has email "sarah@example.com", has phone "+1-555-0117", has bio "Data scientist specializing in graph analytics", has profile-picture "sarah_profile.jpg", has badge "Data Expert", has relationship-status "single", has page-visibility "public", has post-visibility "public";
+  $person18 isa person, has username "user_2025_18", has name "Michael Chen", has gender "male", has email "michael@example.com", has phone "+1-555-0118", has bio "Full-stack developer and TypeDB enthusiast", has profile-picture "michael_profile.jpg", has badge "Developer", has relationship-status "married", has page-visibility "public", has post-visibility "default";
+  $person19 isa person, has username "user_2025_19", has name "Emily Rodriguez", has gender "female", has email "emily@example.com", has phone "+1-555-0119", has bio "Database architect with 10+ years experience", has profile-picture "emily_profile.jpg", has badge "Architect", has relationship-status "relationship", has page-visibility "private", has post-visibility "private";
+commit;
+
+# Batch 34: Friendships
+match
+  $person1 isa person, has username "user_2025_1";
+  $person2 isa person, has username "user_2025_51";
+insert
+  (friend: $person1, friend: $person2) isa friendship;
+commit;
+
+match
+  $person1 isa person, has username "user_2025_1";
+  $person3 isa person, has username "user_2025_71";
+insert
+  (friend: $person1, friend: $person3) isa friendship;
+commit;
+
+match
+  $person2 isa person, has username "user_2025_51";
+  $person4 isa person, has username "user_2025_101";
+insert
+  (friend: $person2, friend: $person4) isa friendship;
+commit;
+
+match
+  $person3 isa person, has username "user_2025_71";
+  $person4 isa person, has username "user_2025_101";
+insert
+  (friend: $person3, friend: $person4) isa friendship;
+commit;
+
+# Batch 35: Employment relationships
+match
+  $person1 isa person, has username "user_2025_1";
+  $company1 isa company, has username "company_2025_1";
+insert
+  (employee: $person1, employer: $company1) isa employment, has start-date 2023-01-15T00:00:00, has description "Software Engineer";
+commit;
+
+match
+  $person17 isa person, has username "user_2025_17";
+  $company2 isa company, has username "company_2025_21";
+insert
+  (employee: $person17, employer: $company2) isa employment, has start-date 2022-06-01T00:00:00, has description "Data Scientist";
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $company1 isa company, has username "company_2025_1";
+insert
+  (employee: $person18, employer: $company1) isa employment, has start-date 2023-03-01T00:00:00, has description "Full Stack Developer";
+commit;
+
+# Batch 36: Education relationships
+match
+  $person17 isa person, has username "user_2025_17";
+  $uni1 isa university, has username "stanford_university";
+insert
+  (attendee: $person17, institute: $uni1) isa education, has start-date 2018-09-01T00:00:00, has end-date 2022-05-15T00:00:00, has description "Computer Science PhD";
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $uni2 isa university, has username "mit_university";
+insert
+  (attendee: $person18, institute: $uni2) isa education, has start-date 2016-09-01T00:00:00, has end-date 2020-05-15T00:00:00, has description "Software Engineering BS";
+commit;
+
+match
+  $person19 isa person, has username "user_2025_19";
+  $uni1 isa university, has username "stanford_university";
+insert
+  (attendee: $person19, institute: $uni1) isa education, has start-date 2010-09-01T00:00:00, has end-date 2014-05-15T00:00:00, has description "Database Systems MS";
+commit;
+
+# Batch 37: Group memberships
+match
+  $person1 isa person, has username "user_2025_1";
+  $group1 isa group, has group-id "group_2025_1";
+insert
+  (member: $person1, group: $group1) isa group-membership, has rank "admin", has badge "Founder", has start-timestamp 2024-01-01T00:00:00;
+commit;
+
+match
+  $person17 isa person, has username "user_2025_17";
+  $group1 isa group, has group-id "group_2025_1";
+insert
+  (member: $person17, group: $group1) isa group-membership, has rank "moderator", has badge "Expert", has start-timestamp 2024-01-05T00:00:00;
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $group1 isa group, has group-id "group_2025_1";
+insert
+  (member: $person18, group: $group1) isa group-membership, has rank "member", has badge "Contributor", has start-timestamp 2024-01-10T00:00:00;
+commit;
+
+# Batch 38: Posting relationships
+match
+  $person1 isa person, has username "user_2025_1";
+  $group1 isa group, has group-id "group_2025_1";
+  $post1 isa text-post, has post-id "post_2025_1";
+insert
+  (author: $person1, page: $group1, post: $post1) isa posting;
+commit;
+
+match
+  $person17 isa person, has username "user_2025_17";
+  $group1 isa group, has group-id "group_2025_1";
+  $video1 isa video-post, has post-id "video_2025_1";
+insert
+  (author: $person17, page: $group1, post: $video1) isa posting;
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $group1 isa group, has group-id "group_2025_1";
+  $poll2 isa poll-post, has post-id "poll_2025_2";
+insert
+  (author: $person18, page: $group1, post: $poll2) isa posting;
+commit;
+
+# Batch 39: Comments and commenting relationships
+insert
+  $comment2 isa comment, has comment-id "comment_2025_2", has comment-text "Excellent explanation of TypeDB concepts!", has creation-timestamp 2024-01-22T11:00:00;
+  $comment3 isa comment, has comment-id "comment_2025_3", has comment-text "This video helped me understand graph databases better", has creation-timestamp 2024-01-22T15:30:00;
+  $comment4 isa comment, has comment-id "comment_2025_4", has comment-text "Great tutorial, looking forward to more content", has creation-timestamp 2024-01-22T16:00:00;
+commit;
+
+match
+  $person17 isa person, has username "user_2025_17";
+  $post1 isa text-post, has post-id "post_2025_1";
+  $comment2 isa comment, has comment-id "comment_2025_2";
+insert
+  (author: $person17, parent: $post1, comment: $comment2) isa commenting;
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $video1 isa video-post, has post-id "video_2025_1";
+  $comment3 isa comment, has comment-id "comment_2025_3";
+insert
+  (author: $person18, parent: $video1, comment: $comment3) isa commenting;
+commit;
+
+match
+  $person19 isa person, has username "user_2025_19";
+  $video1 isa video-post, has post-id "video_2025_1";
+  $comment4 isa comment, has comment-id "comment_2025_4";
+insert
+  (author: $person19, parent: $video1, comment: $comment4) isa commenting;
+commit;
+
+# Batch 40: Reactions
+match
+  $person17 isa person, has username "user_2025_17";
+  $post1 isa text-post, has post-id "post_2025_1";
+insert
+  (author: $person17, parent: $post1) isa reaction, has emoji "like", has creation-timestamp 2024-01-16T10:00:00;
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $post1 isa text-post, has post-id "post_2025_1";
+insert
+  (author: $person18, parent: $post1) isa reaction, has emoji "love", has creation-timestamp 2024-01-16T11:00:00;
+commit;
+
+match
+  $person19 isa person, has username "user_2025_19";
+  $video1 isa video-post, has post-id "video_2025_1";
+insert
+  (author: $person19, parent: $video1) isa reaction, has emoji "like", has creation-timestamp 2024-01-22T12:00:00;
+commit;
+
+match
+  $person1 isa person, has username "user_2025_1";
+  $comment1 isa comment, has comment-id "comment_2025_1";
+insert
+  (author: $person1, parent: $comment1) isa reaction, has emoji "funny", has creation-timestamp 2024-01-17T09:00:00;
+commit;
+
+# Batch 41: Family relationships
+insert
+  $person20 isa person, has username "user_2025_20", has name "David Wilson", has gender "male", has email "david.wilson@example.com";
+  $person21 isa person, has username "user_2025_21", has name "Lisa Chen", has gender "female", has email "lisa.chen@example.com";
+commit;
+
+match
+  $person20 isa person, has username "user_2025_20";
+  $person17 isa person, has username "user_2025_17";
+insert
+  (parent: $person20, child: $person17) isa parentship;
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $person21 isa person, has username "user_2025_21";
+insert
+  (spouse: $person18, spouse: $person21) isa marriage, has marriage-date 2022-06-15T00:00:00;
+commit;
+
+match
+  $person17 isa person, has username "user_2025_17";
+  $person19 isa person, has username "user_2025_19";
+insert
+  (sibling: $person17, sibling: $person19) isa siblingship;
+commit;
+
+# Batch 42: Birth relationships
+match
+  $person17 isa person, has username "user_2025_17";
+insert
+  (born: $person17) isa birth, has birth-date 1995-03-15T00:00:00;
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+insert
+  (born: $person18) isa birth, has birth-date 1998-07-22T00:00:00;
+commit;
+
+match
+  $person19 isa person, has username "user_2025_19";
+insert
+  (born: $person19) isa birth, has birth-date 1992-11-08T00:00:00;
+commit;
+
+match
+  $person20 isa person, has username "user_2025_20";
+insert
+  (born: $person20) isa birth, has birth-date 1970-05-12T00:00:00;
+commit;
+
+match
+  $person21 isa person, has username "user_2025_21";
+insert
+  (born: $person21) isa birth, has birth-date 1996-09-30T00:00:00;
+commit;
+
+# Batch 43: More diverse content
+insert
+  $person22 isa person, has username "user_2025_22", has name "Robert Taylor", has gender "male", has email "robert@example.com", has bio "TypeDB community manager", has badge "Community Leader";
+  $live_video isa live-video-post, has post-id "live_2025_1", has post-text "Live coding session: Building with TypeDB", has post-video "live_session.mp4", has language "en", has creation-timestamp 2024-01-24T19:00:00;
+  $share_post isa share-post, has post-id "share_2025_1", has post-text "Sharing this amazing TypeDB tutorial", has language "en", has creation-timestamp 2024-01-25T10:00:00;
+commit;
+
+# Batch 44: Extended friendship network for complex queries
+match
+  $person1 isa person, has username "user_2025_1";
+  $person17 isa person, has username "user_2025_17";
+insert
+  (friend: $person1, friend: $person17) isa friendship;
+commit;
+
+match
+  $person2 isa person, has username "user_2025_2";
+  $person18 isa person, has username "user_2025_18";
+insert
+  (friend: $person2, friend: $person18) isa friendship;
+commit;
+
+match
+  $person17 isa person, has username "user_2025_17";
+  $person19 isa person, has username "user_2025_19";
+insert
+  (friend: $person17, friend: $person19) isa friendship;
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $person22 isa person, has username "user_2025_22";
+insert
+  (friend: $person18, friend: $person22) isa friendship;
+commit;
+
+# Batch 45: Additional educational institutes for hierarchy
+insert
+  $mit isa university, has username "mit_university", has name "MIT", has tag "technology", has tag "research", has tag "innovation";
+  $harvard isa university, has username "harvard_university", has name "Harvard University", has tag "law", has tag "business", has tag "medicine";
+  $berkeley_school isa school, has username "berkeley_high", has name "Berkeley High School", has tag "secondary", has tag "public";
+  $community_college isa college, has username "city_college", has name "City Community College", has tag "community", has tag "affordable";
+commit;
+
+# Batch 46: Additional companies and charities for diversity
+insert
+  $google isa company, has username "google_inc", has name "Google Inc", has tag "technology", has tag "search", has tag "ai";
+  $microsoft isa company, has username "microsoft_corp", has name "Microsoft Corporation", has tag "software", has tag "cloud", has tag "enterprise";
+  $red_cross isa charity, has username "red_cross", has name "American Red Cross", has tag "humanitarian", has tag "disaster-relief", has tag "health";
+  $unicef isa charity, has username "unicef_org", has name "UNICEF", has tag "children", has tag "education", has tag "global";
+  $greenpeace isa charity, has username "greenpeace", has name "Greenpeace", has tag "environment", has tag "activism", has tag "sustainability";
+commit;
+
+# Batch 47: Employment history - temporal relationships
+match
+  $person1 isa person, has username "user_2025_1";
+  $google isa company, has username "google_inc";
+insert
+  (employee: $person1, employer: $google) isa employment, has start-date 2020-06-01T00:00:00, has end-date 2023-01-14T00:00:00, has description "Senior Software Engineer";
+commit;
+
+match
+  $person17 isa person, has username "user_2025_17";
+  $microsoft isa company, has username "microsoft_corp";
+insert
+  (employee: $person17, employer: $microsoft) isa employment, has start-date 2019-03-15T00:00:00, has end-date 2022-05-31T00:00:00, has description "Data Science Manager";
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $google isa company, has username "google_inc";
+insert
+  (employee: $person18, employer: $google) isa employment, has start-date 2021-09-01T00:00:00, has description "Machine Learning Engineer";
+commit;
+
+# Batch 48: Educational progression - temporal relationships
+match
+  $person17 isa person, has username "user_2025_17";
+  $berkeley_school isa school, has username "berkeley_high";
+insert
+  (attendee: $person17, institute: $berkeley_school) isa education, has start-date 2009-09-01T00:00:00, has end-date 2013-06-15T00:00:00, has description "High School Diploma";
+commit;
+
+match
+  $person17 isa person, has username "user_2025_17";
+  $mit isa university, has username "mit_university";
+insert
+  (attendee: $person17, institute: $mit) isa education, has start-date 2013-09-01T00:00:00, has end-date 2017-05-15T00:00:00, has description "Computer Science BS";
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $community_college isa college, has username "city_college";
+insert
+  (attendee: $person18, institute: $community_college) isa education, has start-date 2014-09-01T00:00:00, has end-date 2016-05-15T00:00:00, has description "Associate Degree in Computer Science";
+commit;
+
+match
+  $person19 isa person, has username "user_2025_19";
+  $harvard isa university, has username "harvard_university";
+insert
+  (attendee: $person19, institute: $harvard) isa education, has start-date 2008-09-01T00:00:00, has end-date 2012-05-15T00:00:00, has description "Business Administration MBA";
+commit;
+
+# Batch 49: Additional groups for complex membership networks
+insert
+  $tech_group isa group, has group-id "tech_innovators", has name "Tech Innovators", has tag "technology", has tag "innovation", has page-visibility "public", has post-visibility "public";
+  $data_science_group isa group, has group-id "data_scientists", has name "Data Science Community", has tag "data", has tag "analytics", has tag "ml", has page-visibility "public", has post-visibility "default";
+  $charity_volunteers isa group, has group-id "volunteers", has name "Charity Volunteers", has tag "volunteering", has tag "community", has tag "help", has page-visibility "private", has post-visibility "private";
+commit;
+
+# Batch 50: Extended group memberships
+match
+  $person17 isa person, has username "user_2025_17";
+  $tech_group isa group, has group-id "tech_innovators";
+insert
+  (member: $person17, group: $tech_group) isa group-membership, has rank "admin", has badge "Founder", has start-timestamp 2023-03-01T00:00:00;
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $tech_group isa group, has group-id "tech_innovators";
+insert
+  (member: $person18, group: $tech_group) isa group-membership, has rank "moderator", has badge "Expert", has start-timestamp 2023-03-15T00:00:00;
+commit;
+
+match
+  $person19 isa person, has username "user_2025_19";
+  $data_science_group isa group, has group-id "data_scientists";
+insert
+  (member: $person19, group: $data_science_group) isa group-membership, has rank "admin", has badge "Data Guru", has start-timestamp 2023-01-10T00:00:00;
+commit;
+
+match
+  $person22 isa person, has username "user_2025_22";
+  $charity_volunteers isa group, has group-id "volunteers";
+insert
+  (member: $person22, group: $charity_volunteers) isa group-membership, has rank "member", has badge "Helper", has start-timestamp 2023-06-01T00:00:00;
+commit;
+
+# Batch 51: Viral content and comment threads
+insert
+  $viral_post isa text-post, has post-id "viral_2025_1", has post-text "Breaking: TypeDB revolutionizes graph databases! This changes everything. #TypeDB #GraphDB #Innovation", has language "en", has creation-timestamp 2024-02-01T09:00:00, has tag "viral", has tag "typedb", has tag "breakthrough";
+  $tutorial_post isa video-post, has post-id "tutorial_2025_1", has post-text "Complete TypeDB Tutorial Series - Part 1: Getting Started", has post-video "typedb_tutorial_1.mp4", has language "en", has creation-timestamp 2024-02-05T14:00:00, has tag "tutorial", has tag "education";
+  $poll_engagement isa poll-post, has post-id "poll_engagement_1", has post-text "What's your favorite TypeDB feature?", has question "Which TypeDB feature do you find most powerful?", has answer "Schema flexibility", has answer "Complex queries", has answer "Reasoning engine", has answer "Performance", has language "en", has creation-timestamp 2024-02-10T11:00:00;
+commit;
+
+# Batch 52: Comment threads for viral content
+insert
+  $comment_viral_1 isa comment, has comment-id "viral_comment_1", has comment-text "This is incredible! Finally a database that understands relationships properly.", has creation-timestamp 2024-02-01T09:15:00, has tag "excited";
+  $comment_viral_2 isa comment, has comment-id "viral_comment_2", has comment-text "I've been waiting for something like this for years. Game changer!", has creation-timestamp 2024-02-01T09:30:00, has tag "gamechanging";
+  $comment_viral_3 isa comment, has comment-id "viral_comment_3", has comment-text "The schema flexibility is mind-blowing. No more rigid table structures!", has creation-timestamp 2024-02-01T10:00:00, has tag "schema";
+  $comment_tutorial_1 isa comment, has comment-id "tutorial_comment_1", has comment-text "Great tutorial! Clear explanations and practical examples.", has creation-timestamp 2024-02-05T14:30:00, has tag "helpful";
+  $comment_tutorial_2 isa comment, has comment-id "tutorial_comment_2", has comment-text "When is Part 2 coming out? Can't wait to learn more advanced features.", has creation-timestamp 2024-02-05T15:00:00, has tag "anticipation";
+commit;
+
+# Batch 53: Commenting relationships for content engagement
+match
+  $person17 isa person, has username "user_2025_17";
+  $viral_post isa text-post, has post-id "viral_2025_1";
+  $comment_viral_1 isa comment, has comment-id "viral_comment_1";
+insert
+  (author: $person17, parent: $viral_post, comment: $comment_viral_1) isa commenting;
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $viral_post isa text-post, has post-id "viral_2025_1";
+  $comment_viral_2 isa comment, has comment-id "viral_comment_2";
+insert
+  (author: $person18, parent: $viral_post, comment: $comment_viral_2) isa commenting;
+commit;
+
+match
+  $person19 isa person, has username "user_2025_19";
+  $viral_post isa text-post, has post-id "viral_2025_1";
+  $comment_viral_3 isa comment, has comment-id "viral_comment_3";
+insert
+  (author: $person19, parent: $viral_post, comment: $comment_viral_3) isa commenting;
+commit;
+
+match
+  $person22 isa person, has username "user_2025_22";
+  $tutorial_post isa video-post, has post-id "tutorial_2025_1";
+  $comment_tutorial_1 isa comment, has comment-id "tutorial_comment_1";
+insert
+  (author: $person22, parent: $tutorial_post, comment: $comment_tutorial_1) isa commenting;
+commit;
+
+match
+  $person1 isa person, has username "user_2025_1";
+  $tutorial_post isa video-post, has post-id "tutorial_2025_1";
+  $comment_tutorial_2 isa comment, has comment-id "tutorial_comment_2";
+insert
+  (author: $person1, parent: $tutorial_post, comment: $comment_tutorial_2) isa commenting;
+commit;
+
+# Batch 54: Reaction networks for viral content
+match
+  $person1 isa person, has username "user_2025_1";
+  $viral_post isa text-post, has post-id "viral_2025_1";
+insert
+  (author: $person1, parent: $viral_post) isa reaction, has emoji "love", has creation-timestamp 2024-02-01T09:05:00;
+commit;
+
+match
+  $person2 isa person, has username "user_2025_2";
+  $viral_post isa text-post, has post-id "viral_2025_1";
+insert
+  (author: $person2, parent: $viral_post) isa reaction, has emoji "like", has creation-timestamp 2024-02-01T09:10:00;
+commit;
+
+match
+  $person22 isa person, has username "user_2025_22";
+  $viral_post isa text-post, has post-id "viral_2025_1";
+insert
+  (author: $person22, parent: $viral_post) isa reaction, has emoji "surprise", has creation-timestamp 2024-02-01T09:20:00;
+commit;
+
+match
+  $person17 isa person, has username "user_2025_17";
+  $comment_viral_2 isa comment, has comment-id "viral_comment_2";
+insert
+  (author: $person17, parent: $comment_viral_2) isa reaction, has emoji "like", has creation-timestamp 2024-02-01T09:35:00;
+commit;
+
+match
+  $person18 isa person, has username "user_2025_18";
+  $comment_viral_3 isa comment, has comment-id "viral_comment_3";
+insert
+  (author: $person18, parent: $comment_viral_3) isa reaction, has emoji "love", has creation-timestamp 2024-02-01T10:05:00;
+commit;
+
+# Batch 55: Content posting relationships
+match
+  $person17 isa person, has username "user_2025_17";
+  $tech_group isa group, has group-id "tech_innovators";
+  $viral_post isa text-post, has post-id "viral_2025_1";
+insert
+  (author: $person17, page: $tech_group, post: $viral_post) isa posting;
+commit;
+
+match
+  $person22 isa person, has username "user_2025_22";
+  $tech_group isa group, has group-id "tech_innovators";
+  $tutorial_post isa video-post, has post-id "tutorial_2025_1";
+insert
+  (author: $person22, page: $tech_group, post: $tutorial_post) isa posting;
+commit;
+
+match
+  $person19 isa person, has username "user_2025_19";
+  $data_science_group isa group, has group-id "data_scientists";
+  $poll_engagement isa poll-post, has post-id "poll_engagement_1";
+insert
+  (author: $person19, page: $data_science_group, post: $poll_engagement) isa posting;
+commit;
