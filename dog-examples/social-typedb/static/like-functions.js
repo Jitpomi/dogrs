@@ -339,12 +339,13 @@ async function switchUser(username) {
     }
 }
 
-// Get all available users for switching
-async function getAllUsers() {
+// Get all available users for switching with pagination
+async function getAllUsers(limit = 50, offset = 0) {
     try {
         const usersData = await makeQuery('posts', `
             match $person isa person, has username $username, has name $name;
             select $person, $username, $name;
+            offset ${offset}; limit ${limit};
         `);
         
         if (usersData.ok?.answers) {
@@ -358,6 +359,21 @@ async function getAllUsers() {
     } catch (error) {
         console.error('Error getting all users:', error);
         return [];
+    }
+}
+
+// Get total user count for pagination
+async function getUserCount() {
+    try {
+        const countData = await makeQuery('posts', `
+            match $person isa person;
+            select $person;
+        `);
+        
+        return countData.ok?.answers?.length || 0;
+    } catch (error) {
+        console.error('Error getting user count:', error);
+        return 0;
     }
 }
 

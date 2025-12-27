@@ -768,55 +768,343 @@ async function updateUserProfile() {
     }
 }
 
-// Load user switching dropdown
+// Load user switching dropdown with infinite scroll
 async function loadUserSwitchDropdown() {
     try {
-        const users = await getAllUsers();
         const currentUser = await getCurrentUser();
         const usersList = document.getElementById('usersList');
         
-        if (!usersList || !users.length) return;
+        if (!usersList) return;
         
-        const usersHTML = users.map(user => {
+        // Initialize pagination state
+        window.userPagination = {
+            offset: 0,
+            limit: 20,
+            loading: false,
+            hasMore: true,
+            allUsers: [],
+            filteredUsers: [],
+            isSearching: false
+        };
+        
+        window.currentUser = currentUser;
+        
+        // Load initial batch of users
+        await loadMoreUsers();
+        
+        // Load recent users
+        await loadRecentUsers();
+        
+        // Add search functionality
+        setupUserSearch();
+        
+        // Setup infinite scroll
+        setupInfiniteScroll();
+        
+    } catch (error) {
+        console.error('Error loading user switch dropdown:', error);
+    }
+}
+
+// Load more users for infinite scroll
+async function loadMoreUsers() {
+    if (window.userPagination.loading || !window.userPagination.hasMore) return;
+    
+    window.userPagination.loading = true;
+    showLoadingIndicator();
+    
+    try {
+        const newUsers = await getAllUsers(window.userPagination.limit, window.userPagination.offset);
+        
+        if (newUsers.length === 0) {
+            window.userPagination.hasMore = false;
+            showNoMoreUsersIndicator();
+        } else {
+            window.userPagination.allUsers = [...window.userPagination.allUsers, ...newUsers];
+            window.userPagination.offset += newUsers.length;
+            
+            // If not searching, append to display
+            if (!window.userPagination.isSearching) {
+                appendUsers(newUsers, window.currentUser);
+            }
+        }
+        
+    } catch (error) {
+        console.error('Error loading more users:', error);
+    } finally {
+        window.userPagination.loading = false;
+        hideLoadingIndicator();
+    }
+}
+
+// Setup infinite scroll for user list
+function setupInfiniteScroll() {
+    const usersList = document.getElementById('usersList');
+    if (!usersList) return;
+    
+    usersList.addEventListener('scroll', () => {
+        const { scrollTop, scrollHeight, clientHeight } = usersList;
+        
+        // Load more when scrolled to within 50px of bottom
+        if (scrollTop + clientHeight >= scrollHeight - 50) {
+            if (!window.userPagination.isSearching) {
+                loadMoreUsers();
+            }
+        }
+    });
+}
+
+// Display users in the dropdown (for search results)
+function displayUsers(users, currentUser, isFiltered = false) {
+    const usersList = document.getElementById('usersList');
+    const noUsersFound = document.getElementById('noUsersFound');
+    
+    if (!users.length && isFiltered) {
+        usersList.innerHTML = '';
+        noUsersFound.classList.remove('hidden');
+        return;
+    }
+    
+    noUsersFound.classList.add('hidden');
+    
+    const usersHTML = users.map(user => {
+        const initials = user.name.split(' ').map(n => n[0]).join('').toUpperCase();
+        const isCurrentUser = currentUser && user.username === currentUser.username;
+        
+        return `
+            <div class="user-option flex items-center p-2 hover:bg-neutral-50 cursor-pointer transition-colors duration-150 ${isCurrentUser ? 'bg-blue-50' : ''}" 
+                 data-username="${user.username}" data-name="${user.name}">
+                <div class="avatar-sm mr-3 text-xs">${initials}</div>
+                <div class="flex-1">
+                    <div class="text-sm font-semibold text-neutral-800">${user.name}</div>
+                    <div class="text-xs text-neutral-500">@${user.username}</div>
+                </div>
+                ${isCurrentUser ? '<i class="fas fa-check text-blue-600 text-sm"></i>' : ''}
+            </div>
+        `;
+    }).join('');
+    
+    usersList.innerHTML = usersHTML;
+    addUserClickListeners();
+}
+
+// Append users to the dropdown (for infinite scroll)
+function appendUsers(users, currentUser) {
+    const usersList = document.getElementById('usersList');
+    if (!usersList || !users.length) return;
+    
+    const usersHTML = users.map(user => {
+        const initials = user.name.split(' ').map(n => n[0]).join('').toUpperCase();
+        const isCurrentUser = currentUser && user.username === currentUser.username;
+        
+        return `
+            <div class="user-option flex items-center p-2 hover:bg-neutral-50 cursor-pointer transition-colors duration-150 ${isCurrentUser ? 'bg-blue-50' : ''}" 
+                 data-username="${user.username}" data-name="${user.name}">
+                <div class="avatar-sm mr-3 text-xs">${initials}</div>
+                <div class="flex-1">
+                    <div class="text-sm font-semibold text-neutral-800">${user.name}</div>
+                    <div class="text-xs text-neutral-500">@${user.username}</div>
+                </div>
+                ${isCurrentUser ? '<i class="fas fa-check text-blue-600 text-sm"></i>' : ''}
+            </div>
+        `;
+    }).join('');
+    
+    usersList.insertAdjacentHTML('beforeend', usersHTML);
+    addUserClickListeners();
+}
+
+// Add click listeners to user options
+function addUserClickListeners() {
+    const userOptions = document.querySelectorAll('#usersList .user-option');
+    userOptions.forEach(option => {
+        // Remove existing listeners to prevent duplicates
+        option.replaceWith(option.cloneNode(true));
+    });
+    
+    // Re-select after cloning
+    const newUserOptions = document.querySelectorAll('#usersList .user-option');
+    newUserOptions.forEach(option => {
+        option.addEventListener('click', async (e) => {
+            const username = option.getAttribute('data-username');
+            const dropdown = document.getElementById('userSwitchDropdown');
+            
+            // Save to recent users
+            saveRecentUser(username);
+            
+            // Close dropdown
+            dropdown.classList.add('hidden');
+            
+            // Clear search
+            const searchInput = document.getElementById('userSearchInput');
+            if (searchInput) searchInput.value = '';
+            
+            // Switch user
+            await switchUser(username);
+            
+            // Reload dropdown to update current user indicator
+            await loadUserSwitchDropdown();
+        });
+    });
+}
+
+// Setup user search functionality
+function setupUserSearch() {
+    const searchInput = document.getElementById('userSearchInput');
+    if (!searchInput) return;
+    
+    searchInput.addEventListener('input', (e) => {
+        const searchTerm = e.target.value.toLowerCase().trim();
+        
+        if (!searchTerm) {
+            // Exit search mode and show paginated users
+            window.userPagination.isSearching = false;
+            displayUsers(window.userPagination.allUsers, window.currentUser);
+            hideAllIndicators();
+            return;
+        }
+        
+        // Enter search mode
+        window.userPagination.isSearching = true;
+        hideAllIndicators();
+        
+        // Filter users based on search term from loaded users
+        const filteredUsers = window.userPagination.allUsers.filter(user => 
+            user.name.toLowerCase().includes(searchTerm) ||
+            user.username.toLowerCase().includes(searchTerm)
+        );
+        
+        displayUsers(filteredUsers, window.currentUser, true);
+    });
+    
+    // Clear search when dropdown opens
+    searchInput.addEventListener('focus', () => {
+        searchInput.select();
+    });
+}
+
+// Load recent users
+async function loadRecentUsers() {
+    try {
+        const recentUsernames = JSON.parse(localStorage.getItem('recentUsers') || '[]');
+        const recentUsersSection = document.getElementById('recentUsersSection');
+        const recentUsersList = document.getElementById('recentUsersList');
+        
+        if (!recentUsernames.length || !window.allUsers) {
+            recentUsersSection.classList.add('hidden');
+            return;
+        }
+        
+        // Get recent user objects
+        const recentUsers = recentUsernames
+            .map(username => window.allUsers.find(user => user.username === username))
+            .filter(user => user && user.username !== window.currentUser?.username)
+            .slice(0, 3); // Show max 3 recent users
+        
+        if (!recentUsers.length) {
+            recentUsersSection.classList.add('hidden');
+            return;
+        }
+        
+        recentUsersSection.classList.remove('hidden');
+        
+        const recentHTML = recentUsers.map(user => {
             const initials = user.name.split(' ').map(n => n[0]).join('').toUpperCase();
-            const isCurrentUser = currentUser && user.username === currentUser.username;
             
             return `
-                <div class="user-option flex items-center p-3 hover:bg-neutral-50 cursor-pointer transition-colors duration-150 ${isCurrentUser ? 'bg-blue-50' : ''}" 
-                     data-username="${user.username}">
-                    <div class="avatar-sm mr-3">${initials}</div>
+                <div class="user-option flex items-center p-2 hover:bg-neutral-50 cursor-pointer transition-colors duration-150" 
+                     data-username="${user.username}" data-name="${user.name}">
+                    <div class="avatar-sm mr-3 text-xs">${initials}</div>
                     <div class="flex-1">
                         <div class="text-sm font-semibold text-neutral-800">${user.name}</div>
                         <div class="text-xs text-neutral-500">@${user.username}</div>
                     </div>
-                    ${isCurrentUser ? '<i class="fas fa-check text-blue-600 text-sm"></i>' : ''}
                 </div>
             `;
         }).join('');
         
-        usersList.innerHTML = usersHTML;
+        recentUsersList.innerHTML = recentHTML;
         
-        // Add click listeners to user options
-        const userOptions = usersList.querySelectorAll('.user-option');
-        userOptions.forEach(option => {
+        // Add click listeners to recent user options
+        const recentOptions = recentUsersList.querySelectorAll('.user-option');
+        recentOptions.forEach(option => {
             option.addEventListener('click', async (e) => {
                 const username = option.getAttribute('data-username');
                 const dropdown = document.getElementById('userSwitchDropdown');
                 
+                // Move to top of recent users
+                saveRecentUser(username);
+                
                 // Close dropdown
                 dropdown.classList.add('hidden');
+                
+                // Clear search
+                const searchInput = document.getElementById('userSearchInput');
+                if (searchInput) searchInput.value = '';
                 
                 // Switch user
                 await switchUser(username);
                 
-                // Reload dropdown to update current user indicator
+                // Reload dropdown
                 await loadUserSwitchDropdown();
             });
         });
         
     } catch (error) {
-        console.error('Error loading user switch dropdown:', error);
+        console.error('Error loading recent users:', error);
     }
+}
+
+// Save user to recent users list
+function saveRecentUser(username) {
+    try {
+        let recentUsers = JSON.parse(localStorage.getItem('recentUsers') || '[]');
+        
+        // Remove if already exists
+        recentUsers = recentUsers.filter(u => u !== username);
+        
+        // Add to beginning
+        recentUsers.unshift(username);
+        
+        // Keep only last 5
+        recentUsers = recentUsers.slice(0, 5);
+        
+        localStorage.setItem('recentUsers', JSON.stringify(recentUsers));
+    } catch (error) {
+        console.error('Error saving recent user:', error);
+    }
+}
+
+// Loading indicator functions
+function showLoadingIndicator() {
+    const loadingIndicator = document.getElementById('loadingMoreUsers');
+    if (loadingIndicator) {
+        loadingIndicator.classList.remove('hidden');
+    }
+}
+
+function hideLoadingIndicator() {
+    const loadingIndicator = document.getElementById('loadingMoreUsers');
+    if (loadingIndicator) {
+        loadingIndicator.classList.add('hidden');
+    }
+}
+
+function showNoMoreUsersIndicator() {
+    const noMoreIndicator = document.getElementById('noMoreUsers');
+    if (noMoreIndicator) {
+        noMoreIndicator.classList.remove('hidden');
+    }
+}
+
+function hideAllIndicators() {
+    const loadingIndicator = document.getElementById('loadingMoreUsers');
+    const noMoreIndicator = document.getElementById('noMoreUsers');
+    const noUsersFound = document.getElementById('noUsersFound');
+    
+    if (loadingIndicator) loadingIndicator.classList.add('hidden');
+    if (noMoreIndicator) noMoreIndicator.classList.add('hidden');
+    if (noUsersFound) noUsersFound.classList.add('hidden');
 }
 
 function getSamplePosts() {

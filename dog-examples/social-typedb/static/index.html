@@ -388,13 +388,37 @@
                         </div>
                         
                         <!-- User Switching Dropdown -->
-                        <div id="userSwitchDropdown" class="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-neutral-200 z-50 hidden">
+                        <div id="userSwitchDropdown" class="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg border border-neutral-200 z-50 hidden">
                             <div class="p-3 border-b border-neutral-100">
                                 <div class="text-sm font-semibold text-neutral-800">Switch Profile</div>
-                                <div class="text-xs text-neutral-500">Select a different user to experience the platform</div>
+                                <div class="text-xs text-neutral-500 mb-2">Select a different user to experience the platform</div>
+                                <!-- Search Input -->
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">
+                                        <i class="fas fa-search text-neutral-400 text-xs"></i>
+                                    </div>
+                                    <input type="text" id="userSearchInput" placeholder="Search users..." 
+                                           class="w-full pl-7 pr-3 py-1.5 text-xs border border-neutral-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500">
+                                </div>
                             </div>
-                            <div id="usersList" class="max-h-60 overflow-y-auto">
+                            <!-- Recent Users Section -->
+                            <div id="recentUsersSection" class="border-b border-neutral-100 hidden">
+                                <div class="px-3 py-2 text-xs font-semibold text-neutral-600 bg-neutral-50">Recent</div>
+                                <div id="recentUsersList"></div>
+                            </div>
+                            <!-- All Users Section -->
+                            <div class="px-3 py-2 text-xs font-semibold text-neutral-600 bg-neutral-50">All Users</div>
+                            <div id="usersList" class="max-h-48 overflow-y-auto">
                                 <!-- Users will be loaded here -->
+                            </div>
+                            <div id="loadingMoreUsers" class="p-3 text-center text-xs text-neutral-500 hidden">
+                                <i class="fas fa-spinner fa-spin mr-2"></i>Loading more users...
+                            </div>
+                            <div id="noMoreUsers" class="p-3 text-center text-xs text-neutral-500 hidden">
+                                All users loaded
+                            </div>
+                            <div id="noUsersFound" class="p-3 text-center text-xs text-neutral-500 hidden">
+                                No users found matching your search
                             </div>
                         </div>
                     </div>
