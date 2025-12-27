@@ -162,9 +162,11 @@ async function loadFeed() {
                     // Get like count and user's like status for this post
                     const { likeCount, isLiked } = await getPostLikeInfo(postId);
                     
-                    // Get view count for this post - temporarily disable to test if this is causing issues
-                    // const viewCount = await getPostViewCount(postId);
-                    const viewCount = 0; // Temporary fallback
+                    // Track view for this post (non-blocking)
+                    trackPostView(postId);
+                    
+                    // Get view count for this post
+                    const viewCount = await getPostViewCount(postId);
                     
                     const postCard = createPostCard(authorName, initials, text, timeAgo, postId, likeCount, isLiked, viewCount);
                     console.log('Created post card for:', authorName);

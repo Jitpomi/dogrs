@@ -170,10 +170,56 @@ async function togglePostLike(postId) {
     }
 }
 
+// Track a view for a specific post (non-blocking)
+async function trackPostView(postId) {
+    // Run view tracking in background without blocking feed loading
+    setTimeout(async () => {
+        try {
+            // Get current user (first available user for now)
+            const currentUserCheck = await makeQuery('posts', `
+                match $person isa person, has username $username;
+                select $person, $username;
+                limit 1;
+            `);
+            
+            if (!currentUserCheck.ok?.answers || currentUserCheck.ok.answers.length === 0) {
+                return;
+            }
+            
+            const currentUsername = currentUserCheck.ok.answers[0].data.username?.value || currentUserCheck.ok.answers[0].data.username;
+            
+            // Check if this user has already viewed this post to avoid duplicate views
+            const existingViewCheck = await makeQuery('posts', `
+                match
+                $post isa post, has post-id "${postId}";
+                $person isa person, has username "${currentUsername}";
+                $v isa viewing;
+                $v links (viewed: $post, viewer: $person);
+                select $v;
+            `);
+            
+            if (existingViewCheck.ok?.answers && existingViewCheck.ok.answers.length > 0) {
+                // User has already viewed this post, don't track again
+                return;
+            }
+            
+            // Track the view by inserting a viewing relation
+            await makeQuery('posts', `
+                match
+                $post isa post, has post-id "${postId}";
+                $person isa person, has username "${currentUsername}";
+                insert
+                $v isa viewing (viewed: $post, viewer: $person);
+            `, 'Write');
+        } catch (error) {
+            // Silently fail to avoid breaking anything
+        }
+    }, 100); // Small delay to not block feed loading
+}
+
 // Get view count for a specific post
 async function getPostViewCount(postId) {
     try {
-        console.log('Getting view count for post:', postId);
         // Query to get view count for the specific post using viewing relation
         const viewCountData = await makeQuery('posts', `
             match
@@ -183,9 +229,7 @@ async function getPostViewCount(postId) {
             select $v;
         `);
         
-        console.log('View count query result:', viewCountData);
         const viewCount = viewCountData.ok && viewCountData.ok.answers ? viewCountData.ok.answers.length : 0;
-        console.log('View count for', postId, ':', viewCount);
         return viewCount;
     } catch (error) {
         console.error('Error getting post view count for', postId, ':', error);
