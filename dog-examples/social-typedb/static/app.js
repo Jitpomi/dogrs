@@ -428,6 +428,9 @@ async function loadFeed() {
             });
         });
         
+        // Initialize user switching functionality
+        await initializeUserSwitching();
+        
         // Load suggested connections and trending topics
         await loadSuggestedConnections();
         await loadTrendingTopics();
@@ -435,11 +438,12 @@ async function loadFeed() {
         // Update post count with all posts displayed in feed
         const postCountElement = document.getElementById('postCount');
         if (postCountElement) {
-            const jasonClarkPosts = uniquePosts.filter(answer => {
+            const currentUser = await getCurrentUser();
+            const currentUserPosts = uniquePosts.filter(answer => {
                 const authorName = String(answer.data.name?.value || answer.data.name || 'Unknown Author');
-                return authorName === 'Jason Clark';
+                return currentUser && authorName === currentUser.name;
             });
-            postCountElement.textContent = jasonClarkPosts.length;
+            postCountElement.textContent = currentUserPosts.length;
         }
         
     } catch (error) {
@@ -696,6 +700,125 @@ function addCommentEditDeleteListeners(postId) {
     });
 }
 
+// Initialize user switching functionality
+async function initializeUserSwitching() {
+    try {
+        // Update profile display with current user
+        await updateUserProfile();
+        
+        // Load all users for dropdown
+        await loadUserSwitchDropdown();
+        
+        // Add event listeners for dropdown
+        const profileDropdownBtn = document.getElementById('profileDropdownBtn');
+        const userSwitchDropdown = document.getElementById('userSwitchDropdown');
+        
+        if (profileDropdownBtn && userSwitchDropdown) {
+            profileDropdownBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                userSwitchDropdown.classList.toggle('hidden');
+            });
+            
+            // Close dropdown when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!profileDropdownBtn.contains(e.target) && !userSwitchDropdown.contains(e.target)) {
+                    userSwitchDropdown.classList.add('hidden');
+                }
+            });
+        }
+    } catch (error) {
+        console.error('Error initializing user switching:', error);
+    }
+}
+
+// Update user profile display
+async function updateUserProfile() {
+    try {
+        const currentUser = await getCurrentUser();
+        if (!currentUser) return;
+        
+        // Update navigation profile
+        const navUserName = document.getElementById('navUserName');
+        const navUserInitials = document.getElementById('navUserInitials');
+        
+        if (navUserName) {
+            navUserName.textContent = currentUser.name;
+        }
+        
+        if (navUserInitials) {
+            const initials = currentUser.name.split(' ').map(n => n[0]).join('').toUpperCase();
+            navUserInitials.textContent = initials;
+        }
+        
+        // Update post composer placeholder
+        const postTextarea = document.getElementById('postTextarea');
+        if (postTextarea) {
+            const firstName = currentUser.name.split(' ')[0];
+            postTextarea.placeholder = `What's on your mind, ${firstName}?`;
+        }
+        
+        // Update sidebar profile if it exists
+        const profileName = document.querySelector('.profile-card h3');
+        if (profileName) {
+            profileName.textContent = currentUser.name;
+        }
+        
+    } catch (error) {
+        console.error('Error updating user profile:', error);
+    }
+}
+
+// Load user switching dropdown
+async function loadUserSwitchDropdown() {
+    try {
+        const users = await getAllUsers();
+        const currentUser = await getCurrentUser();
+        const usersList = document.getElementById('usersList');
+        
+        if (!usersList || !users.length) return;
+        
+        const usersHTML = users.map(user => {
+            const initials = user.name.split(' ').map(n => n[0]).join('').toUpperCase();
+            const isCurrentUser = currentUser && user.username === currentUser.username;
+            
+            return `
+                <div class="user-option flex items-center p-3 hover:bg-neutral-50 cursor-pointer transition-colors duration-150 ${isCurrentUser ? 'bg-blue-50' : ''}" 
+                     data-username="${user.username}">
+                    <div class="avatar-sm mr-3">${initials}</div>
+                    <div class="flex-1">
+                        <div class="text-sm font-semibold text-neutral-800">${user.name}</div>
+                        <div class="text-xs text-neutral-500">@${user.username}</div>
+                    </div>
+                    ${isCurrentUser ? '<i class="fas fa-check text-blue-600 text-sm"></i>' : ''}
+                </div>
+            `;
+        }).join('');
+        
+        usersList.innerHTML = usersHTML;
+        
+        // Add click listeners to user options
+        const userOptions = usersList.querySelectorAll('.user-option');
+        userOptions.forEach(option => {
+            option.addEventListener('click', async (e) => {
+                const username = option.getAttribute('data-username');
+                const dropdown = document.getElementById('userSwitchDropdown');
+                
+                // Close dropdown
+                dropdown.classList.add('hidden');
+                
+                // Switch user
+                await switchUser(username);
+                
+                // Reload dropdown to update current user indicator
+                await loadUserSwitchDropdown();
+            });
+        });
+        
+    } catch (error) {
+        console.error('Error loading user switch dropdown:', error);
+    }
+}
+
 function getSamplePosts() {
     const samplePosts = [
         {
@@ -723,8 +846,15 @@ function getSamplePosts() {
 
 async function loadSuggestedConnections() {
     try {
+        // Get current user dynamically
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for suggested connections');
+            return;
+        }
+        
         // Find people connected through mutual friends
-        const connectionsData = await makeQuery('persons', 'match $me isa person, has name "Jason Clark"; $friend1 (friend: $me, friend: $mutual) isa friendship; $friend2 (friend: $mutual, friend: $suggestion) isa friendship; $suggestion has name $name; not { $direct (friend: $me, friend: $suggestion) isa friendship; }; not { $suggestion is $me; }; limit 5; select $suggestion, $name;');
+        const connectionsData = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $friend1 (friend: $me, friend: $mutual) isa friendship; $friend2 (friend: $mutual, friend: $suggestion) isa friendship; $suggestion has name $name; not { $direct (friend: $me, friend: $suggestion) isa friendship; }; not { $suggestion is $me; }; limit 5; select $suggestion, $name;`);
         
         console.log('Connections query response:', connectionsData);
         console.log('Query returned answers:', connectionsData.ok?.answers?.length || 0);
@@ -788,7 +918,7 @@ async function loadSuggestedConnections() {
         });
         
         // Update connection count (count unique people, not duplicate entries)
-        const friendsData = await makeQuery('persons', 'match $me isa person, has name "Jason Clark"; $friendship (friend: $me, friend: $friend) isa friendship; $friend has name $name; select $friend, $name;');
+        const friendsData = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $friendship (friend: $me, friend: $friend) isa friendship; $friend has name $name; select $friend, $name;`);
         let uniqueCount = 0;
         if (friendsData.ok && friendsData.ok.answers && friendsData.ok.answers.length > 0) {
             const uniqueFriends = new Set();
@@ -913,7 +1043,15 @@ function getSampleTrending() {
 async function loadNetwork() {
     showLoading();
     try {
-        const networkData = await makeQuery('persons', 'match $me isa person, has name "Jason Clark"; $network_relation_xyz (friend: $me, friend: $friend) isa friendship; $friend has name $name; select $friend, $name;');
+        // Get current user dynamically
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for network');
+            hideLoading();
+            return;
+        }
+        
+        const networkData = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $network_relation_xyz (friend: $me, friend: $friend) isa friendship; $friend has name $name; select $friend, $name;`);
         
         let networkHTML = '<div class="space-y-4">';
         
@@ -990,10 +1128,17 @@ window.disconnectPerson = async function(personName) {
         // Convert personName to username format (lowercase with underscores)
         const username = personName.toLowerCase().replace(/\s+/g, '_');
         
+        // Get current user dynamically
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for disconnect');
+            return;
+        }
+        
         // Use proper TypeQL 3.0 syntax with links and match the same 'name' attribute used in Network query
         const query = `
             match
-            $me isa person, has name "Jason Clark";
+            $me isa person, has name "${currentUser.name}";
             $other isa person, has name "${personName}";
             $friendship_to_delete isa friendship;
             $friendship_to_delete links (friend: $me, friend: $other);
@@ -1065,12 +1210,20 @@ async function loadJobs() {
 async function loadAnalytics() {
     showLoading();
     try {
+        // Get current user dynamically
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for analytics');
+            hideLoading();
+            return;
+        }
+        
         // Get real analytics data from TypeDB
-        const careerPathData = await makeQuery('persons', 'match $me isa person, has name "Jason Clark"; $path1 (friend: $me, friend: $friend1) isa friendship; $path2 (friend: $friend1, friend: $friend2) isa friendship; $job (employee: $friend2, employer: $target) isa employment; $target has name "Google Inc"; select $friend1, $friend2, $target;');
+        const careerPathData = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $path1 (friend: $me, friend: $friend1) isa friendship; $path2 (friend: $friend1, friend: $friend2) isa friendship; $job (employee: $friend2, employer: $target) isa employment; $target has name "Google Inc"; select $friend1, $friend2, $target;`);
         
-        const directConnectionsData = await makeQuery('persons', 'match $me isa person, has name "Jason Clark"; $friendship (friend: $me, friend: $friend) isa friendship; select $friend;');
+        const directConnectionsData = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $friendship (friend: $me, friend: $friend) isa friendship; select $friend;`);
         
-        const secondDegreeData = await makeQuery('persons', 'match $me isa person, has name "Jason Clark"; $path1 (friend: $me, friend: $friend1) isa friendship; $path2 (friend: $friend1, friend: $friend2) isa friendship; not { $direct (friend: $me, friend: $friend2) isa friendship; }; select $friend2;');
+        const secondDegreeData = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $path1 (friend: $me, friend: $friend1) isa friendship; $path2 (friend: $friend1, friend: $friend2) isa friendship; not { $direct (friend: $me, friend: $friend2) isa friendship; }; select $friend2;`);
         
         // Remove duplicates for accurate counts
         const uniqueSecondDegree = [];
@@ -1139,17 +1292,25 @@ async function findConnections() {
     showLoading();
     
     try {
+        // Get current user dynamically
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for find connections');
+            hideLoading();
+            return;
+        }
+        
         // Query 1: People you may know WITH employment data (companies)
-        const suggestionsWithEmployment = await makeQuery('persons', 'match $me isa person, has name "Jason Clark"; $friend1 (friend: $me, friend: $mutual) isa friendship; $friend2 (friend: $mutual, friend: $suggestion) isa friendship; $suggestion has name $name; $employment (employee: $suggestion, employer: $company) isa employment, has description $role; $company has name $company_name; not { $direct (friend: $me, friend: $suggestion) isa friendship; }; not { $suggestion is $me; }; select $suggestion, $name, $company_name, $role;');
+        const suggestionsWithEmployment = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $friend1 (friend: $me, friend: $mutual) isa friendship; $friend2 (friend: $mutual, friend: $suggestion) isa friendship; $suggestion has name $name; $employment (employee: $suggestion, employer: $company) isa employment, has description $role; $company has name $company_name; not { $direct (friend: $me, friend: $suggestion) isa friendship; }; not { $suggestion is $me; }; select $suggestion, $name, $company_name, $role;`);
         
         // Query 2: People you may know WITHOUT employment data
-        const suggestionsWithoutEmployment = await makeQuery('persons', 'match $me isa person, has name "Jason Clark"; $friend1 (friend: $me, friend: $mutual) isa friendship; $friend2 (friend: $mutual, friend: $suggestion) isa friendship; $suggestion has name $name; not { $direct (friend: $me, friend: $suggestion) isa friendship; }; not { $suggestion is $me; }; not { $employment (employee: $suggestion, employer: $company) isa employment; }; select $suggestion, $name;');
+        const suggestionsWithoutEmployment = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $friend1 (friend: $me, friend: $mutual) isa friendship; $friend2 (friend: $mutual, friend: $suggestion) isa friendship; $suggestion has name $name; not { $direct (friend: $me, friend: $suggestion) isa friendship; }; not { $suggestion is $me; }; not { $employment (employee: $suggestion, employer: $company) isa employment; }; select $suggestion, $name;`);
         
         // Query 3: All people WITH employment data (broader discovery) - includes recently disconnected
-        const allPeopleWithEmployment = await makeQuery('persons', 'match $person isa person, has name $name; $me isa person, has name "Jason Clark"; $employment (employee: $person, employer: $company) isa employment, has description $role; $company has name $company_name; not { $person is $me; }; not { $friendship (friend: $me, friend: $person) isa friendship; }; select $person, $name, $company_name, $role;');
+        const allPeopleWithEmployment = await makeQuery('persons', `match $person isa person, has name $name; $me isa person, has name "${currentUser.name}"; $employment (employee: $person, employer: $company) isa employment, has description $role; $company has name $company_name; not { $person is $me; }; not { $friendship (friend: $me, friend: $person) isa friendship; }; select $person, $name, $company_name, $role;`);
         
         // Query 4: All people WITHOUT employment data - includes recently disconnected
-        const allPeopleWithoutEmployment = await makeQuery('persons', 'match $person isa person, has name $name; $me isa person, has name "Jason Clark"; not { $person is $me; }; not { $friendship (friend: $me, friend: $person) isa friendship; }; not { $employment (employee: $person, employer: $company) isa employment; }; select $person, $name;');
+        const allPeopleWithoutEmployment = await makeQuery('persons', `match $person isa person, has name $name; $me isa person, has name "${currentUser.name}"; not { $person is $me; }; not { $friendship (friend: $me, friend: $person) isa friendship; }; not { $employment (employee: $person, employer: $company) isa employment; }; select $person, $name;`);
         
         let findConnectionsHTML = `
             <div class="max-w-4xl mx-auto px-4">
@@ -1323,10 +1484,18 @@ async function exploreCompanies() {
     try {
         const companiesData = await makeQuery('organizations', 'match $company isa company, has name $name; limit 10; select $company, $name;');
         
-        // Get companies that Jason Clark is already following
+        // Get current user dynamically
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for companies');
+            hideLoading();
+            return;
+        }
+        
+        // Get companies that current user is already following
         const followingData = await makeQuery('organizations', `
             match 
-            $person isa person, has name "Jason Clark";
+            $person isa person, has name "${currentUser.name}";
             $company isa company, has name $company_name;
             $following (follower: $person, page: $company) isa following;
             select $company, $company_name;
@@ -1417,10 +1586,17 @@ window.connectPerson = async function(personName) {
     
     try {
         if (isConnected) {
+            // Get current user dynamically
+            const currentUser = await getCurrentUser();
+            if (!currentUser) {
+                console.error('No current user found for disconnect');
+                return;
+            }
+            
             // Disconnect from person
             const disconnectData = await makeQuery('persons', `
                 match 
-                $me isa person, has name "Jason Clark";
+                $me isa person, has name "${currentUser.name}";
                 $person isa person, has name "${personName}";
                 delete (friend: $me, friend: $person) isa friendship;
             `, 'Write');
@@ -1439,10 +1615,17 @@ window.connectPerson = async function(personName) {
                 await loadSuggestedConnections();
             }
         } else {
+            // Get current user dynamically
+            const currentUser = await getCurrentUser();
+            if (!currentUser) {
+                console.error('No current user found for connect');
+                return;
+            }
+            
             // Connect to person
             const connectData = await makeQuery('persons', `
                 match 
-                $me isa person, has name "Jason Clark";
+                $me isa person, has name "${currentUser.name}";
                 $person isa person, has name "${personName}";
                 insert (friend: $me, friend: $person) isa friendship;
             `, 'Write');
@@ -1504,10 +1687,17 @@ window.followCompany = async function(companyName) {
                 showNotification(`Unfollowed ${companyName}`, 'success');
             }
         } else {
+            // Get current user dynamically
+            const currentUser = await getCurrentUser();
+            if (!currentUser) {
+                console.error('No current user found for follow');
+                return;
+            }
+            
             // Follow company
             const followData = await makeQuery('organizations', `
                 match 
-                $person isa person, has name "Jason Clark";
+                $person isa person, has name "${currentUser.name}";
                 $company isa company, has name "${companyName}";
                 insert (follower: $person, page: $company) isa following;
             `, 'Write');

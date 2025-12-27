@@ -377,13 +377,26 @@
                     </div>
                     
                     <!-- Profile -->
-                    <div class="flex items-center space-x-3 p-1 hover:bg-neutral-50 rounded-lg transition-all duration-150 cursor-pointer">
-                        <div class="avatar avatar-sm" id="navUserInitials">JC</div>
-                        <div class="hidden sm:block">
-                            <div class="text-sm font-semibold" style="color: var(--neutral-800);" id="navUserName">Jason Clark</div>
-                            <div class="text-xs" style="color: var(--neutral-500);" id="navUserTitle">Software Engineer</div>
+                    <div class="relative">
+                        <div class="flex items-center space-x-3 p-1 hover:bg-neutral-50 rounded-lg transition-all duration-150 cursor-pointer" id="profileDropdownBtn">
+                            <div class="avatar avatar-sm" id="navUserInitials">JC</div>
+                            <div class="hidden sm:block">
+                                <div class="text-sm font-semibold" style="color: var(--neutral-800);" id="navUserName">Jason Clark</div>
+                                <div class="text-xs" style="color: var(--neutral-500);" id="navUserTitle">Software Engineer</div>
+                            </div>
+                            <i class="fas fa-chevron-down text-xs" style="color: var(--neutral-400);"></i>
                         </div>
-                        <i class="fas fa-chevron-down text-xs" style="color: var(--neutral-400);"></i>
+                        
+                        <!-- User Switching Dropdown -->
+                        <div id="userSwitchDropdown" class="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-neutral-200 z-50 hidden">
+                            <div class="p-3 border-b border-neutral-100">
+                                <div class="text-sm font-semibold text-neutral-800">Switch Profile</div>
+                                <div class="text-xs text-neutral-500">Select a different user to experience the platform</div>
+                            </div>
+                            <div id="usersList" class="max-h-60 overflow-y-auto">
+                                <!-- Users will be loaded here -->
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

@@ -249,44 +249,115 @@ async function getPostCommentCount(postId) {
     }
 }
 
-// Get current user - this would normally come from authentication/session
+// Get current user - now supports dynamic user switching
 async function getCurrentUser() {
     try {
-        // In a real app, this would check authentication context/session
-        // For now, we'll determine the current user based on the profile shown in UI
-        // This could be enhanced to use localStorage, session, or API call
+        // Check if user is stored in localStorage
+        const storedUserId = localStorage.getItem('currentUserId');
         
-        // Try to get the user shown in the profile section
-        const profileData = await makeQuery('posts', `
-            match $me isa person, has name "Jason Clark", has username $username;
-            select $me, $username;
+        if (storedUserId) {
+            // Get the stored user from database
+            const userData = await makeQuery('posts', `
+                match $person isa person, has username "${storedUserId}", has name $name;
+                select $person, $name;
+            `);
+            
+            if (userData.ok?.answers && userData.ok.answers.length > 0) {
+                return {
+                    username: storedUserId,
+                    name: userData.ok.answers[0].data.name?.value || userData.ok.answers[0].data.name
+                };
+            }
+        }
+        
+        // Fallback to Jason Clark if no stored user or stored user not found
+        const fallbackData = await makeQuery('posts', `
+            match $person isa person, has name "Jason Clark", has username $username;
+            select $person, $username;
         `);
         
-        if (profileData.ok?.answers && profileData.ok.answers.length > 0) {
+        if (fallbackData.ok?.answers && fallbackData.ok.answers.length > 0) {
+            const username = fallbackData.ok.answers[0].data.username?.value || fallbackData.ok.answers[0].data.username;
+            // Store as default user
+            localStorage.setItem('currentUserId', username);
             return {
-                username: profileData.ok.answers[0].data.username?.value || profileData.ok.answers[0].data.username,
+                username: username,
                 name: "Jason Clark"
             };
         }
         
-        // Fallback to first available user if Jason Clark not found
-        const fallbackData = await makeQuery('posts', `
+        // Final fallback to first available user
+        const firstUserData = await makeQuery('posts', `
             match $person isa person, has username $username, has name $name;
             select $person, $username, $name;
             limit 1;
         `);
         
-        if (fallbackData.ok?.answers && fallbackData.ok.answers.length > 0) {
-            return {
-                username: fallbackData.ok.answers[0].data.username?.value || fallbackData.ok.answers[0].data.username,
-                name: fallbackData.ok.answers[0].data.name?.value || fallbackData.ok.answers[0].data.name
-            };
+        if (firstUserData.ok?.answers && firstUserData.ok.answers.length > 0) {
+            const username = firstUserData.ok.answers[0].data.username?.value || firstUserData.ok.answers[0].data.username;
+            const name = firstUserData.ok.answers[0].data.name?.value || firstUserData.ok.answers[0].data.name;
+            localStorage.setItem('currentUserId', username);
+            return { username, name };
         }
         
         return null;
     } catch (error) {
         console.error('Error getting current user:', error);
         return null;
+    }
+}
+
+// Switch to a different user
+async function switchUser(username) {
+    try {
+        // Verify user exists
+        const userData = await makeQuery('posts', `
+            match $person isa person, has username "${username}", has name $name;
+            select $person, $name;
+        `);
+        
+        if (userData.ok?.answers && userData.ok.answers.length > 0) {
+            // Store new user in localStorage
+            localStorage.setItem('currentUserId', username);
+            
+            // Update UI to reflect new user
+            await updateUserProfile();
+            
+            // Refresh feed to show correct ownership buttons
+            await loadFeed();
+            
+            showNotification(`Switched to ${userData.ok.answers[0].data.name?.value || userData.ok.answers[0].data.name}`, 'success');
+            return true;
+        } else {
+            showNotification('User not found', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error switching user:', error);
+        showNotification('Error switching user', 'error');
+        return false;
+    }
+}
+
+// Get all available users for switching
+async function getAllUsers() {
+    try {
+        const usersData = await makeQuery('posts', `
+            match $person isa person, has username $username, has name $name;
+            select $person, $username, $name;
+        `);
+        
+        if (usersData.ok?.answers) {
+            return usersData.ok.answers.map(answer => ({
+                username: answer.data.username?.value || answer.data.username,
+                name: answer.data.name?.value || answer.data.name
+            }));
+        }
+        
+        return [];
+    } catch (error) {
+        console.error('Error getting all users:', error);
+        return [];
     }
 }
 
