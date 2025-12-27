@@ -128,7 +128,7 @@ async function loadFeed() {
     showLoading();
     try {
         // Load posts from the database with like information
-        const postsData = await makeQuery('posts', 'match $post isa post, has post-text $text, has post-id $id, has creation-timestamp $time; $posting (post: $post, author: $author) isa posting; $author has name $name; limit 10; select $post, $text, $id, $time, $name;');
+        const postsData = await makeQuery('posts', 'match $post isa post, has post-text $text, has post-id $id, has creation-timestamp $time; $posting (author: $author, page: $page, post: $post) isa posting; $author has name $name; limit 10; select $post, $text, $id, $time, $name;');
         
         let feedHTML = '';
         let uniquePosts = [];
@@ -149,17 +149,30 @@ async function loadFeed() {
             });
             
             feedHTML = await Promise.all(uniquePosts.map(async (answer) => {
-                const text = String(answer.data.text?.value || answer.data.text || 'No content');
-                const authorName = String(answer.data.name?.value || answer.data.name || 'Unknown Author');
-                const timestamp = answer.data.time?.value || answer.data.time || new Date().toISOString();
-                const timeAgo = getTimeAgo(timestamp);
-                const initials = authorName.split(' ').map(n => n[0]).join('').toUpperCase();
-                const postId = answer.data.id?.value || answer.data.id || `post_${Date.now()}_${Math.random()}`;
-                
-                // Get like count and user's like status for this post
-                const { likeCount, isLiked } = await getPostLikeInfo(postId);
-                
-                return createPostCard(authorName, initials, text, timeAgo, postId, likeCount, isLiked);
+                try {
+                    const text = String(answer.data.text?.value || answer.data.text || 'No content');
+                    const authorName = String(answer.data.name?.value || answer.data.name || 'Unknown Author');
+                    const timestamp = answer.data.time?.value || answer.data.time || new Date().toISOString();
+                    const timeAgo = getTimeAgo(timestamp);
+                    const initials = authorName.split(' ').map(n => n[0]).join('').toUpperCase();
+                    const postId = answer.data.id?.value || answer.data.id || `post_${Date.now()}_${Math.random()}`;
+                    
+                    console.log('Processing post:', { authorName, postId, text: text.substring(0, 50) + '...' });
+                    
+                    // Get like count and user's like status for this post
+                    const { likeCount, isLiked } = await getPostLikeInfo(postId);
+                    
+                    // Get view count for this post - temporarily disable to test if this is causing issues
+                    // const viewCount = await getPostViewCount(postId);
+                    const viewCount = 0; // Temporary fallback
+                    
+                    const postCard = createPostCard(authorName, initials, text, timeAgo, postId, likeCount, isLiked, viewCount);
+                    console.log('Created post card for:', authorName);
+                    return postCard;
+                } catch (error) {
+                    console.error('Error processing post:', error, answer);
+                    return ''; // Return empty string for failed posts
+                }
             }));
             feedHTML = feedHTML.join('');
         } else {
@@ -234,7 +247,7 @@ async function loadFeed() {
     hideLoading();
 }
 
-function createPostCard(authorName, authorInitials, content, timeAgo, postId, likeCount = 0, isLiked = false) {
+function createPostCard(authorName, authorInitials, content, timeAgo, postId, likeCount = 0, isLiked = false, viewCount = 0) {
     const likeIcon = isLiked ? 'fas fa-thumbs-up' : 'far fa-thumbs-up';
     const likeColor = isLiked ? 'text-blue-600' : 'text-neutral-500 hover:text-blue-600';
     const likeText = likeCount > 0 ? `${likeCount}` : '';
@@ -268,7 +281,7 @@ function createPostCard(authorName, authorInitials, content, timeAgo, postId, li
                         </div>
                         <div class="flex items-center space-x-2 text-caption" style="color: var(--neutral-400);">
                             <i class="fas fa-eye"></i>
-                            <span>24 views</span>
+                            <span>${viewCount} views</span>
                         </div>
                     </div>
                 </div>
