@@ -844,17 +844,21 @@ insert
   (member: $person18, group: $tech_group) isa group-membership, has rank "moderator", has badge "Expert", has start-timestamp 2023-03-15T00:00:00;
 commit;
 
+# Batch 61: Enhanced viral content engagement
 match
-  $person19 isa person, has username "user_2025_19";
-  $data_science_group isa group, has group-id "data_scientists";
+  $jason isa person, has username "user_2025_17";
+  $viral_post isa text-post, has post-id "viral_2025_1";
+  $john isa person, has username "user_2025_1";
+  $comment_viral_1 isa comment, has comment-id "viral_comment_1";
 insert
-  (member: $person19, group: $data_science_group) isa group-membership, has rank "admin", has badge "Data Guru", has start-timestamp 2023-01-10T00:00:00;
+  (author: $john, parent: $viral_post, comment: $comment_viral_1) isa commenting;
 commit;
 
 match
-  $person22 isa person, has username "user_2025_22";
-  $charity_volunteers isa group, has group-id "volunteers";
+  $mia isa person, has username "google_mia";
+  $viral_post isa text-post, has post-id "viral_2025_1";
 insert
+  (author: $mia, parent: $viral_post) isa reaction, has emoji "love", has creation-timestamp 2024-02-01T09:25:00;
   (member: $person22, group: $charity_volunteers) isa group-membership, has rank "member", has badge "Helper", has start-timestamp 2023-06-01T00:00:00;
 commit;
 
@@ -974,4 +978,73 @@ match
   $poll_engagement isa poll-post, has post-id "poll_engagement_1";
 insert
   (author: $person19, page: $data_science_group, post: $poll_engagement) isa posting;
+commit;
+
+# Batch 56: Enhanced Google connections for multi-hop paths
+insert
+  $google_employee1 isa person, has username "google_mia", has name "Mia Lewis", has gender "female", has email "mia@google.com", has bio "ML Engineer at Google";
+  $google_employee2 isa person, has username "google_alex", has name "Alex Chen", has gender "male", has email "alex@google.com", has bio "Senior Manager at Google";
+commit;
+
+# Batch 57: Google employment relationships
+match
+  $mia isa person, has username "google_mia";
+  $google isa company, has username "google_inc";
+insert
+  (employee: $mia, employer: $google) isa employment, has description "Machine Learning Engineer", has start-date 2021-03-01T00:00:00;
+commit;
+
+match
+  $alex isa person, has username "google_alex";
+  $google isa company, has username "google_inc";
+insert
+  (employee: $alex, employer: $google) isa employment, has description "Engineering Manager", has start-date 2020-01-15T00:00:00;
+commit;
+
+# Batch 58: MIT education for Google employees
+match
+  $mia isa person, has username "google_mia";
+  $mit isa university, has username "mit_university";
+insert
+  (attendee: $mia, institute: $mit) isa education, has description "Computer Science MS", has start-date 2018-09-01T00:00:00, has end-date 2020-05-15T00:00:00;
+commit;
+
+# Batch 59: Critical friend-of-friend connections for 3-hop path
+match
+  $john isa person, has username "user_2025_1";
+  $mia isa person, has username "google_mia";
+insert
+  (friend: $john, friend: $mia) isa friendship;
+commit;
+
+# Batch 60: Additional manager roles for hiring opportunities
+match
+  $brandon isa person, has username "user_2025_19";
+  $microsoft isa company, has username "microsoft_corp";
+insert
+  (employee: $brandon, employer: $microsoft) isa employment, has description "Engineering Manager", has start-date 2023-01-01T00:00:00;
+commit;
+
+match
+  $kevin isa person, has username "user_2025_71";
+  $ai_startup isa company, has username "ai_innovations";
+insert
+  (employee: $kevin, employer: $ai_startup) isa employment, has description "Chief Technology Officer", has start-date 2022-08-01T00:00:00;
+commit;
+
+# Batch 61: Enhanced viral content engagement
+match
+  $jason isa person, has username "user_2025_17";
+  $viral_post isa text-post, has post-id "viral_2025_1";
+  $john isa person, has username "user_2025_1";
+  $comment_viral_1 isa comment, has comment-id "viral_comment_1";
+insert
+  (author: $john, parent: $viral_post, comment: $comment_viral_1) isa commenting;
+commit;
+
+match
+  $mia isa person, has username "google_mia";
+  $viral_post isa text-post, has post-id "viral_2025_1";
+insert
+  (author: $mia, parent: $viral_post) isa reaction, has emoji "love", has creation-timestamp 2024-02-01T09:25:00;
 commit;

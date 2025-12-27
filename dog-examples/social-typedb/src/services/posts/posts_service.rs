@@ -3,6 +3,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::tenant::TenantContext;
 use dog_core::{DogService, ServiceCapabilities};
+use dog_core::errors::{DogError, ErrorKind};
 use serde_json::Value;
 use crate::typedb::TypeDBState;
 use crate::services::SocialParams;
@@ -34,22 +35,10 @@ impl DogService<Value, SocialParams> for PostsService {
         data: Option<Value>,
         _params: SocialParams,
     ) -> Result<Value> {
-        match method.to_lowercase().as_str() {
-            "write" => {
-                if let Some(data) = data {
-                    self.adapter.write(data).await
-                } else {
-                    Err(anyhow::anyhow!("Write method requires data"))
-                }
-            }
-            "read" => {
-                if let Some(data) = data {
-                    self.adapter.read(data).await
-                } else {
-                    Err(anyhow::anyhow!("Read method requires data with query"))
-                }
-            }
-            _ => Err(anyhow::anyhow!("Unsupported method: {}", method)),
+        match method {
+            "read" => self.adapter.read(data.unwrap()).await,
+            "write" => self.adapter.write(data.unwrap()).await,
+            _ => Err(DogError::new(ErrorKind::MethodNotAllowed, format!("Unknown method: {}", method)).into_anyhow())
         }
     }
 }
