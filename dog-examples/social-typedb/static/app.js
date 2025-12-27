@@ -1,14 +1,56 @@
 // API Base URL
 const API_BASE = 'http://127.0.0.1:3036';
 
-// Current user data
-const currentUser = {
+// Current user data - will be populated from backend
+let currentUser = {
     name: 'Jason Clark',
-    username: 'user_2025_17',
+    username: 'user_2025_17', 
     title: 'Software Engineer',
     location: 'San Francisco, CA',
-    avatar: 'JC'
+    initials: 'JC'
 };
+
+// Load user profile data from backend
+async function loadUserProfile() {
+    try {
+        const userData = await makeQuery('persons', 'match $me isa person, has name "Jason Clark", has username $username; $employment (employee: $me, employer: $company) isa employment, has description $title; $company has name $company_name; select $me, $username, $title, $company_name;');
+        
+        if (userData.ok && userData.ok.answers && userData.ok.answers.length > 0) {
+            const userInfo = userData.ok.answers[0].data;
+            currentUser.username = userInfo.username?.value || currentUser.username;
+            currentUser.title = userInfo.title?.value || currentUser.title;
+            
+            // Update UI elements with real data
+            updateUserProfileUI();
+        }
+    } catch (error) {
+        console.error('Error loading user profile:', error);
+        // Keep default values if backend fails
+    }
+}
+
+// Update UI elements with current user data
+function updateUserProfileUI() {
+    // Update navigation profile
+    const navUserName = document.getElementById('navUserName');
+    const navUserTitle = document.getElementById('navUserTitle');
+    const navUserInitials = document.getElementById('navUserInitials');
+    
+    if (navUserName) navUserName.textContent = currentUser.name;
+    if (navUserTitle) navUserTitle.textContent = currentUser.title;
+    if (navUserInitials) navUserInitials.textContent = currentUser.initials;
+    
+    // Update profile card
+    const profileName = document.getElementById('profileName');
+    const profileTitle = document.getElementById('profileTitle');
+    const profileLocation = document.getElementById('profileLocation');
+    const profileInitials = document.getElementById('profileInitials');
+    
+    if (profileName) profileName.textContent = currentUser.name;
+    if (profileTitle) profileTitle.textContent = currentUser.title;
+    if (profileLocation) profileLocation.textContent = currentUser.location;
+    if (profileInitials) profileInitials.textContent = currentUser.initials;
+}
 
 // UI Elements
 const loading = document.getElementById('loading');
@@ -89,16 +131,16 @@ async function loadFeed() {
         const postsData = await makeQuery('posts', 'match $post isa post, has post-text $text, has creation-timestamp $time; $posting (post: $post, author: $author) isa posting; $author has name $name; limit 10; select $post, $text, $time, $name;');
         
         let feedHTML = '';
+        let uniquePosts = [];
         
         if (postsData.ok && postsData.ok.answers && postsData.ok.answers.length > 0) {
             // Remove duplicates based on author name and post text combination
-            const uniquePosts = [];
             const seenPosts = new Set();
             
             postsData.ok.answers.forEach(answer => {
-                const authorName = String(answer.data.name?.value || answer.data.name || 'Unknown User');
-                const postText = String(answer.data.text?.value || answer.data.text || 'No content');
-                const postKey = `${authorName}:${postText}`;
+                const text = String(answer.data.text?.value || answer.data.text || 'No content');
+                const authorName = String(answer.data.name?.value || answer.data.name || 'Unknown Author');
+                const postKey = `${authorName}:${text}`;
                 
                 if (!seenPosts.has(postKey)) {
                     seenPosts.add(postKey);
@@ -107,17 +149,25 @@ async function loadFeed() {
             });
             
             feedHTML = uniquePosts.map(answer => {
-                // Extract actual values from TypeDB response format
-                const authorName = String(answer.data.name?.value || answer.data.name || 'Unknown User');
-                const postText = String(answer.data.text?.value || answer.data.text || 'No content');
+                const text = String(answer.data.text?.value || answer.data.text || 'No content');
+                const authorName = String(answer.data.name?.value || answer.data.name || 'Unknown Author');
                 const timestamp = answer.data.time?.value || answer.data.time || new Date().toISOString();
-                const authorInitials = authorName.split(' ').map(n => n[0]).join('').toUpperCase();
+                const timeAgo = getTimeAgo(timestamp);
+                const initials = authorName.split(' ').map(n => n[0]).join('').toUpperCase();
                 
-                return createPostCard(authorName, authorInitials, postText, timestamp);
+                return createPostCard(authorName, initials, text, timeAgo);
             }).join('');
         } else {
-            // Show sample posts if no data
-            feedHTML = getSamplePosts();
+            feedHTML = `
+                <div class="post-card text-center py-16">
+                    <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i class="fas fa-rss text-blue-600 text-2xl"></i>
+                    </div>
+                    <h3 class="text-heading-3 mb-2">No posts yet</h3>
+                    <p class="text-body mb-6" style="color: var(--neutral-500);">Be the first to share something with your network!</p>
+                    <button class="btn-primary">Create your first post</button>
+                </div>
+            `;
         }
         
         feedContent.innerHTML = feedHTML;
@@ -126,40 +176,63 @@ async function loadFeed() {
         await loadSuggestedConnections();
         await loadTrendingTopics();
         
+        // Update post count with all posts displayed in feed
+        const postCountElement = document.getElementById('postCount');
+        if (postCountElement) {
+            const jasonClarkPosts = uniquePosts.filter(answer => {
+                const authorName = String(answer.data.name?.value || answer.data.name || 'Unknown Author');
+                return authorName === 'Jason Clark';
+            });
+            postCountElement.textContent = jasonClarkPosts.length;
+        }
+        
     } catch (error) {
         console.error('Error loading feed:', error);
-        feedContent.innerHTML = getSamplePosts();
+        feedContent.innerHTML = `
+            <div class="post-card text-center py-16">
+                <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <i class="fas fa-exclamation-triangle text-red-600 text-2xl"></i>
+                </div>
+                <h3 class="text-heading-3 mb-2">Unable to load posts</h3>
+                <p class="text-body mb-6" style="color: var(--neutral-500);">Please check your connection and try again</p>
+                <button class="btn-primary" onclick="loadFeed()">Retry</button>
+            </div>
+        `;
     }
     hideLoading();
 }
 
-function createPostCard(authorName, authorInitials, content, timestamp) {
-    const timeAgo = getTimeAgo(timestamp);
-    
+function createPostCard(authorName, authorInitials, content, timeAgo) {
     return `
-        <div class="post-card p-4">
-            <div class="flex items-start space-x-3">
+        <div class="post-card card-hover p-6 mb-4">
+            <div class="flex items-start space-x-4">
                 <div class="avatar">${authorInitials}</div>
                 <div class="flex-1">
-                    <div class="flex items-center space-x-2 mb-2">
-                        <h4 class="font-semibold text-gray-900">${authorName}</h4>
-                        <span class="text-gray-500 text-sm">•</span>
-                        <span class="text-gray-500 text-sm">${timeAgo}</span>
+                    <div class="flex items-center space-x-2 mb-3">
+                        <h4 class="text-body-large font-semibold" style="color: var(--neutral-900);">${authorName}</h4>
+                        <span class="text-caption" style="color: var(--neutral-400);">•</span>
+                        <span class="text-caption" style="color: var(--neutral-500);">${timeAgo}</span>
                     </div>
-                    <p class="text-gray-800 mb-3">${content}</p>
-                    <div class="flex items-center space-x-6 text-gray-500">
-                        <button class="flex items-center space-x-1 hover:text-blue-600">
-                            <i class="far fa-thumbs-up"></i>
-                            <span class="text-sm">Like</span>
-                        </button>
-                        <button class="flex items-center space-x-1 hover:text-blue-600">
-                            <i class="far fa-comment"></i>
-                            <span class="text-sm">Comment</span>
-                        </button>
-                        <button class="flex items-center space-x-1 hover:text-blue-600">
-                            <i class="fas fa-share"></i>
-                            <span class="text-sm">Share</span>
-                        </button>
+                    <p class="text-body mb-4" style="color: var(--neutral-700); line-height: 1.6;">${content}</p>
+                    <div class="flex items-center justify-between pt-3 border-t border-neutral-100">
+                        <div class="flex items-center space-x-6">
+                            <button class="flex items-center space-x-2 text-neutral-500 hover:text-blue-600 transition-colors duration-150 p-2 rounded-lg hover:bg-blue-50">
+                                <i class="far fa-thumbs-up text-lg"></i>
+                                <span class="text-body font-medium">Like</span>
+                            </button>
+                            <button class="flex items-center space-x-2 text-neutral-500 hover:text-green-600 transition-colors duration-150 p-2 rounded-lg hover:bg-green-50">
+                                <i class="far fa-comment text-lg"></i>
+                                <span class="text-body font-medium">Comment</span>
+                            </button>
+                            <button class="flex items-center space-x-2 text-neutral-500 hover:text-purple-600 transition-colors duration-150 p-2 rounded-lg hover:bg-purple-50">
+                                <i class="fas fa-share text-lg"></i>
+                                <span class="text-body font-medium">Share</span>
+                            </button>
+                        </div>
+                        <div class="flex items-center space-x-2 text-caption" style="color: var(--neutral-400);">
+                            <i class="fas fa-eye"></i>
+                            <span>24 views</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -221,22 +294,30 @@ async function loadSuggestedConnections() {
                 const initials = name.split(' ').map(n => n[0]).join('').toUpperCase();
                 
                 return `
-                    <div class="flex items-center justify-between">
+                    <div class="flex items-center justify-between p-3 rounded-lg hover:bg-neutral-50 transition-colors duration-150">
                         <div class="flex items-center space-x-3">
                             <div class="avatar avatar-sm">${initials}</div>
                             <div>
-                                <div class="font-medium text-gray-900 text-sm">${name}</div>
-                                <div class="text-gray-500 text-xs">Mutual connection</div>
+                                <div class="text-body font-semibold" style="color: var(--neutral-900);">${name}</div>
+                                <div class="text-caption" style="color: var(--neutral-500);">Mutual connection</div>
                             </div>
                         </div>
-                        <button class="connect-person-btn text-blue-600 hover:text-blue-800 text-sm font-medium" data-person="${name}">Connect</button>
+                        <button class="btn-secondary connect-person-btn" style="padding: 8px 16px; font-size: 12px;" data-person="${name}">Connect</button>
                     </div>
                 `;
             }).join('');
         } else {
             console.log('No TypeDB results, showing empty state');
             // Show empty state when no suggestions found
-            suggestionsHTML = '<p class="text-center text-gray-500 py-4">No suggestions available</p>';
+            suggestionsHTML = `
+                <div class="text-center py-12">
+                    <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i class="fas fa-users text-blue-600 text-2xl"></i>
+                    </div>
+                    <h3 class="text-heading-3 mb-2">No suggestions available</h3>
+                    <p class="text-body" style="color: var(--neutral-500);">Check back later for new connection opportunities</p>
+                </div>
+            `;
         }
         
         suggestedConnections.innerHTML = suggestionsHTML;
@@ -265,7 +346,7 @@ async function loadSuggestedConnections() {
         
     } catch (error) {
         console.error('Error loading suggestions:', error);
-        suggestedConnections.innerHTML = '<p class="text-center text-gray-500 py-4">Error loading suggestions</p>';
+        suggestedConnections.innerHTML = '<p class="text-center text-red-500 py-4">Error loading suggestions</p>';
     }
 }
 
@@ -294,40 +375,81 @@ async function loadTrendingTopics() {
             
             if (sortedTags.length > 0) {
                 trendingHTML = sortedTags.map(([tag, count]) => `
-                    <div class="text-sm">
-                        <div class="font-medium text-gray-900">#${tag}</div>
-                        <div class="text-gray-500">${count} post${count !== 1 ? 's' : ''}</div>
+                    <div class="p-3 rounded-lg hover:bg-blue-50 transition-colors duration-150 cursor-pointer">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <div class="text-body font-semibold" style="color: var(--primary-blue);">#${tag}</div>
+                                <div class="text-caption" style="color: var(--neutral-500);">${count} post${count !== 1 ? 's' : ''}</div>
+                            </div>
+                            <i class="fas fa-arrow-up text-green-500 text-sm"></i>
+                        </div>
                     </div>
                 `).join('');
             } else {
-                trendingHTML = getSampleTrending();
+                trendingHTML = `
+                    <div class="text-center py-8">
+                        <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                            <i class="fas fa-hashtag text-blue-600"></i>
+                        </div>
+                        <p class="text-caption" style="color: var(--neutral-500);">No trending topics yet</p>
+                    </div>
+                `;
             }
         } else {
-            // Show sample trending if no tags found
-            trendingHTML = getSampleTrending();
+            // Show empty state if no tags found
+            trendingHTML = `
+                <div class="text-center py-8">
+                    <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                        <i class="fas fa-hashtag text-blue-600"></i>
+                    </div>
+                    <p class="text-caption" style="color: var(--neutral-500);">No trending topics yet</p>
+                </div>
+            `;
         }
         
         trendingTopics.innerHTML = trendingHTML;
         
     } catch (error) {
         console.error('Error loading trending topics:', error);
-        trendingTopics.innerHTML = getSampleTrending();
+        trendingTopics.innerHTML = `
+            <div class="text-center py-8">
+                <div class="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                    <i class="fas fa-exclamation-triangle text-red-600"></i>
+                </div>
+                <p class="text-caption" style="color: var(--neutral-500);">Unable to load trending topics</p>
+            </div>
+        `;
     }
 }
 
 function getSampleTrending() {
     return `
-        <div class="text-sm">
-            <div class="font-medium text-gray-900">#TechJobs</div>
-            <div class="text-gray-500">No posts yet</div>
+        <div class="p-3 rounded-lg hover:bg-blue-50 transition-colors duration-150 cursor-pointer">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-body font-semibold" style="color: var(--primary-blue);">#TechJobs</div>
+                    <div class="text-caption" style="color: var(--neutral-500);">No posts yet</div>
+                </div>
+                <i class="fas fa-arrow-up text-green-500 text-sm"></i>
+            </div>
         </div>
-        <div class="text-sm">
-            <div class="font-medium text-gray-900">#RemoteWork</div>
-            <div class="text-gray-500">No posts yet</div>
+        <div class="p-3 rounded-lg hover:bg-green-50 transition-colors duration-150 cursor-pointer">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-body font-semibold" style="color: var(--success-green);">#RemoteWork</div>
+                    <div class="text-caption" style="color: var(--neutral-500);">No posts yet</div>
+                </div>
+                <i class="fas fa-arrow-up text-green-500 text-sm"></i>
+            </div>
         </div>
-        <div class="text-sm">
-            <div class="font-medium text-gray-900">#AI</div>
-            <div class="text-gray-500">No posts yet</div>
+        <div class="p-3 rounded-lg hover:bg-purple-50 transition-colors duration-150 cursor-pointer">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-body font-semibold" style="color: #8b5cf6;">#AI</div>
+                    <div class="text-caption" style="color: var(--neutral-500);">No posts yet</div>
+                </div>
+                <i class="fas fa-arrow-up text-green-500 text-sm"></i>
+            </div>
         </div>
     `;
 }
@@ -574,16 +696,16 @@ async function findConnections() {
         const allPeopleWithoutEmployment = await makeQuery('persons', 'match $person isa person, has name $name; $me isa person, has name "Jason Clark"; not { $person is $me; }; not { $friendship (friend: $me, friend: $person) isa friendship; }; not { $employment (employee: $person, employer: $company) isa employment; }; select $person, $name;');
         
         let findConnectionsHTML = `
-            <div class="max-w-6xl mx-auto px-4">
+            <div class="max-w-4xl mx-auto px-4">
                 <div class="text-center mb-8">
-                    <h2 class="text-3xl font-bold text-gray-900 mb-2">Find Connections</h2>
-                    <p class="text-gray-600">Discover and connect with professionals in your network</p>
+                    <h2 class="text-heading-1 mb-2" style="color: var(--neutral-900);">Find Connections</h2>
+                    <p class="text-body" style="color: var(--neutral-600);">Discover and connect with professionals in your network</p>
                 </div>
                 
                 <!-- People You May Know Section -->
-                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-                    <h3 class="text-lg font-semibold text-gray-900 mb-4">People You May Know</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div class="profile-card card-hover p-6 mb-6">
+                    <h3 class="text-body-large font-semibold mb-4" style="color: var(--neutral-900);">People You May Know</h3>
+                    <div class="space-y-3">
         `;
         
         // Combine and prioritize suggestions: employment first, then no employment
@@ -620,27 +742,26 @@ async function findConnections() {
             });
         }
         
-        // Render prioritized suggestions with compact design
+        // Render prioritized suggestions in list view
         allSuggestions.forEach(suggestion => {
             const name = String(suggestion.data.name?.value || suggestion.data.name || 'Unknown');
             const initials = name.split(' ').map(n => n[0]).join('').toUpperCase();
+            const company = suggestion.hasEmployment ? String(suggestion.data.company_name?.value || suggestion.data.company_name || '') : '';
+            const role = suggestion.hasEmployment ? String(suggestion.data.role?.value || suggestion.data.role || '') : '';
             
             findConnectionsHTML += `
-                <div class="bg-white border border-gray-200 rounded-lg p-4 text-center hover:shadow-md transition-shadow">
-                    <div class="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center text-white font-bold text-lg mx-auto mb-3">${initials}</div>
-                    <h4 class="font-medium text-gray-900 mb-3">${name}</h4>
-                    <div class="flex space-x-2">
-                        <button class="connect-person-btn flex-1 px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors" data-person="${name}" title="Connect">
-                            <svg class="w-4 h-4 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
-                            </svg>
-                        </button>
-                        <button class="view-profile-btn flex-1 px-3 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors" onclick="viewProfile('${name}')" title="View Profile">
-                            <svg class="w-4 h-4 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
-                            </svg>
-                        </button>
+                <div class="relative p-6 border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-all duration-150">
+                    <div class="flex items-center space-x-6 pr-24">
+                        <div class="avatar">${initials}</div>
+                        <div>
+                            <h4 class="text-body font-semibold" style="color: var(--neutral-900);">${name}</h4>
+                            ${company ? `<p class="text-caption" style="color: var(--neutral-600);">${role} at ${company}</p>` : `<p class="text-caption" style="color: var(--neutral-500);">Professional</p>`}
+                            <p class="text-caption" style="color: var(--neutral-400);">Mutual connection</p>
+                        </div>
+                    </div>
+                    <div class="absolute bottom-3 right-3 flex items-center space-x-2">
+                        <button class="connect-person-btn px-3 py-1 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors text-xs font-medium" data-person="${name}">Connect</button>
+                        <button class="px-3 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 transition-colors text-xs font-medium" onclick="viewProfile('${name}')">View</button>
                     </div>
                 </div>
             `;
@@ -651,9 +772,9 @@ async function findConnections() {
                 </div>
                 
                 <!-- More People Section -->
-                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                    <h3 class="text-lg font-semibold text-gray-900 mb-4">More People to Connect With</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div class="profile-card card-hover p-6">
+                    <h3 class="text-body-large font-semibold mb-4" style="color: var(--neutral-900);">More People to Connect With</h3>
+                    <div class="space-y-3">
         `;
         
         // Combine and prioritize all people: employment first, then no employment
@@ -690,28 +811,27 @@ async function findConnections() {
             });
         }
         
-        // Limit to 8 people and render with compact design
+        // Limit to 8 people and render in list view
         const limitedDiscovery = allDiscoveryPeople.slice(0, 8);
         limitedDiscovery.forEach(person => {
             const name = String(person.data.name?.value || person.data.name || 'Unknown');
             const initials = name.split(' ').map(n => n[0]).join('').toUpperCase();
+            const company = person.hasEmployment ? String(person.data.company_name?.value || person.data.company_name || '') : '';
+            const role = person.hasEmployment ? String(person.data.role?.value || person.data.role || '') : '';
             
             findConnectionsHTML += `
-                <div class="bg-white border border-gray-200 rounded-lg p-4 text-center hover:shadow-md transition-shadow">
-                    <div class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center text-white font-bold text-lg mx-auto mb-3">${initials}</div>
-                    <h4 class="font-medium text-gray-900 mb-3">${name}</h4>
-                    <div class="flex space-x-2">
-                        <button class="connect-person-btn flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors" data-person="${name}" title="Connect">
-                            <svg class="w-4 h-4 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
-                            </svg>
-                        </button>
-                        <button class="view-profile-btn flex-1 px-3 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors" onclick="viewProfile('${name}')" title="View Profile">
-                            <svg class="w-4 h-4 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
-                            </svg>
-                        </button>
+                <div class="relative p-6 border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-all duration-150">
+                    <div class="flex items-center space-x-6 pr-24">
+                        <div class="avatar">${initials}</div>
+                        <div>
+                            <h4 class="text-body font-semibold" style="color: var(--neutral-900);">${name}</h4>
+                            ${company ? `<p class="text-caption" style="color: var(--neutral-600);">${role} at ${company}</p>` : `<p class="text-caption" style="color: var(--neutral-500);">Professional</p>`}
+                            <p class="text-caption" style="color: var(--neutral-400);">Suggested for you</p>
+                        </div>
+                    </div>
+                    <div class="absolute bottom-3 right-3 flex items-center space-x-2">
+                        <button class="connect-person-btn px-3 py-1 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors text-xs font-medium" data-person="${name}">Connect</button>
+                        <button class="px-3 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 transition-colors text-xs font-medium" onclick="viewProfile('${name}')">View</button>
                     </div>
                 </div>
             `;
@@ -776,19 +896,22 @@ async function exploreCompanies() {
                 
                 const buttonText = isFollowing ? 'Following' : 'Follow';
                 const buttonClass = isFollowing 
-                    ? 'follow-btn px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm hover:bg-green-200'
-                    : 'follow-btn px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm hover:bg-blue-200';
+                    ? 'btn-secondary follow-company-btn'
+                    : 'btn-primary follow-company-btn';
+                const buttonStyle = isFollowing ? 'background: var(--success-green); color: white; border-color: var(--success-green);' : '';
                 
                 return `
-                    <div class="profile-card p-4">
-                        <div class="flex items-center space-x-4">
-                            <div class="avatar company-badge">${initials}</div>
-                            <div class="flex-1">
-                                <h4 class="font-semibold text-gray-900">${name}</h4>
-                                <p class="text-gray-600">Technology Company</p>
-                                <p class="text-sm text-gray-500">View employees and opportunities</p>
+                    <div class="profile-card card-hover p-5 mb-4">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-4">
+                                <div class="avatar avatar-sm company-badge">${initials}</div>
+                                <div class="flex-1">
+                                    <div class="text-body-large font-semibold mb-1" style="color: var(--neutral-900);">${name}</div>
+                                    <p class="text-body mb-1" style="color: var(--neutral-600);">Technology Company</p>
+                                    <p class="text-caption" style="color: var(--neutral-500);">View employees and opportunities</p>
+                                </div>
                             </div>
-                            <button class="${buttonClass} follow-company-btn" data-company="${name}">${buttonText}</button>
+                            <button class="${buttonClass}" style="${buttonStyle} padding: 10px 20px; font-size: 13px;" data-company="${name}">${buttonText}</button>
                         </div>
                     </div>
                 `;
@@ -920,7 +1043,8 @@ window.followCompany = async function(companyName) {
             
             if (unfollowData.ok) {
                 button.textContent = 'Follow';
-                button.className = 'follow-btn px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm hover:bg-blue-200';
+                button.className = 'btn-primary follow-company-btn';
+                button.style = '';
                 showNotification(`Unfollowed ${companyName}`, 'success');
             }
         } else {
@@ -934,7 +1058,8 @@ window.followCompany = async function(companyName) {
             
             if (followData.ok) {
                 button.textContent = 'Following';
-                button.className = 'follow-btn px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm hover:bg-green-200';
+                button.className = 'btn-secondary follow-company-btn';
+                button.style = 'background: var(--success-green); color: white; border-color: var(--success-green);';
                 showNotification(`Now following ${companyName}`, 'success');
             }
         }
@@ -1012,12 +1137,20 @@ async function makeQuery(endpoint, query, queryType = 'Query') {
     }
 }
 
+// Initialize navigation system
+function initializeNavigation() {
+    // Set initial active navigation
+    setActiveNav('feed');
+    
+    // Load initial content
+    loadFeed();
+}
+
 // Event Listeners
 document.addEventListener('DOMContentLoaded', function() {
+    loadUserProfile();
+    initializeNavigation();
     console.log('SocialNet app loaded');
-    
-    // Load initial feed
-    loadFeed();
     
     // Modal close handler
     modal.addEventListener('click', function(e) {
@@ -1065,7 +1198,7 @@ async function performSearch(query) {
                         <div class="flex items-center space-x-3">
                             <div class="avatar avatar-sm">${initials}</div>
                             <div>
-                                <div class="font-medium text-gray-900">${name}</div>
+                                <div class="text-body font-semibold" style="color: var(--neutral-900);">${name}</div>
                                 <div class="text-gray-500 text-sm">Professional</div>
                             </div>
                         </div>
@@ -1094,7 +1227,7 @@ async function performSearch(query) {
                         <div class="flex items-center space-x-3">
                             <div class="avatar avatar-sm company-badge">${initials}</div>
                             <div>
-                                <div class="font-medium text-gray-900">${name}</div>
+                                <div class="text-body font-semibold" style="color: var(--neutral-900);">${name}</div>
                                 <div class="text-gray-500 text-sm">Company</div>
                             </div>
                         </div>
