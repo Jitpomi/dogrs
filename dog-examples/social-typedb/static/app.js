@@ -127,8 +127,8 @@ function setActiveNav(activeItem) {
 async function loadFeed() {
     showLoading();
     try {
-        // Load posts from the database
-        const postsData = await makeQuery('posts', 'match $post isa post, has post-text $text, has creation-timestamp $time; $posting (post: $post, author: $author) isa posting; $author has name $name; limit 10; select $post, $text, $time, $name;');
+        // Load posts from the database with like information
+        const postsData = await makeQuery('posts', 'match $post isa post, has post-text $text, has post-id $id, has creation-timestamp $time; $posting (post: $post, author: $author) isa posting; $author has name $name; limit 10; select $post, $text, $id, $time, $name;');
         
         let feedHTML = '';
         let uniquePosts = [];
@@ -148,15 +148,20 @@ async function loadFeed() {
                 }
             });
             
-            feedHTML = uniquePosts.map(answer => {
+            feedHTML = await Promise.all(uniquePosts.map(async (answer) => {
                 const text = String(answer.data.text?.value || answer.data.text || 'No content');
                 const authorName = String(answer.data.name?.value || answer.data.name || 'Unknown Author');
                 const timestamp = answer.data.time?.value || answer.data.time || new Date().toISOString();
                 const timeAgo = getTimeAgo(timestamp);
                 const initials = authorName.split(' ').map(n => n[0]).join('').toUpperCase();
+                const postId = answer.data.id?.value || answer.data.id || `post_${Date.now()}_${Math.random()}`;
                 
-                return createPostCard(authorName, initials, text, timeAgo);
-            }).join('');
+                // Get like count and user's like status for this post
+                const { likeCount, isLiked } = await getPostLikeInfo(postId);
+                
+                return createPostCard(authorName, initials, text, timeAgo, postId, likeCount, isLiked);
+            }));
+            feedHTML = feedHTML.join('');
         } else {
             feedHTML = `
                 <div class="post-card text-center py-16">
@@ -171,6 +176,33 @@ async function loadFeed() {
         }
         
         feedContent.innerHTML = feedHTML;
+        
+        // Add event listeners for like buttons
+        const likeButtons = document.querySelectorAll('.like-btn');
+        console.log('Found like buttons:', likeButtons.length);
+        likeButtons.forEach(button => {
+            button.addEventListener('click', async function() {
+                console.log('=== LIKE BUTTON CLICKED ===');
+                const postId = this.getAttribute('data-post-id');
+                console.log('Button post ID:', postId);
+                
+                // Disable button during request
+                this.disabled = true;
+                
+                try {
+                    const newLikeStatus = await togglePostLike(postId);
+                    console.log('Toggle result:', newLikeStatus);
+                    const { likeCount } = await getPostLikeInfo(postId);
+                    console.log('New like count:', likeCount);
+                    updateLikeButton(this, newLikeStatus, likeCount);
+                    console.log('UI updated');
+                } catch (error) {
+                    console.error('Error handling like click:', error);
+                } finally {
+                    this.disabled = false;
+                }
+            });
+        });
         
         // Load suggested connections and trending topics
         await loadSuggestedConnections();
@@ -202,9 +234,13 @@ async function loadFeed() {
     hideLoading();
 }
 
-function createPostCard(authorName, authorInitials, content, timeAgo) {
+function createPostCard(authorName, authorInitials, content, timeAgo, postId, likeCount = 0, isLiked = false) {
+    const likeIcon = isLiked ? 'fas fa-thumbs-up' : 'far fa-thumbs-up';
+    const likeColor = isLiked ? 'text-blue-600' : 'text-neutral-500 hover:text-blue-600';
+    const likeText = likeCount > 0 ? `${likeCount}` : '';
+    
     return `
-        <div class="post-card card-hover p-6 mb-4">
+        <div class="post-card card-hover p-6 mb-4" data-post-id="${postId}">
             <div class="flex items-start space-x-4">
                 <div class="avatar">${authorInitials}</div>
                 <div class="flex-1">
@@ -216,9 +252,10 @@ function createPostCard(authorName, authorInitials, content, timeAgo) {
                     <p class="text-body mb-4" style="color: var(--neutral-700); line-height: 1.6;">${content}</p>
                     <div class="flex items-center justify-between pt-3 border-t border-neutral-100">
                         <div class="flex items-center space-x-6">
-                            <button class="flex items-center space-x-2 text-neutral-500 hover:text-blue-600 transition-colors duration-150 p-2 rounded-lg hover:bg-blue-50">
-                                <i class="far fa-thumbs-up text-lg"></i>
+                            <button class="like-btn flex items-center space-x-2 ${likeColor} transition-colors duration-150 p-2 rounded-lg hover:bg-blue-50" data-post-id="${postId}" data-author="${authorName}">
+                                <i class="${likeIcon} text-lg"></i>
                                 <span class="text-body font-medium">Like</span>
+                                ${likeText ? `<span class="like-count text-sm">${likeText}</span>` : ''}
                             </button>
                             <button class="flex items-center space-x-2 text-neutral-500 hover:text-green-600 transition-colors duration-150 p-2 rounded-lg hover:bg-green-50">
                                 <i class="far fa-comment text-lg"></i>
