@@ -377,6 +377,238 @@ async function getUserCount() {
     }
 }
 
+// Get all available groups with member counts
+async function getAllGroups() {
+    try {
+        const groupsData = await makeQuery('groups', `
+            match $group isa group, has group-id $groupId, has name $name, has page-visibility $visibility;
+            select $group, $groupId, $name, $visibility;
+        `);
+        
+        if (groupsData.ok?.answers) {
+            // Remove duplicates based on groupId
+            const uniqueGroups = [];
+            const seenGroupIds = new Set();
+            
+            for (const answer of groupsData.ok.answers) {
+                const groupId = answer.data.groupId?.value || answer.data.groupId;
+                if (!seenGroupIds.has(groupId)) {
+                    seenGroupIds.add(groupId);
+                    
+                    // Get member count for this group
+                    const memberCount = await getGroupMemberCount(groupId);
+                    
+                    uniqueGroups.push({
+                        groupId: groupId,
+                        name: answer.data.name?.value || answer.data.name,
+                        visibility: answer.data.visibility?.value || answer.data.visibility,
+                        memberCount: memberCount
+                    });
+                }
+            }
+            
+            return uniqueGroups;
+        }
+        
+        return [];
+    } catch (error) {
+        console.error('Error getting all groups:', error);
+        return [];
+    }
+}
+
+// Get member count for a specific group
+async function getGroupMemberCount(groupId) {
+    try {
+        const memberData = await makeQuery('groups', `
+            match 
+            $group isa group, has group-id "${groupId}";
+            $membership isa group-membership;
+            $membership links (member: $person, group: $group);
+            select $person;
+        `);
+        
+        return memberData.ok?.answers?.length || 0;
+    } catch (error) {
+        console.error('Error getting group member count:', error);
+        return 0;
+    }
+}
+
+// Get group members with their details
+async function getGroupMembers(groupId, limit = 5) {
+    try {
+        const memberData = await makeQuery('groups', `
+            match 
+            $group isa group, has group-id "${groupId}";
+            $membership isa group-membership;
+            $membership links (member: $person, group: $group);
+            $person has name $name, has username $username;
+            select $person, $name, $username;
+            limit ${limit};
+        `);
+        
+        if (memberData.ok?.answers) {
+            return memberData.ok.answers.map(answer => ({
+                name: answer.data.name?.value || answer.data.name,
+                username: answer.data.username?.value || answer.data.username
+            }));
+        }
+        
+        return [];
+    } catch (error) {
+        console.error('Error getting group members:', error);
+        return [];
+    }
+}
+
+// Get user's group memberships
+async function getUserGroups(username) {
+    try {
+        const membershipData = await makeQuery('groups', `
+            match 
+            $person isa person, has username "${username}";
+            $membership isa group-membership;
+            $membership links (member: $person, group: $group);
+            $group has group-id $groupId, has name $name;
+            $membership has rank $rank;
+            select $group, $groupId, $name, $rank;
+        `);
+        
+        if (membershipData.ok?.answers) {
+            // Remove duplicates based on groupId
+            const uniqueGroups = [];
+            const seenGroupIds = new Set();
+            
+            membershipData.ok.answers.forEach(answer => {
+                const groupId = answer.data.groupId?.value || answer.data.groupId;
+                if (!seenGroupIds.has(groupId)) {
+                    seenGroupIds.add(groupId);
+                    uniqueGroups.push({
+                        groupId: groupId,
+                        name: answer.data.name?.value || answer.data.name,
+                        rank: answer.data.rank?.value || answer.data.rank || 'member'
+                    });
+                }
+            });
+            
+            return uniqueGroups;
+        }
+        
+        return [];
+    } catch (error) {
+        console.error('Error getting user groups:', error);
+        return [];
+    }
+}
+
+// Join a group
+async function joinGroup(groupId) {
+    try {
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for joining group');
+            return false;
+        }
+        
+        const joinData = await makeQuery('groups', `
+            match
+            $person isa person, has username "${currentUser.username}";
+            $group isa group, has group-id "${groupId}";
+            insert
+            $membership isa group-membership;
+            $membership links (member: $person, group: $group);
+            $membership has rank "member";
+            $membership has start-timestamp ${new Date().toISOString().slice(0, 19)};
+        `, 'Write');
+        
+        if (joinData.ok) {
+            showNotification('Successfully joined group', 'success');
+            return true;
+        } else {
+            showNotification('Failed to join group', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error joining group:', error);
+        showNotification('Error joining group', 'error');
+        return false;
+    }
+}
+
+// Leave a group
+async function leaveGroup(groupId) {
+    try {
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for leaving group');
+            return false;
+        }
+        
+        const leaveData = await makeQuery('groups', `
+            match
+            $person isa person, has username "${currentUser.username}";
+            $group isa group, has group-id "${groupId}";
+            $membership isa group-membership;
+            $membership links (member: $person, group: $group);
+            delete
+            $membership;
+        `, 'Write');
+        
+        if (leaveData.ok) {
+            showNotification('Successfully left group', 'success');
+            return true;
+        } else {
+            showNotification('Failed to leave group', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error leaving group:', error);
+        showNotification('Error leaving group', 'error');
+        return false;
+    }
+}
+
+// Create a new group
+async function createGroup(name, visibility = 'public') {
+    try {
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for creating group');
+            return false;
+        }
+        
+        const groupId = `group_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        const createData = await makeQuery('groups', `
+            match
+            $person isa person, has username "${currentUser.username}";
+            insert
+            $group isa group;
+            $group has group-id "${groupId}";
+            $group has name "${name}";
+            $group has page-visibility "${visibility}";
+            $group has post-visibility "default";
+            $membership isa group-membership;
+            $membership links (member: $person, group: $group);
+            $membership has rank "owner";
+            $membership has start-timestamp ${new Date().toISOString().slice(0, 19)};
+        `, 'Write');
+        
+        if (createData.ok) {
+            showNotification('Group created successfully', 'success');
+            return { success: true, groupId };
+        } else {
+            showNotification('Failed to create group', 'error');
+            return { success: false };
+        }
+    } catch (error) {
+        console.error('Error creating group:', error);
+        showNotification('Error creating group', 'error');
+        return { success: false };
+    }
+}
+
 // Add a comment to a specific post
 async function addComment(postId, commentText) {
     try {

@@ -1573,6 +1573,290 @@ async function loadAnalytics() {
     hideLoading();
 }
 
+async function showGroups() {
+    setActiveNav('groups');
+    currentView = 'groups';
+    showLoading();
+    
+    try {
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found for groups');
+            hideLoading();
+            return;
+        }
+        
+        // Get all groups and user's memberships
+        const [allGroups, userGroups] = await Promise.all([
+            getAllGroups(),
+            getUserGroups(currentUser.username)
+        ]);
+        
+        const userGroupIds = new Set(userGroups.map(g => g.groupId));
+        const availableGroups = allGroups.filter(group => !userGroupIds.has(group.groupId));
+        
+        let groupsHTML = `
+            <div class="max-w-4xl mx-auto">
+                <!-- Header Section -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h2 class="text-2xl font-semibold text-neutral-900 mb-1">Groups</h2>
+                            <p class="text-neutral-600">About ${allGroups.length + userGroups.length} results</p>
+                        </div>
+                        <button id="createGroupBtn" class="btn-primary">
+                            <i class="fas fa-plus mr-2"></i>Create Group
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Groups List -->
+                <div class="space-y-4">
+        `;
+        
+        // Combine all groups for LinkedIn-style vertical list
+        const allGroupsForDisplay = [
+            ...userGroups.map(group => ({ ...group, isMember: true })),
+            ...availableGroups.map(group => ({ ...group, isMember: false }))
+        ];
+        
+        if (allGroupsForDisplay.length > 0) {
+            for (const group of allGroupsForDisplay) {
+                // Get actual member count from database
+                const memberCount = await getGroupMemberCount(group.groupId);
+                const groupDescription = getGroupDescription(group.name);
+                const isPrivate = group.visibility === 'private';
+                
+                groupsHTML += `
+                    <div class="bg-white border border-neutral-200 rounded-lg p-6 hover:shadow-sm transition-shadow duration-150">
+                        <div class="flex items-start justify-between">
+                            <div class="flex items-start space-x-4 flex-1">
+                                <div class="w-16 h-16 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 text-white font-bold text-lg flex items-center justify-center flex-shrink-0">
+                                    ${group.name.split(' ').map(word => word[0]).join('').toUpperCase().slice(0, 2)}
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <h3 class="text-lg font-semibold text-neutral-900 mb-1">${group.name}</h3>
+                                    <div class="flex items-center space-x-2 text-sm text-neutral-600 mb-3">
+                                        <span class="font-medium">${memberCount} member${memberCount !== 1 ? 's' : ''}</span>
+                                        ${group.isMember && group.rank ? `
+                                            <span class="text-neutral-400">•</span>
+                                            <span class="text-xs px-2 py-1 rounded-full ${group.rank === 'owner' ? 'bg-purple-100 text-purple-800' : 
+                                                group.rank === 'admin' ? 'bg-red-100 text-red-800' : 
+                                                group.rank === 'moderator' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}">${group.rank}</span>
+                                        ` : ''}
+                                    </div>
+                                    <p class="text-sm text-neutral-600 leading-relaxed">${groupDescription}</p>
+                                </div>
+                            </div>
+                            <div class="ml-6 flex-shrink-0">
+                                ${group.isMember ? `
+                                    <div class="flex items-center space-x-2">
+                                        <button class="btn-secondary view-group-btn" data-group-id="${group.groupId}">
+                                            View
+                                        </button>
+                                        ${group.rank !== 'owner' ? `
+                                            <button class="btn-outline-danger leave-group-btn" data-group-id="${group.groupId}">
+                                                Leave
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                ` : `
+                                    <button class="btn-primary join-group-btn" data-group-id="${group.groupId}">
+                                        Join
+                                    </button>
+                                `}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        } else {
+            groupsHTML += `
+                <div class="bg-white border border-neutral-200 rounded-lg p-12 text-center">
+                    <div class="w-16 h-16 bg-neutral-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <i class="fas fa-layer-group text-neutral-400 text-2xl"></i>
+                    </div>
+                    <h3 class="text-lg font-semibold text-neutral-900 mb-2">No groups found</h3>
+                    <p class="text-neutral-600 mb-4">Create a new group to start building your community.</p>
+                </div>
+            `;
+        }
+        
+        groupsHTML += `
+                </div>
+            </div>
+        `;
+        
+        feedContent.innerHTML = groupsHTML;
+        
+        // Add event listeners
+        setupGroupEventListeners();
+        
+    } catch (error) {
+        console.error('Error loading groups:', error);
+        feedContent.innerHTML = `
+            <div class="post-card text-center py-16">
+                <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <i class="fas fa-exclamation-triangle text-red-600 text-2xl"></i>
+                </div>
+                <h3 class="text-heading-3 mb-2">Unable to load groups</h3>
+                <p class="text-body mb-4" style="color: var(--neutral-600);">There was an error loading the groups. Please try again.</p>
+                <button onclick="showGroups()" class="btn-primary">Try Again</button>
+            </div>
+        `;
+    }
+    
+    hideLoading();
+}
+
+// Setup event listeners for group interactions
+function setupGroupEventListeners() {
+    // Create group button
+    const createGroupBtn = document.getElementById('createGroupBtn');
+    if (createGroupBtn) {
+        createGroupBtn.addEventListener('click', showCreateGroupModal);
+    }
+    
+    // Join group buttons
+    const joinButtons = document.querySelectorAll('.join-group-btn');
+    joinButtons.forEach(button => {
+        button.addEventListener('click', async function() {
+            const groupId = this.getAttribute('data-group-id');
+            this.disabled = true;
+            this.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Joining...';
+            
+            const success = await joinGroup(groupId);
+            if (success) {
+                await showGroups();
+            } else {
+                this.disabled = false;
+                this.innerHTML = '<i class="fas fa-plus mr-1"></i>Join Group';
+            }
+        });
+    });
+    
+    // Leave group buttons
+    const leaveButtons = document.querySelectorAll('.leave-group-btn');
+    leaveButtons.forEach(button => {
+        button.addEventListener('click', async function() {
+            const groupId = this.getAttribute('data-group-id');
+            
+            if (confirm('Are you sure you want to leave this group?')) {
+                this.disabled = true;
+                this.innerHTML = '<i class="fas fa-spinner fa-spin"></i>Leaving...';
+                
+                const success = await leaveGroup(groupId);
+                if (success) {
+                    await showGroups();
+                } else {
+                    this.disabled = false;
+                    this.innerHTML = 'Leave';
+                }
+            }
+        });
+    });
+    
+    // View group buttons
+    const viewButtons = document.querySelectorAll('.view-group-btn');
+    viewButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const groupId = this.getAttribute('data-group-id');
+            showNotification('Group-specific pages coming soon!', 'info');
+        });
+    });
+}
+
+// Show create group modal
+function showCreateGroupModal() {
+    const modal = document.createElement('div');
+    modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+    modal.innerHTML = `
+        <div class="bg-white rounded-lg p-6 w-full max-w-md mx-4">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-semibold text-neutral-900">Create New Group</h3>
+                <button id="closeModal" class="text-neutral-400 hover:text-neutral-600">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <form id="createGroupForm">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-neutral-700 mb-2">Group Name</label>
+                    <input type="text" id="groupName" class="w-full px-3 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                           placeholder="Enter group name..." maxlength="100" required>
+                </div>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-neutral-700 mb-2">Visibility</label>
+                    <select id="groupVisibility" class="w-full px-3 py-2 border border-neutral-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="public">Public - Anyone can see and join</option>
+                        <option value="private">Private - Invite only</option>
+                    </select>
+                </div>
+                
+                <div class="flex justify-end space-x-3">
+                    <button type="button" id="cancelCreate" class="btn-secondary">Cancel</button>
+                    <button type="submit" id="submitCreate" class="btn-primary">Create Group</button>
+                </div>
+            </form>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    const closeModal = () => {
+        document.body.removeChild(modal);
+    };
+    
+    modal.querySelector('#closeModal').addEventListener('click', closeModal);
+    modal.querySelector('#cancelCreate').addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+    });
+    
+    modal.querySelector('#createGroupForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const name = modal.querySelector('#groupName').value.trim();
+        const visibility = modal.querySelector('#groupVisibility').value;
+        const submitBtn = modal.querySelector('#submitCreate');
+        
+        if (!name) {
+            showNotification('Please enter a group name', 'error');
+            return;
+        }
+        
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Creating...';
+        
+        const result = await createGroup(name, visibility);
+        if (result.success) {
+            closeModal();
+            await showGroups();
+        } else {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Create Group';
+        }
+    });
+    
+    modal.querySelector('#groupName').focus();
+}
+
+// Get group description based on group name
+function getGroupDescription(groupName) {
+    const descriptions = {
+        'Tech Enthusiasts': 'Navigating the World of Technology, Innovation, and Digital Transformation. The group is committed to welcoming new members and fostering discussions about emerging technologies, startups, and industry trends.',
+        'Tech Innovators': 'At Tech Innovators, we believe in technology as a catalyst for change. If the world\'s organizations and institutions were run more effectively, if our leaders made better decisions, if people worked more productively, we believe that technology can make it happen.',
+        'AI Researchers': 'AI is an alliance of builders & executives facilitating the LLM & multimodal AI era, sharing tools to scale powerful, cost-effective applications on the journey to AGI. Conversation starters, thought leadership, and networking opportunities.',
+        'Database Developers': 'Welcome to Database Developers – The Largest Community for Database Professionals on LinkedIn. With over 2.3 million members, this group is the ultimate destination for database developers, architects, and industry professionals.',
+        'Startup Founders': 'Engaging in the exchange of knowledge is a powerful catalyst for personal and collective growth. By delving into the realms of entrepreneurship, technology, funding, management, etc., we open doors to new opportunities and insights.',
+        'Open Source Contributors': 'Professionals working with: Open source software, collaborative development, version control, community-driven projects, distributed systems, DevOps practices, cloud computing, and modern software architecture.',
+        'Charity Volunteers': 'A community dedicated to making a positive impact through volunteer work, charitable initiatives, and social responsibility. Connect with like-minded individuals who are passionate about giving back to their communities.'
+    };
+    
+    return descriptions[groupName] || `A professional community focused on ${groupName.toLowerCase()} and related topics. Join to connect with industry professionals, share insights, and stay updated on the latest trends and developments.`;
+}
+
 // Quick Action Functions
 async function findConnections() {
     setActiveNav('find-connections');

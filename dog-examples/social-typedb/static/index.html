@@ -160,6 +160,96 @@
             background: var(--neutral-200);
             border-color: var(--neutral-300);
         }
+        
+        .btn-secondary-sm {
+            background: var(--neutral-100);
+            color: var(--neutral-700);
+            border: 1px solid var(--neutral-300);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        
+        .btn-secondary-sm:hover {
+            background: var(--neutral-200);
+            border-color: var(--neutral-400);
+        }
+        
+        .btn-danger-sm {
+            background: var(--error-red);
+            color: white;
+            border: 1px solid var(--error-red);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        
+        .btn-danger-sm:hover {
+            background: #dc2626;
+            border-color: #dc2626;
+        }
+        
+        .btn-primary-sm {
+            background: var(--primary-blue);
+            color: white;
+            border: 1px solid var(--primary-blue);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        
+        .btn-primary-sm:hover {
+            background: #1d4ed8;
+            border-color: #1d4ed8;
+        }
+        
+        .btn-outline-danger {
+            background: transparent;
+            color: var(--error-red);
+            border: 1px solid var(--error-red);
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        
+        .btn-outline-danger:hover {
+            background: var(--error-red);
+            color: white;
+        }
+        
+        .avatar-lg {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        
+        .avatar-md {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 600;
+        }
         .nav-item {
             display: flex;
             align-items: center;
@@ -357,6 +447,9 @@
                         <a href="#" class="nav-item" onclick="showNetwork()">
                             <i class="fas fa-users"></i>Network
                         </a>
+                        <a href="#" class="nav-item" onclick="showGroups()">
+                            <i class="fas fa-layer-group"></i>Groups
+                        </a>
                         <a href="#" class="nav-item" onclick="showJobs()">
                             <i class="fas fa-briefcase"></i>Jobs
                         </a>
@@ -368,14 +461,14 @@
                 
                 <!-- Right Section -->
                 <div class="flex items-center space-x-4">
-                    <!-- Search -->
+                    <!-- Search 
                     <div class="relative hidden md:block">
                         <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                             <i class="fas fa-search text-neutral-400 text-sm"></i>
                         </div>
                         <input type="text" placeholder="Search professionals, companies..." class="search-input">
                     </div>
-                    
+                    -->
                     <!-- Profile -->
                     <div class="relative">
                         <div class="flex items-center space-x-3 p-1 hover:bg-neutral-50 rounded-lg transition-all duration-150 cursor-pointer" id="profileDropdownBtn">
