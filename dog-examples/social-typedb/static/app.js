@@ -910,10 +910,12 @@ window.followCompany = async function(companyName) {
         if (isFollowing) {
             // Unfollow company
             const unfollowData = await makeQuery('organizations', `
-                match 
+                match
                 $person isa person, has name "Jason Clark";
                 $company isa company, has name "${companyName}";
-                delete (follower: $person, page: $company) isa following;
+                $follow_relation isa following;
+                $follow_relation links (follower: $person, page: $company);
+                delete $follow_relation;
             `, 'Write');
             
             if (unfollowData.ok) {
