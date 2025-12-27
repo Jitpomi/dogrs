@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use anyhow::Result;
 use dog_core::DogApp;
 use typedb_driver::{TypeDBDriver, Credentials, DriverOptions};
@@ -11,7 +10,6 @@ use super::SocialParams;
 pub struct TypeDBState {
     pub driver: Arc<TypeDBDriver>,
     pub database: String,
-    pub operation_mutex: Arc<Mutex<()>>,
 }
 
 impl TypeDBStateTrait for TypeDBState {
@@ -47,7 +45,6 @@ impl TypeDBState {
         let state = Arc::new(Self { 
             driver, 
             database,
-            operation_mutex: Arc::new(Mutex::new(())),
         });
         
         Self::load_schema_from_file(&state).await?;
@@ -56,8 +53,6 @@ impl TypeDBState {
     }
 
     async fn load_schema_from_file(state: &TypeDBState) -> Result<()> {
-        let _lock = state.operation_mutex.lock().await;
-        
         let paths = [
             "src/schema.tql",
             "dog-examples/social-typedb/src/schema.tql",
