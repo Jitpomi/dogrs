@@ -497,12 +497,37 @@ async function exploreCompanies() {
     try {
         const companiesData = await makeQuery('organizations', 'match $company isa company, has name $name; limit 10; select $company, $name;');
         
+        // Get companies that Jason Clark is already following
+        const followingData = await makeQuery('organizations', `
+            match 
+            $person isa person, has name "Jason Clark";
+            $company isa company, has name $company_name;
+            $following (follower: $person, page: $company) isa following;
+            select $company, $company_name;
+        `);
+        
+        console.log('Following data response:', followingData);
+        
+        const followedCompanies = new Set();
+        if (followingData.ok && followingData.ok.answers) {
+            followingData.ok.answers.forEach(answer => {
+                const companyName = String(answer.data.company_name?.value || answer.data.company_name || '');
+                followedCompanies.add(companyName);
+            });
+        }
+        
         let companiesHTML = '<div class="space-y-4">';
         
         if (companiesData.ok && companiesData.ok.answers && companiesData.ok.answers.length > 0) {
             companiesHTML += companiesData.ok.answers.map(answer => {
                 const name = String(answer.data.name?.value || answer.data.name || 'Unknown Company');
                 const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+                const isFollowing = followedCompanies.has(name);
+                
+                const buttonText = isFollowing ? 'Following' : 'Follow';
+                const buttonClass = isFollowing 
+                    ? 'follow-btn px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm hover:bg-green-200'
+                    : 'follow-btn px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm hover:bg-blue-200';
                 
                 return `
                     <div class="profile-card p-4">
@@ -513,7 +538,7 @@ async function exploreCompanies() {
                                 <p class="text-gray-600">Technology Company</p>
                                 <p class="text-sm text-gray-500">View employees and opportunities</p>
                             </div>
-                            <button class="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm hover:bg-blue-200">Follow</button>
+                            <button class="${buttonClass} follow-company-btn" data-company="${name}">${buttonText}</button>
                         </div>
                     </div>
                 `;
@@ -525,6 +550,15 @@ async function exploreCompanies() {
         companiesHTML += '</div>';
         feedContent.innerHTML = companiesHTML;
         
+        // Add event listeners to follow buttons
+        const followButtons = document.querySelectorAll('.follow-company-btn');
+        followButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const companyName = this.getAttribute('data-company');
+                followCompany(companyName);
+            });
+        });
+        
     } catch (error) {
         console.error('Error loading companies:', error);
         feedContent.innerHTML = '<p class="text-center text-red-500 py-8">Error loading companies</p>';
@@ -534,6 +568,76 @@ async function exploreCompanies() {
 
 async function careerPaths() {
     showAnalytics();
+}
+
+// Follow Company Functions
+window.followCompany = async function(companyName) {
+    console.log('followCompany called with:', companyName);
+    const button = document.querySelector(`button[data-company="${companyName}"]`);
+    console.log('Button found:', button);
+    
+    if (!button) {
+        console.error('Button not found for company:', companyName);
+        return;
+    }
+    
+    const isFollowing = button.textContent.trim() === 'Following';
+    console.log('Is following:', isFollowing);
+    
+    showLoading();
+    
+    try {
+        if (isFollowing) {
+            // Unfollow company
+            const unfollowData = await makeQuery('organizations', `
+                match 
+                $person isa person, has name "Jason Clark";
+                $company isa company, has name "${companyName}";
+                delete (follower: $person, page: $company) isa following;
+            `, 'Write');
+            
+            if (unfollowData.ok) {
+                button.textContent = 'Follow';
+                button.className = 'follow-btn px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm hover:bg-blue-200';
+                showNotification(`Unfollowed ${companyName}`, 'success');
+            }
+        } else {
+            // Follow company
+            const followData = await makeQuery('organizations', `
+                match 
+                $person isa person, has name "Jason Clark";
+                $company isa company, has name "${companyName}";
+                insert (follower: $person, page: $company) isa following;
+            `, 'Write');
+            
+            if (followData.ok) {
+                button.textContent = 'Following';
+                button.className = 'follow-btn px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm hover:bg-green-200';
+                showNotification(`Now following ${companyName}`, 'success');
+            }
+        }
+    } catch (error) {
+        console.error('Error following/unfollowing company:', error);
+        showNotification('Error updating follow status', 'error');
+    }
+    
+    hideLoading();
+}
+
+// Notification function
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `fixed top-4 right-4 px-4 py-2 rounded-lg text-white z-50 ${
+        type === 'success' ? 'bg-green-500' : 
+        type === 'error' ? 'bg-red-500' : 'bg-blue-500'
+    }`;
+    notification.textContent = message;
+    
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.remove();
+    }, 3000);
 }
 
 // Utility Functions
@@ -562,11 +666,12 @@ function getTimeAgo(timestamp) {
 // API Functions
 async function makeQuery(endpoint, query, queryType = 'Query') {
     try {
+        const serviceMethod = queryType === 'Write' ? 'write' : 'read';
         const response = await fetch(`${API_BASE}/${endpoint}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'x-service-method': 'read'
+                'x-service-method': serviceMethod
             },
             body: JSON.stringify({ query })
         });
