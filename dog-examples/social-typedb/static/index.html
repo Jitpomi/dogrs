@@ -143,6 +143,23 @@
             background: var(--neutral-300);
             cursor: not-allowed;
         }
+        
+        .btn-secondary-sm {
+            background: var(--neutral-100);
+            color: var(--neutral-700);
+            padding: 6px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            border: 1px solid var(--neutral-200);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        
+        .btn-secondary-sm:hover {
+            background: var(--neutral-200);
+            border-color: var(--neutral-300);
+        }
         .nav-item {
             display: flex;
             align-items: center;
@@ -431,10 +448,15 @@
                     <div class="flex items-start space-x-4">
                         <div class="avatar avatar-sm">JC</div>
                         <div class="flex-1">
-                            <textarea placeholder="What's on your mind, Jason?" 
+                            <textarea id="postTextarea" placeholder="What's on your mind, Jason?" 
                                     class="w-full p-4 border-0 bg-neutral-50 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all duration-150 text-body"
                                     style="min-height: 80px; border: 1px solid var(--neutral-200);"
-                                    rows="3"></textarea>
+                                    rows="3" maxlength="500"></textarea>
+                            <div class="flex justify-between items-center mt-2">
+                                <div class="text-sm text-neutral-400">
+                                    <span id="charCount">0</span>/500 characters
+                                </div>
+                            </div>
                             <div class="flex justify-between items-center mt-4">
                                 <div class="flex space-x-6">
                                     <button class="flex items-center space-x-2 text-neutral-500 hover:text-blue-600 transition-colors duration-150">
@@ -456,7 +478,7 @@
                                         <span class="text-body font-medium">Event</span>
                                     </button>
                                 </div>
-                                <button class="btn-primary">Post</button>
+                                <button id="submitPostBtn" class="btn-primary">Post</button>
                             </div>
                         </div>
                     </div>

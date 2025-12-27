@@ -128,7 +128,7 @@ async function loadFeed() {
     showLoading();
     try {
         // Load posts from the database with like information
-        const postsData = await makeQuery('posts', 'match $post isa post, has post-text $text, has post-id $id, has creation-timestamp $time; $posting (author: $author, page: $page, post: $post) isa posting; $author has name $name; limit 10; select $post, $text, $id, $time, $name;');
+        const postsData = await makeQuery('posts', 'match $post isa post, has post-text $text, has post-id $id, has creation-timestamp $time; $posting (author: $author, page: $page, post: $post) isa posting; $author has name $name; select $post, $text, $id, $time, $name; sort $time desc; limit 10;');
         
         let feedHTML = '';
         let uniquePosts = [];
@@ -171,7 +171,11 @@ async function loadFeed() {
                     // Get comment count for this post
                     const commentCount = await getPostCommentCount(postId);
                     
-                    const postCard = createPostCard(authorName, initials, text, timeAgo, postId, likeCount, isLiked, viewCount, commentCount);
+                    // Check if this is the current user's post
+                    const currentUser = await getCurrentUser();
+                    const isOwnPost = currentUser && authorName === currentUser.name;
+                    
+                    const postCard = createPostCard(authorName, initials, text, timeAgo, postId, likeCount, isLiked, viewCount, commentCount, isOwnPost);
                     console.log('Created post card for:', authorName);
                     return postCard;
                 } catch (error) {
@@ -277,6 +281,152 @@ async function loadFeed() {
                 }
             });
         });
+
+        // Add event listener for post submission
+        const submitPostBtn = document.getElementById('submitPostBtn');
+        const postTextarea = document.getElementById('postTextarea');
+        const charCount = document.getElementById('charCount');
+        
+        // Add character counter functionality
+        if (postTextarea && charCount) {
+            postTextarea.addEventListener('input', function() {
+                const currentLength = this.value.length;
+                charCount.textContent = currentLength;
+                
+                // Change color when approaching limit
+                if (currentLength > 450) {
+                    charCount.style.color = 'var(--error-red)';
+                } else if (currentLength > 400) {
+                    charCount.style.color = 'var(--warning-amber)';
+                } else {
+                    charCount.style.color = 'var(--neutral-400)';
+                }
+            });
+        }
+        
+        if (submitPostBtn && postTextarea) {
+            submitPostBtn.addEventListener('click', async function() {
+                const postText = postTextarea.value.trim();
+                
+                if (!postText) {
+                    showNotification('Please enter some text for your post', 'error');
+                    return;
+                }
+
+                if (postText.length > 500) {
+                    showNotification('Post text is too long (max 500 characters)', 'error');
+                    return;
+                }
+
+                // Disable button during request
+                this.disabled = true;
+                this.textContent = 'Posting...';
+
+                try {
+                    const result = await createPost(postText);
+                    if (result.success) {
+                        postTextarea.value = '';
+                        // Refresh the feed to show the new post
+                        await loadFeed();
+                    }
+                } catch (error) {
+                    console.error('Error submitting post:', error);
+                    showNotification('Error creating post', 'error');
+                } finally {
+                    this.disabled = false;
+                    this.textContent = 'Post';
+                }
+            });
+        }
+
+        // Add event listeners for edit post buttons
+        const editPostButtons = document.querySelectorAll('.edit-post-btn');
+        console.log('Found edit post buttons:', editPostButtons.length);
+        editPostButtons.forEach(button => {
+            button.addEventListener('click', async function() {
+                const postId = this.getAttribute('data-post-id');
+                const postCard = this.closest('.post-card');
+                const contentElement = postCard.querySelector('p');
+                const currentText = contentElement.textContent;
+                
+                // Create inline edit form
+                const editForm = document.createElement('div');
+                editForm.className = 'edit-form mt-2';
+                editForm.innerHTML = `
+                    <textarea class="edit-textarea w-full p-3 border border-neutral-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                              rows="3" maxlength="500">${currentText}</textarea>
+                    <div class="flex justify-end space-x-2 mt-2">
+                        <button class="cancel-edit-btn btn-secondary-sm">Cancel</button>
+                        <button class="save-edit-btn btn-primary-sm">Save</button>
+                    </div>
+                `;
+                
+                // Hide original content and show edit form
+                contentElement.style.display = 'none';
+                contentElement.parentNode.insertBefore(editForm, contentElement.nextSibling);
+                
+                // Add event listeners for edit form buttons
+                const cancelBtn = editForm.querySelector('.cancel-edit-btn');
+                const saveBtn = editForm.querySelector('.save-edit-btn');
+                const textarea = editForm.querySelector('.edit-textarea');
+                
+                cancelBtn.addEventListener('click', () => {
+                    editForm.remove();
+                    contentElement.style.display = 'block';
+                });
+                
+                saveBtn.addEventListener('click', async () => {
+                    const newText = textarea.value.trim();
+                    if (!newText) {
+                        showNotification('Post text cannot be empty', 'error');
+                        return;
+                    }
+                    
+                    saveBtn.disabled = true;
+                    saveBtn.textContent = 'Saving...';
+                    
+                    try {
+                        const success = await editPost(postId, newText);
+                        if (success) {
+                            contentElement.textContent = newText;
+                            editForm.remove();
+                            contentElement.style.display = 'block';
+                        }
+                    } catch (error) {
+                        console.error('Error editing post:', error);
+                    } finally {
+                        saveBtn.disabled = false;
+                        saveBtn.textContent = 'Save';
+                    }
+                });
+            });
+        });
+
+        // Add event listeners for delete post buttons
+        const deletePostButtons = document.querySelectorAll('.delete-post-btn');
+        console.log('Found delete post buttons:', deletePostButtons.length);
+        deletePostButtons.forEach(button => {
+            button.addEventListener('click', async function() {
+                const postId = this.getAttribute('data-post-id');
+                
+                // Show confirmation dialog
+                if (confirm('Are you sure you want to delete this post? This action cannot be undone.')) {
+                    this.disabled = true;
+                    
+                    try {
+                        const success = await deletePost(postId);
+                        if (success) {
+                            // Remove post card from DOM and refresh feed
+                            await loadFeed();
+                        }
+                    } catch (error) {
+                        console.error('Error deleting post:', error);
+                    } finally {
+                        this.disabled = false;
+                    }
+                }
+            });
+        });
         
         // Load suggested connections and trending topics
         await loadSuggestedConnections();
@@ -308,7 +458,7 @@ async function loadFeed() {
     hideLoading();
 }
 
-function createPostCard(authorName, authorInitials, content, timeAgo, postId, likeCount = 0, isLiked = false, viewCount = 0, commentCount = 0) {
+function createPostCard(authorName, authorInitials, content, timeAgo, postId, likeCount = 0, isLiked = false, viewCount = 0, commentCount = 0, isOwnPost = false) {
     const likeIcon = isLiked ? 'fas fa-thumbs-up' : 'far fa-thumbs-up';
     const likeColor = isLiked ? 'text-blue-600' : 'text-neutral-500 hover:text-blue-600';
     const likeText = likeCount > 0 ? `${likeCount}` : '';
@@ -318,10 +468,22 @@ function createPostCard(authorName, authorInitials, content, timeAgo, postId, li
             <div class="flex items-start space-x-4">
                 <div class="avatar">${authorInitials}</div>
                 <div class="flex-1">
-                    <div class="flex items-center space-x-2 mb-3">
-                        <h4 class="text-body-large font-semibold" style="color: var(--neutral-900);">${authorName}</h4>
-                        <span class="text-caption" style="color: var(--neutral-400);">•</span>
-                        <span class="text-caption" style="color: var(--neutral-500);">${timeAgo}</span>
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="flex items-center space-x-2">
+                            <h4 class="text-body-large font-semibold" style="color: var(--neutral-900);">${authorName}</h4>
+                            <span class="text-caption" style="color: var(--neutral-400);">•</span>
+                            <span class="text-caption" style="color: var(--neutral-500);">${timeAgo}</span>
+                        </div>
+                        ${isOwnPost ? `
+                        <div class="flex items-center space-x-2">
+                            <button class="edit-post-btn text-neutral-400 hover:text-blue-600 transition-colors duration-150 p-1" data-post-id="${postId}" title="Edit post">
+                                <i class="fas fa-edit text-sm"></i>
+                            </button>
+                            <button class="delete-post-btn text-neutral-400 hover:text-red-600 transition-colors duration-150 p-1" data-post-id="${postId}" title="Delete post">
+                                <i class="fas fa-trash text-sm"></i>
+                            </button>
+                        </div>
+                        ` : ''}
                     </div>
                     <p class="text-body mb-4" style="color: var(--neutral-700); line-height: 1.6;">${content}</p>
                     <div class="flex items-center justify-between pt-3 border-t border-neutral-100">
@@ -394,25 +556,42 @@ async function loadCommentsForPost(postId) {
         }
 
         // Generate comments HTML
+        const currentUser = await getCurrentUser();
         const commentsHTML = comments.map(comment => {
             const initials = comment.authorName.split(' ').map(n => n[0]).join('').toUpperCase();
             const timeAgo = getTimeAgo(comment.timestamp);
+            const isOwnComment = currentUser && comment.authorName === currentUser.name;
             
             return `
-                <div class="flex items-start space-x-3 mb-3 pb-3 border-b border-neutral-100 last:border-b-0">
+                <div class="comment-item flex items-start space-x-3 mb-3 pb-3 border-b border-neutral-100 last:border-b-0" data-comment-id="${comment.id}">
                     <div class="avatar-sm">${initials}</div>
                     <div class="flex-1">
-                        <div class="flex items-center space-x-2 mb-1">
-                            <span class="font-semibold text-sm" style="color: var(--neutral-900);">${comment.authorName}</span>
-                            <span class="text-xs" style="color: var(--neutral-400);">${timeAgo}</span>
+                        <div class="flex items-center justify-between mb-1">
+                            <div class="flex items-center space-x-2">
+                                <span class="font-semibold text-sm" style="color: var(--neutral-900);">${comment.authorName}</span>
+                                <span class="text-xs" style="color: var(--neutral-400);">${timeAgo}</span>
+                            </div>
+                            ${isOwnComment ? `
+                            <div class="flex items-center space-x-1">
+                                <button class="edit-comment-btn text-neutral-400 hover:text-blue-600 transition-colors duration-150 p-1" data-comment-id="${comment.id}" title="Edit comment">
+                                    <i class="fas fa-edit text-xs"></i>
+                                </button>
+                                <button class="delete-comment-btn text-neutral-400 hover:text-red-600 transition-colors duration-150 p-1" data-comment-id="${comment.id}" title="Delete comment">
+                                    <i class="fas fa-trash text-xs"></i>
+                                </button>
+                            </div>
+                            ` : ''}
                         </div>
-                        <p class="text-sm" style="color: var(--neutral-700); line-height: 1.4;">${comment.text}</p>
+                        <p class="comment-text text-sm" style="color: var(--neutral-700); line-height: 1.4;">${comment.text}</p>
                     </div>
                 </div>
             `;
         }).join('');
 
         commentsList.innerHTML = commentsHTML;
+        
+        // Add event listeners for comment edit and delete buttons
+        addCommentEditDeleteListeners(postId);
     } catch (error) {
         console.error('Error loading comments:', error);
         const commentsList = document.querySelector(`.comments-list[data-post-id="${postId}"]`);
@@ -420,6 +599,101 @@ async function loadCommentsForPost(postId) {
             commentsList.innerHTML = '<div class="text-center py-2 text-red-500">Failed to load comments</div>';
         }
     }
+}
+
+// Add event listeners for comment edit and delete buttons
+function addCommentEditDeleteListeners(postId) {
+    const commentsList = document.querySelector(`.comments-list[data-post-id="${postId}"]`);
+    if (!commentsList) return;
+    
+    // Edit comment buttons
+    const editCommentButtons = commentsList.querySelectorAll('.edit-comment-btn');
+    editCommentButtons.forEach(button => {
+        button.addEventListener('click', async function() {
+            const commentId = this.getAttribute('data-comment-id');
+            const commentItem = this.closest('.comment-item');
+            const commentTextElement = commentItem.querySelector('.comment-text');
+            const currentText = commentTextElement.textContent;
+            
+            // Create inline edit form
+            const editForm = document.createElement('div');
+            editForm.className = 'edit-comment-form mt-1';
+            editForm.innerHTML = `
+                <textarea class="edit-comment-textarea w-full p-2 border border-neutral-200 rounded text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                          rows="2" maxlength="500">${currentText}</textarea>
+                <div class="flex justify-end space-x-2 mt-1">
+                    <button class="cancel-comment-edit-btn text-xs px-2 py-1 text-neutral-600 hover:text-neutral-800">Cancel</button>
+                    <button class="save-comment-edit-btn text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
+                </div>
+            `;
+            
+            // Hide original text and show edit form
+            commentTextElement.style.display = 'none';
+            commentTextElement.parentNode.insertBefore(editForm, commentTextElement.nextSibling);
+            
+            // Add event listeners for edit form buttons
+            const cancelBtn = editForm.querySelector('.cancel-comment-edit-btn');
+            const saveBtn = editForm.querySelector('.save-comment-edit-btn');
+            const textarea = editForm.querySelector('.edit-comment-textarea');
+            
+            cancelBtn.addEventListener('click', () => {
+                editForm.remove();
+                commentTextElement.style.display = 'block';
+            });
+            
+            saveBtn.addEventListener('click', async () => {
+                const newText = textarea.value.trim();
+                if (!newText) {
+                    showNotification('Comment text cannot be empty', 'error');
+                    return;
+                }
+                
+                saveBtn.disabled = true;
+                saveBtn.textContent = 'Saving...';
+                
+                try {
+                    const success = await editComment(commentId, newText);
+                    if (success) {
+                        commentTextElement.textContent = newText;
+                        editForm.remove();
+                        commentTextElement.style.display = 'block';
+                    }
+                } catch (error) {
+                    console.error('Error editing comment:', error);
+                } finally {
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = 'Save';
+                }
+            });
+        });
+    });
+    
+    // Delete comment buttons
+    const deleteCommentButtons = commentsList.querySelectorAll('.delete-comment-btn');
+    deleteCommentButtons.forEach(button => {
+        button.addEventListener('click', async function() {
+            const commentId = this.getAttribute('data-comment-id');
+            
+            // Show confirmation dialog
+            if (confirm('Are you sure you want to delete this comment? This action cannot be undone.')) {
+                this.disabled = true;
+                
+                try {
+                    const success = await deleteComment(commentId);
+                    if (success) {
+                        // Refresh comments and update count
+                        await loadCommentsForPost(postId);
+                        const newCommentCount = await getPostCommentCount(postId);
+                        updateCommentButton(postId, newCommentCount);
+                    }
+                } catch (error) {
+                    console.error('Error deleting comment:', error);
+                } finally {
+                    this.disabled = false;
+                }
+            }
+        });
+    });
 }
 
 function getSamplePosts() {

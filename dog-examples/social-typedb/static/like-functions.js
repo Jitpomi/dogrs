@@ -381,6 +381,217 @@ async function getPostComments(postId) {
     }
 }
 
+// Create a new post
+async function createPost(postText, postType = 'text-post') {
+    try {
+        // Get current user dynamically
+        const currentUser = await getCurrentUser();
+        
+        if (!currentUser) {
+            console.error('No current user found for post creation');
+            return false;
+        }
+        
+        const currentUsername = currentUser.username;
+        
+        // Generate unique post ID
+        const postId = `post_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Insert post entity and posting relation
+        const postData = await makeQuery('posts', `
+            match
+            $person isa person, has username "${currentUsername}";
+            insert
+            $post isa ${postType}, 
+                has post-id "${postId}",
+                has post-text "${postText}",
+                has creation-timestamp ${new Date().toISOString().slice(0, 19)},
+                has language "en";
+            $posting isa posting (author: $person, page: $person, post: $post);
+        `, 'Write');
+        
+        if (postData.ok) {
+            console.log('Post created successfully:', postId);
+            showNotification('Post created successfully', 'success');
+            return { success: true, postId };
+        } else {
+            console.error('Failed to create post:', postData);
+            showNotification('Failed to create post', 'error');
+            return { success: false };
+        }
+    } catch (error) {
+        console.error('Error creating post:', error);
+        showNotification('Error creating post', 'error');
+        return { success: false };
+    }
+}
+
+// Delete a post
+async function deletePost(postId) {
+    try {
+        // Get current user to verify ownership
+        const currentUser = await getCurrentUser();
+        
+        if (!currentUser) {
+            console.error('No current user found for post deletion');
+            return false;
+        }
+        
+        const currentUsername = currentUser.username;
+        
+        // Delete post and all related data (posting relations, reactions, comments, views)
+        const deleteData = await makeQuery('posts', `
+            match
+            $post isa post, has post-id "${postId}";
+            $author has username "${currentUsername}";
+            $posting isa posting;
+            $posting links (author: $author, page: $page, post: $post);
+            delete
+            $posting;
+            $post;
+        `, 'Write');
+        
+        if (deleteData.ok) {
+            console.log('Post deleted successfully:', postId);
+            showNotification('Post deleted successfully', 'success');
+            return true;
+        } else {
+            console.error('Failed to delete post:', deleteData);
+            showNotification('Failed to delete post', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error deleting post:', error);
+        showNotification('Error deleting post', 'error');
+        return false;
+    }
+}
+
+// Edit a post
+async function editPost(postId, newText) {
+    try {
+        // Get current user to verify ownership
+        const currentUser = await getCurrentUser();
+        
+        if (!currentUser) {
+            console.error('No current user found for post editing');
+            return false;
+        }
+        
+        const currentUsername = currentUser.username;
+        
+        // Update post text
+        const editData = await makeQuery('posts', `
+            match
+            $post isa post, has post-id "${postId}", has post-text $oldText;
+            $posting isa posting;
+            $posting links (author: $author, page: $page, post: $post);
+            $author has username "${currentUsername}";
+            delete
+            $oldText;
+            insert
+            $post has post-text "${newText}";
+        `, 'Write');
+        
+        if (editData.ok) {
+            console.log('Post edited successfully:', postId);
+            showNotification('Post updated successfully', 'success');
+            return true;
+        } else {
+            console.error('Failed to edit post:', editData);
+            showNotification('Failed to update post', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error editing post:', error);
+        showNotification('Error updating post', 'error');
+        return false;
+    }
+}
+
+// Edit a comment
+async function editComment(commentId, newText) {
+    try {
+        // Get current user to verify ownership
+        const currentUser = await getCurrentUser();
+        
+        if (!currentUser) {
+            console.error('No current user found for comment editing');
+            return false;
+        }
+        
+        const currentUsername = currentUser.username;
+        
+        // Update comment text
+        const editData = await makeQuery('posts', `
+            match
+            $comment isa comment, has comment-id "${commentId}", has comment-text $oldText;
+            $commenting isa commenting;
+            $commenting links (parent: $post, comment: $comment, author: $author);
+            $author has username "${currentUsername}";
+            delete
+            $oldText;
+            insert
+            $comment has comment-text "${newText}";
+        `, 'Write');
+        
+        if (editData.ok) {
+            console.log('Comment edited successfully:', commentId);
+            showNotification('Comment updated successfully', 'success');
+            return true;
+        } else {
+            console.error('Failed to edit comment:', editData);
+            showNotification('Failed to update comment', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error editing comment:', error);
+        showNotification('Error updating comment', 'error');
+        return false;
+    }
+}
+
+// Delete a comment
+async function deleteComment(commentId) {
+    try {
+        // Get current user to verify ownership
+        const currentUser = await getCurrentUser();
+        
+        if (!currentUser) {
+            console.error('No current user found for comment deletion');
+            return false;
+        }
+        
+        const currentUsername = currentUser.username;
+        
+        // Delete comment and commenting relation
+        const deleteData = await makeQuery('posts', `
+            match
+            $comment isa comment, has comment-id "${commentId}";
+            $commenting isa commenting;
+            $commenting links (parent: $post, comment: $comment, author: $author);
+            $author has username "${currentUsername}";
+            delete
+            $commenting;
+            $comment;
+        `, 'Write');
+        
+        if (deleteData.ok) {
+            console.log('Comment deleted successfully:', commentId);
+            showNotification('Comment deleted successfully', 'success');
+            return true;
+        } else {
+            console.error('Failed to delete comment:', deleteData);
+            showNotification('Failed to delete comment', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error deleting comment:', error);
+        showNotification('Error deleting comment', 'error');
+        return false;
+    }
+}
+
 // Update comment button UI with new count
 function updateCommentButton(postId, commentCount) {
     const commentButton = document.querySelector(`.comment-btn[data-post-id="${postId}"]`);
