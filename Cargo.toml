@@ -3,6 +3,7 @@ members = [
     "dog-core",
     "dog-axum",
     "dog-typedb",
+    "dog-blob",
     "dog-schema",
     "dog-schema-macros",
     "dog-schema-validator",
