@@ -1151,14 +1151,14 @@ async function loadSuggestedConnections() {
         
         if (connectionsData.ok && connectionsData.ok.answers && connectionsData.ok.answers.length > 0) {
             console.log('Using TypeDB query results for suggestions');
-            // Remove duplicates based on name
+            // Remove duplicates based on ID
             const uniqueConnections = [];
-            const seenNames = new Set();
+            const seenIds = new Set();
             
             connectionsData.ok.answers.forEach(answer => {
-                const name = String(answer.data.name?.value || answer.data.name || 'Unknown User');
-                if (!seenNames.has(name)) {
-                    seenNames.add(name);
+                const personId = answer.data.suggestion?.iid || JSON.stringify(answer.data.suggestion);
+                if (!seenIds.has(personId)) {
+                    seenIds.add(personId);
                     uniqueConnections.push(answer);
                 }
             });
@@ -1205,14 +1205,14 @@ async function loadSuggestedConnections() {
             });
         });
         
-        // Update connection count (count unique people, not duplicate entries)
+        // Update connection count (count unique people by ID, not names)
         const friendsData = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $friendship (friend: $me, friend: $friend) isa friendship; $friend has name $name; select $friend, $name;`);
         let uniqueCount = 0;
         if (friendsData.ok && friendsData.ok.answers && friendsData.ok.answers.length > 0) {
             const uniqueFriends = new Set();
             friendsData.ok.answers.forEach(answer => {
-                const name = String(answer.data.name?.value || answer.data.name || 'Unknown');
-                uniqueFriends.add(name);
+                const friendId = answer.data.friend?.iid || JSON.stringify(answer.data.friend);
+                uniqueFriends.add(friendId);
             });
             uniqueCount = uniqueFriends.size;
         }
@@ -1344,14 +1344,14 @@ async function loadNetwork() {
         let networkHTML = '<div class="space-y-4">';
         
         if (networkData.ok && networkData.ok.answers && networkData.ok.answers.length > 0) {
-            // Remove duplicates based on name
+            // Remove duplicates based on ID (consistent with Analytics)
             const uniqueConnections = [];
-            const seenNames = new Set();
+            const seenIds = new Set();
             
             networkData.ok.answers.forEach(answer => {
-                const name = String(answer.data.name?.value || answer.data.name || 'Unknown');
-                if (!seenNames.has(name)) {
-                    seenNames.add(name);
+                const friendId = answer.data.friend?.iid || JSON.stringify(answer.data.friend);
+                if (!seenIds.has(friendId)) {
+                    seenIds.add(friendId);
                     uniqueConnections.push(answer);
                 }
             });
@@ -1371,7 +1371,7 @@ async function loadNetwork() {
                             </div>
                             <div class="flex space-x-2">
                                 <button class="disconnect-person-btn px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm hover:bg-red-200" data-person="${name}">Disconnect</button>
-                                <button onclick="viewProfile('${name}')" class="px-3 py-1 border border-gray-300 text-gray-700 rounded-full text-sm hover:bg-gray-50">View Profile</button>
+                                <button class="view-profile-btn px-3 py-1 border border-gray-300 text-gray-700 rounded-full text-sm hover:bg-gray-50" data-person="${name}">View Profile</button>
                             </div>
                         </div>
                     </div>
@@ -1390,6 +1390,18 @@ async function loadNetwork() {
             button.addEventListener('click', function() {
                 const personName = this.getAttribute('data-person');
                 disconnectPerson(personName);
+            });
+        });
+        
+        // Add event listeners to view profile buttons
+        const viewProfileButtons = document.querySelectorAll('.view-profile-btn');
+        console.log('Found view profile buttons in Network:', viewProfileButtons.length);
+        viewProfileButtons.forEach(button => {
+            console.log('Adding listener to button for:', button.getAttribute('data-person'));
+            button.addEventListener('click', function() {
+                const personName = this.getAttribute('data-person');
+                console.log('View profile button clicked for:', personName);
+                viewProfile(personName);
             });
         });
         
@@ -1506,12 +1518,147 @@ async function loadAnalytics() {
             return;
         }
         
-        // Get real analytics data from TypeDB
-        const careerPathData = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $path1 (friend: $me, friend: $friend1) isa friendship; $path2 (friend: $friend1, friend: $friend2) isa friendship; $job (employee: $friend2, employer: $target) isa employment; $target has name "Google Inc"; select $friend1, $friend2, $target;`);
+        // Get companies that current user is following
+        const followingData = await makeQuery('organizations', `
+            match 
+            $person isa person, has name "${currentUser.name}";
+            $company isa company, has name $company_name;
+            $following (follower: $person, page: $company) isa following;
+            select $company, $company_name;
+        `);
         
-        const directConnectionsData = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $friendship (friend: $me, friend: $friend) isa friendship; select $friend;`);
+        const followedCompanies = [];
+        if (followingData.ok && followingData.ok.answers) {
+            followingData.ok.answers.forEach(answer => {
+                const companyName = String(answer.data.company_name?.value || answer.data.company_name || '');
+                if (companyName) {
+                    followedCompanies.push(companyName);
+                }
+            });
+        }
         
-        const secondDegreeData = await makeQuery('persons', `match $me isa person, has name "${currentUser.name}"; $path1 (friend: $me, friend: $friend1) isa friendship; $path2 (friend: $friend1, friend: $friend2) isa friendship; not { $direct (friend: $me, friend: $friend2) isa friendship; }; select $friend2;`);
+        // Get detailed career path data for followed companies
+        const careerPathPromises = followedCompanies.map(async (companyName) => {
+            // Get 2nd degree connections to company
+            const pathData = await makeQuery('persons', `
+                match 
+                $me isa person, has name "${currentUser.name}"; 
+                $path1 isa friendship;
+                $path1 links (friend: $me, friend: $friend1);
+                $path2 isa friendship;
+                $path2 links (friend: $friend1, friend: $friend2);
+                $job isa employment;
+                $job links (employee: $friend2, employer: $target);
+                $target has name "${companyName}"; 
+                select $friend1, $friend2, $target;
+            `);
+            
+            // Get direct connections to company
+            const directPathData = await makeQuery('persons', `
+                match 
+                $me isa person, has name "${currentUser.name}"; 
+                $friendship isa friendship;
+                $friendship links (friend: $me, friend: $friend);
+                $job isa employment;
+                $job links (employee: $friend, employer: $target);
+                $target has name "${companyName}"; 
+                select $friend, $target;
+            `);
+            
+            // Get job roles at the company
+            const jobRolesData = await makeQuery('persons', `
+                match 
+                $me isa person, has name "${currentUser.name}"; 
+                $path1 isa friendship;
+                $path1 links (friend: $me, friend: $friend1);
+                $path2 isa friendship;
+                $path2 links (friend: $friend1, friend: $friend2);
+                $emp_rel isa employment;
+                $emp_rel links (employee: $friend2, employer: $target);
+                $target has name "${companyName}";
+                $emp_rel has description $role;
+                select $friend2, $role;
+            `);
+            
+            // Process job roles
+            const roles = new Set();
+            const connections = new Map();
+            
+            if (jobRolesData.ok?.answers) {
+                jobRolesData.ok.answers.forEach(answer => {
+                    const role = answer.data.role?.value || answer.data.role || 'Unknown Role';
+                    const personId = answer.data.friend2?.iid || JSON.stringify(answer.data.friend2);
+                    roles.add(role);
+                    connections.set(personId, role);
+                });
+            }
+            
+            // Deduplicate path data by person ID
+            const uniquePaths = [];
+            const seenPathPersons = new Set();
+            if (pathData.ok?.answers) {
+                pathData.ok.answers.forEach(answer => {
+                    const personId = answer.data.friend2?.iid || JSON.stringify(answer.data.friend2);
+                    if (!seenPathPersons.has(personId)) {
+                        seenPathPersons.add(personId);
+                        uniquePaths.push(answer);
+                    }
+                });
+            }
+            
+            // Deduplicate direct path data by person ID
+            const uniqueDirectPaths = [];
+            const seenDirectPersons = new Set();
+            if (directPathData.ok?.answers) {
+                directPathData.ok.answers.forEach(answer => {
+                    const personId = answer.data.friend?.iid || JSON.stringify(answer.data.friend);
+                    if (!seenDirectPersons.has(personId)) {
+                        seenDirectPersons.add(personId);
+                        uniqueDirectPaths.push(answer);
+                    }
+                });
+            }
+            
+            return {
+                company: companyName,
+                paths: uniquePaths.length,
+                directPaths: uniqueDirectPaths.length,
+                roles: Array.from(roles),
+                totalConnections: connections.size,
+                connectionDetails: uniquePaths
+            };
+        });
+        
+        const careerPaths = await Promise.all(careerPathPromises);
+        
+        // Calculate totals from company-specific data for consistency
+        const totalCareerPaths = careerPaths.reduce((sum, cp) => sum + cp.paths + cp.directPaths, 0);
+        const totalDirectCareerPaths = careerPaths.reduce((sum, cp) => sum + cp.directPaths, 0);
+        const totalSecondDegreeCareerPaths = careerPaths.reduce((sum, cp) => sum + cp.paths, 0);
+        
+        // Get overall network stats (separate from career paths) - aligned with Network UI query
+        const directConnectionsData = await makeQuery('persons', `
+            match 
+            $me isa person, has name "${currentUser.name}"; 
+            $network_relation_xyz (friend: $me, friend: $friend) isa friendship; 
+            $friend has name $friend_name;
+            not { $friend is $me; };
+            select $friend, $friend_name;
+        `);
+        
+        const secondDegreeData = await makeQuery('persons', `
+            match 
+            $me isa person, has name "${currentUser.name}"; 
+            $path1 isa friendship;
+            $path1 links (friend: $me, friend: $friend1);
+            $path2 isa friendship;
+            $path2 links (friend: $friend1, friend: $friend2);
+            not { 
+                $direct isa friendship;
+                $direct links (friend: $me, friend: $friend2);
+            };
+            select $friend2;
+        `);
         
         // Remove duplicates for accurate counts
         const uniqueSecondDegree = [];
@@ -1526,19 +1673,37 @@ async function loadAnalytics() {
             });
         }
         
-        const pathsToGoogle = careerPathData.ok?.answers?.length || 0;
-        const directConnections = directConnectionsData.ok?.answers?.length || 0;
+        // Deduplicate direct connections by ID (accurate data integrity)
+        const uniqueDirectConnections = [];
+        const seenDirectConnections = new Set();
+        if (directConnectionsData.ok?.answers) {
+            directConnectionsData.ok.answers.forEach(answer => {
+                const friendId = answer.data.friend?.iid || JSON.stringify(answer.data.friend);
+                if (!seenDirectConnections.has(friendId)) {
+                    seenDirectConnections.add(friendId);
+                    uniqueDirectConnections.push(answer);
+                }
+            });
+        }
+        
+        const directConnections = uniqueDirectConnections.length;
         const secondDegreeConnections = uniqueSecondDegree.length;
+        
+        // Calculate connection strength score
+        const connectionStrengthScore = Math.round(
+            (totalDirectCareerPaths * 10 + careerPaths.reduce((sum, cp) => sum + cp.paths, 0) * 5) / 
+            Math.max(followedCompanies.length, 1)
+        );
         
         const analyticsHTML = `
             <div class="space-y-6">
                 <div class="profile-card p-6">
                     <h3 class="text-xl font-semibold text-gray-900 mb-4">Network Analytics</h3>
                     
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                         <div class="text-center p-4 bg-blue-50 rounded-lg">
-                            <div class="text-2xl font-bold text-blue-600">${pathsToGoogle}</div>
-                            <div class="text-sm text-gray-600">Paths to Google</div>
+                            <div class="text-2xl font-bold text-blue-600">${totalCareerPaths}</div>
+                            <div class="text-sm text-gray-600">Career Paths</div>
                         </div>
                         <div class="text-center p-4 bg-green-50 rounded-lg">
                             <div class="text-2xl font-bold text-green-600">${directConnections}</div>
@@ -1548,16 +1713,155 @@ async function loadAnalytics() {
                             <div class="text-2xl font-bold text-purple-600">${secondDegreeConnections}</div>
                             <div class="text-sm text-gray-600">2nd Degree</div>
                         </div>
+                        <div class="text-center p-4 bg-orange-50 rounded-lg">
+                            <div class="text-2xl font-bold text-orange-600">${connectionStrengthScore}</div>
+                            <div class="text-sm text-gray-600">Network Score</div>
+                        </div>
                     </div>
                     
                     <div class="border-t pt-4">
                         <h4 class="font-semibold text-gray-900 mb-3">Career Path Opportunities</h4>
-                        <div class="bg-gradient-to-r from-green-50 to-blue-50 rounded-lg p-4">
-                            <div class="flex items-center mb-2">
-                                <i class="fas fa-route text-green-500 mr-2"></i>
-                                <span class="font-medium">Path to Google</span>
+                        ${careerPaths.length > 0 ? careerPaths.map(cp => `
+                            <div class="bg-gradient-to-r from-green-50 to-blue-50 rounded-lg p-4 mb-4 border border-green-200">
+                                <div class="flex items-center justify-between mb-3">
+                                    <div class="flex items-center">
+                                        <i class="fas fa-building text-blue-600 mr-2"></i>
+                                        <span class="font-semibold text-lg">${cp.company}</span>
+                                    </div>
+                                    <div class="flex space-x-2">
+                                        ${cp.directPaths > 0 ? `<span class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium">Direct: ${cp.directPaths}</span>` : ''}
+                                        ${cp.paths > 0 ? `<span class="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs font-medium">2nd Degree: ${cp.paths}</span>` : ''}
+                                    </div>
+                                </div>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+                                    <div>
+                                        <h5 class="font-medium text-gray-800 mb-2 flex items-center">
+                                            <i class="fas fa-users text-gray-600 mr-1"></i>
+                                            Connection Strength
+                                        </h5>
+                                        <div class="space-y-1">
+                                            ${cp.directPaths > 0 ? `
+                                                <div class="flex items-center justify-between bg-green-50 px-2 py-1 rounded">
+                                                    <span class="text-sm text-green-700">Direct connections</span>
+                                                    <span class="font-medium text-green-800">${cp.directPaths}</span>
+                                                </div>
+                                            ` : ''}
+                                            ${cp.paths > 0 ? `
+                                                <div class="flex items-center justify-between bg-blue-50 px-2 py-1 rounded">
+                                                    <span class="text-sm text-blue-700">Friend-of-friend</span>
+                                                    <span class="font-medium text-blue-800">${cp.paths}</span>
+                                                </div>
+                                            ` : ''}
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <h5 class="font-medium text-gray-800 mb-2 flex items-center">
+                                            <i class="fas fa-briefcase text-gray-600 mr-1"></i>
+                                            Available Roles
+                                        </h5>
+                                        <div class="flex flex-wrap gap-1">
+                                            ${cp.roles.length > 0 ? cp.roles.slice(0, 3).map(role => `
+                                                <span class="bg-purple-100 text-purple-800 px-2 py-1 rounded text-xs">${role}</span>
+                                            `).join('') : '<span class="text-gray-500 text-xs">No role data</span>'}
+                                            ${cp.roles.length > 3 ? `<span class="text-gray-500 text-xs">+${cp.roles.length - 3} more</span>` : ''}
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="border-t border-green-200 pt-3">
+                                    <div class="flex items-center justify-between">
+                                        <p class="text-sm text-gray-600">
+                                            <i class="fas fa-lightbulb text-yellow-500 mr-1"></i>
+                                            ${cp.directPaths > 0 ? 
+                                                `You have direct connections at ${cp.company}! Consider reaching out directly.` :
+                                                cp.paths > 0 ? 
+                                                    `${cp.paths} potential introduction paths available through mutual connections.` :
+                                                    `No current connections found at ${cp.company}. Keep networking to build connections here.`
+                                            }
+                                        </p>
+                                        ${(cp.directPaths > 0 || cp.paths > 0) ? `
+                                            <button class="text-blue-600 hover:text-blue-800 text-sm font-medium px-3 py-1 border border-blue-300 rounded hover:bg-blue-50 transition-colors view-connections-btn" data-company="${cp.company}">
+                                                View Connections
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                </div>
                             </div>
-                            <p class="text-sm text-gray-600">You have ${pathsToGoogle} friend-of-friend connection(s) to Google employees. This could be valuable for career opportunities!</p>
+                        `).join('') : `
+                            <div class="bg-gradient-to-r from-gray-50 to-blue-50 rounded-lg p-4">
+                                <div class="flex items-center mb-2">
+                                    <i class="fas fa-info-circle text-blue-500 mr-2"></i>
+                                    <span class="font-medium">Follow Companies to See Career Paths</span>
+                                </div>
+                                <p class="text-sm text-gray-600">Start following companies you're interested in to see your connection paths and career opportunities!</p>
+                            </div>
+                        `}
+                    </div>
+                    
+                    <!-- Networking Insights Section -->
+                    <div class="border-t pt-6 mt-6">
+                        <h4 class="font-semibold text-gray-900 mb-4 flex items-center">
+                            <i class="fas fa-chart-line text-indigo-600 mr-2"></i>
+                            Networking Insights
+                        </h4>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <!-- Network Growth -->
+                            <div class="bg-white border border-gray-200 rounded-lg p-4">
+                                <h5 class="font-medium text-gray-800 mb-3 flex items-center">
+                                    <i class="fas fa-trending-up text-green-500 mr-2"></i>
+                                    Network Growth
+                                </h5>
+                                <div class="space-y-2">
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-sm text-gray-600">Total connections</span>
+                                        <span class="font-medium">${directConnections + secondDegreeConnections}</span>
+                                    </div>
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-sm text-gray-600">Companies followed</span>
+                                        <span class="font-medium">${followedCompanies.length}</span>
+                                    </div>
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-sm text-gray-600">Career opportunities</span>
+                                        <span class="font-medium text-green-600">${totalCareerPaths}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Recommendations -->
+                            <div class="bg-white border border-gray-200 rounded-lg p-4">
+                                <h5 class="font-medium text-gray-800 mb-3 flex items-center">
+                                    <i class="fas fa-lightbulb text-yellow-500 mr-2"></i>
+                                    Smart Recommendations
+                                </h5>
+                                <div class="space-y-2">
+                                    ${careerPaths.length === 0 ? `
+                                        <div class="text-sm text-gray-600 bg-blue-50 p-2 rounded">
+                                            <i class="fas fa-plus-circle text-blue-500 mr-1"></i>
+                                            Follow companies you're interested in to unlock career insights
+                                        </div>
+                                    ` : careerPaths.some(cp => cp.directPaths > 0) ? `
+                                        <div class="text-sm text-gray-600 bg-green-50 p-2 rounded">
+                                            <i class="fas fa-handshake text-green-500 mr-1"></i>
+                                            You have direct connections! Consider reaching out for informational interviews
+                                        </div>
+                                    ` : `
+                                        <div class="text-sm text-gray-600 bg-orange-50 p-2 rounded">
+                                            <i class="fas fa-network-wired text-orange-500 mr-1"></i>
+                                            Strengthen your network by engaging with 2nd degree connections
+                                        </div>
+                                    `}
+                                    
+                                    ${careerPaths.filter(cp => cp.roles.length > 0).length > 0 ? `
+                                        <div class="text-sm text-gray-600 bg-purple-50 p-2 rounded">
+                                            <i class="fas fa-briefcase text-purple-500 mr-1"></i>
+                                            ${careerPaths.filter(cp => cp.roles.length > 0).length} companies have role diversity in your network
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1566,11 +1870,222 @@ async function loadAnalytics() {
         
         feedContent.innerHTML = analyticsHTML;
         
+        // Add event listeners for "View Connections" buttons
+        const viewConnectionButtons = document.querySelectorAll('.view-connections-btn');
+        viewConnectionButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const companyName = this.getAttribute('data-company');
+                showConnectionDetails(companyName, careerPaths.find(cp => cp.company === companyName));
+            });
+        });
+        
     } catch (error) {
         console.error('Error loading analytics:', error);
         feedContent.innerHTML = '<p class="text-center text-red-500 py-8">Error loading analytics</p>';
     }
     hideLoading();
+}
+
+// Function to show detailed connection information
+window.showConnectionDetails = async function(companyName, companyData) {
+    if (!companyData || (!companyData.directPaths && !companyData.paths)) {
+        showNotification('No connection data available for this company', 'info');
+        return;
+    }
+    
+    showLoading();
+    
+    try {
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found');
+            hideLoading();
+            return;
+        }
+        
+        // Get detailed connection information
+        const directConnectionsQuery = await makeQuery('persons', `
+            match 
+            $me isa person, has name "${currentUser.name}"; 
+            $friendship isa friendship;
+            $friendship links (friend: $me, friend: $friend);
+            $emp_rel isa employment;
+            $emp_rel links (employee: $friend, employer: $target);
+            $target has name "${companyName}";
+            $friend has name $friend_name;
+            $emp_rel has description $role;
+            select $friend_name, $role;
+        `);
+        
+        const secondDegreeQuery = await makeQuery('persons', `
+            match 
+            $me isa person, has name "${currentUser.name}"; 
+            $path1 isa friendship;
+            $path1 links (friend: $me, friend: $mutual);
+            $path2 isa friendship;
+            $path2 links (friend: $mutual, friend: $connection);
+            $emp_rel isa employment;
+            $emp_rel links (employee: $connection, employer: $target);
+            $target has name "${companyName}";
+            $mutual has name $mutual_name;
+            $connection has name $connection_name;
+            $emp_rel has description $role;
+            select $mutual_name, $connection_name, $role;
+        `);
+        
+        let modalContent = `
+            <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" id="connectionModal">
+                <div class="bg-white rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-xl font-semibold text-gray-900">Connections at ${companyName}</h3>
+                        <button onclick="closeConnectionModal()" class="text-gray-400 hover:text-gray-600">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="space-y-6">
+        `;
+        
+        // Direct connections section with deduplication
+        if (directConnectionsQuery.ok?.answers?.length > 0) {
+            // Deduplicate direct connections by person ID
+            const uniqueDirectConnections = [];
+            const seenDirectIds = new Set();
+            
+            directConnectionsQuery.ok.answers.forEach(answer => {
+                const friendId = answer.data.friend?.iid || JSON.stringify(answer.data.friend);
+                if (!seenDirectIds.has(friendId)) {
+                    seenDirectIds.add(friendId);
+                    uniqueDirectConnections.push(answer);
+                }
+            });
+            
+            modalContent += `
+                <div>
+                    <h4 class="font-medium text-gray-800 mb-3 flex items-center">
+                        <i class="fas fa-user-friends text-green-500 mr-2"></i>
+                        Direct Connections (${uniqueDirectConnections.length})
+                    </h4>
+                    <div class="space-y-2">
+            `;
+            
+            uniqueDirectConnections.forEach(answer => {
+                const friendName = answer.data.friend_name?.value || answer.data.friend_name || 'Unknown';
+                const role = answer.data.role?.value || answer.data.role || 'Unknown Role';
+                modalContent += `
+                    <div class="flex items-center justify-between bg-green-50 p-3 rounded-lg">
+                        <div class="flex items-center">
+                            <div class="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center text-white font-medium text-sm mr-3">
+                                ${friendName.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                                <div class="font-medium text-gray-900">${friendName}</div>
+                                <div class="text-sm text-gray-600">${role}</div>
+                            </div>
+                        </div>
+                        <button class="text-green-600 hover:text-green-800 text-sm font-medium px-3 py-1 border border-green-300 rounded hover:bg-green-50">
+                            Message
+                        </button>
+                    </div>
+                `;
+            });
+            
+            modalContent += `
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Second degree connections section with deduplication
+        if (secondDegreeQuery.ok?.answers?.length > 0) {
+            // Deduplicate second degree connections by connection ID
+            const uniqueSecondDegreeConnections = [];
+            const seenConnectionIds = new Set();
+            
+            secondDegreeQuery.ok.answers.forEach(answer => {
+                const connectionId = answer.data.connection?.iid || JSON.stringify(answer.data.connection);
+                if (!seenConnectionIds.has(connectionId)) {
+                    seenConnectionIds.add(connectionId);
+                    uniqueSecondDegreeConnections.push(answer);
+                }
+            });
+            
+            modalContent += `
+                <div>
+                    <h4 class="font-medium text-gray-800 mb-3 flex items-center">
+                        <i class="fas fa-network-wired text-blue-500 mr-2"></i>
+                        2nd Degree Connections (${uniqueSecondDegreeConnections.length})
+                    </h4>
+                    <div class="space-y-2">
+            `;
+            
+            uniqueSecondDegreeConnections.forEach(answer => {
+                const mutualName = answer.data.mutual_name?.value || answer.data.mutual_name || 'Unknown';
+                const connectionName = answer.data.connection_name?.value || answer.data.connection_name || 'Unknown';
+                const role = answer.data.role?.value || answer.data.role || 'Unknown Role';
+                modalContent += `
+                    <div class="bg-blue-50 p-3 rounded-lg">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center">
+                                <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-medium text-sm mr-3">
+                                    ${connectionName.charAt(0).toUpperCase()}
+                                </div>
+                                <div>
+                                    <div class="font-medium text-gray-900">${connectionName}</div>
+                                    <div class="text-sm text-gray-600">${role}</div>
+                                </div>
+                            </div>
+                            <button class="text-blue-600 hover:text-blue-800 text-sm font-medium px-3 py-1 border border-blue-300 rounded hover:bg-blue-50">
+                                Request Intro
+                            </button>
+                        </div>
+                        <div class="text-xs text-gray-500 flex items-center">
+                            <i class="fas fa-arrow-right mr-1"></i>
+                            Through ${mutualName}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            modalContent += `
+                    </div>
+                </div>
+            `;
+        }
+        
+        modalContent += `
+                    </div>
+                    
+                    <div class="border-t pt-4 mt-6">
+                        <div class="flex justify-end space-x-3">
+                            <button onclick="closeConnectionModal()" class="px-4 py-2 text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
+                                Close
+                            </button>
+                            <button class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                                Export Connections
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.insertAdjacentHTML('beforeend', modalContent);
+        
+    } catch (error) {
+        console.error('Error loading connection details:', error);
+        showNotification('Error loading connection details', 'error');
+    }
+    
+    hideLoading();
+}
+
+// Function to close connection modal
+window.closeConnectionModal = function() {
+    const modal = document.getElementById('connectionModal');
+    if (modal) {
+        modal.remove();
+    }
 }
 
 async function showGroups() {
@@ -1899,14 +2414,14 @@ async function findConnections() {
         
         // Combine and prioritize suggestions: employment first, then no employment
         const allSuggestions = [];
-        const seenNames = new Set();
+        const seenIds = new Set();
         
         // Priority 1: People with employment data
         if (suggestionsWithEmployment.ok && suggestionsWithEmployment.ok.answers) {
             suggestionsWithEmployment.ok.answers.forEach(answer => {
-                const name = String(answer.data.name?.value || answer.data.name || 'Unknown');
-                if (!seenNames.has(name)) {
-                    seenNames.add(name);
+                const personId = answer.data.suggestion?.iid || JSON.stringify(answer.data.suggestion);
+                if (!seenIds.has(personId)) {
+                    seenIds.add(personId);
                     allSuggestions.push({
                         ...answer,
                         priority: 1,
@@ -1919,9 +2434,9 @@ async function findConnections() {
         // Priority 2: People without employment data
         if (suggestionsWithoutEmployment.ok && suggestionsWithoutEmployment.ok.answers) {
             suggestionsWithoutEmployment.ok.answers.forEach(answer => {
-                const name = String(answer.data.name?.value || answer.data.name || 'Unknown');
-                if (!seenNames.has(name)) {
-                    seenNames.add(name);
+                const personId = answer.data.suggestion?.iid || JSON.stringify(answer.data.suggestion);
+                if (!seenIds.has(personId)) {
+                    seenIds.add(personId);
                     allSuggestions.push({
                         ...answer,
                         priority: 2,
@@ -1950,7 +2465,7 @@ async function findConnections() {
                     </div>
                     <div class="absolute bottom-3 right-3 flex items-center space-x-2">
                         <button class="connect-person-btn px-3 py-1 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors text-xs font-medium" data-person="${name}">Connect</button>
-                        <button class="px-3 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 transition-colors text-xs font-medium" onclick="viewProfile('${name}')">View</button>
+                        <button class="view-profile-btn px-3 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 transition-colors text-xs font-medium" data-person="${name}">View</button>
                     </div>
                 </div>
             `;
@@ -1968,14 +2483,14 @@ async function findConnections() {
         
         // Combine and prioritize all people: employment first, then no employment
         const allDiscoveryPeople = [];
-        const allSeenNames = new Set();
+        const allSeenIds = new Set();
         
         // Priority 1: People with employment data
         if (allPeopleWithEmployment.ok && allPeopleWithEmployment.ok.answers) {
             allPeopleWithEmployment.ok.answers.forEach(answer => {
-                const name = String(answer.data.name?.value || answer.data.name || 'Unknown');
-                if (!allSeenNames.has(name)) {
-                    allSeenNames.add(name);
+                const personId = answer.data.person?.iid || JSON.stringify(answer.data.person);
+                if (!allSeenIds.has(personId)) {
+                    allSeenIds.add(personId);
                     allDiscoveryPeople.push({
                         ...answer,
                         priority: 1,
@@ -1988,9 +2503,9 @@ async function findConnections() {
         // Priority 2: People without employment data
         if (allPeopleWithoutEmployment.ok && allPeopleWithoutEmployment.ok.answers) {
             allPeopleWithoutEmployment.ok.answers.forEach(answer => {
-                const name = String(answer.data.name?.value || answer.data.name || 'Unknown');
-                if (!allSeenNames.has(name)) {
-                    allSeenNames.add(name);
+                const personId = answer.data.person?.iid || JSON.stringify(answer.data.person);
+                if (!allSeenIds.has(personId)) {
+                    allSeenIds.add(personId);
                     allDiscoveryPeople.push({
                         ...answer,
                         priority: 2,
@@ -2020,7 +2535,7 @@ async function findConnections() {
                     </div>
                     <div class="absolute bottom-3 right-3 flex items-center space-x-2">
                         <button class="connect-person-btn px-3 py-1 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors text-xs font-medium" data-person="${name}">Connect</button>
-                        <button class="px-3 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 transition-colors text-xs font-medium" onclick="viewProfile('${name}')">View</button>
+                        <button class="view-profile-btn px-3 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 transition-colors text-xs font-medium" data-person="${name}">View</button>
                     </div>
                 </div>
             `;
@@ -2036,6 +2551,18 @@ async function findConnections() {
         
         // Add event listeners to connect buttons
         const connectButtons = document.querySelectorAll('.connect-person-btn');
+        
+        // Add event listeners to view profile buttons
+        const viewProfileButtons = document.querySelectorAll('.view-profile-btn');
+        console.log('Found view profile buttons in Find Connections:', viewProfileButtons.length);
+        viewProfileButtons.forEach(button => {
+            console.log('Adding listener to button for:', button.getAttribute('data-person'));
+            button.addEventListener('click', function() {
+                const personName = this.getAttribute('data-person');
+                console.log('View profile button clicked for:', personName);
+                viewProfile(personName);
+            });
+        });
         connectButtons.forEach(button => {
             button.addEventListener('click', function() {
                 const personName = this.getAttribute('data-person');
@@ -2292,7 +2819,7 @@ window.followCompany = async function(companyName) {
 // Notification function
 function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
-    notification.className = `fixed top-4 right-4 px-4 py-2 rounded-lg text-white z-50 ${
+    notification.className = `fixed top-4 right-4 px-4 py-2 rounded-lg text-white z-50 pointer-events-none ${
         type === 'success' ? 'bg-green-500' : 
         type === 'error' ? 'bg-red-500' : 'bg-blue-500'
     }`;
@@ -2479,6 +3006,7 @@ async function performSearch(query) {
 
 // Profile View Functionality
 async function viewProfile(personName) {
+    console.log('viewProfile called for:', personName);
     showLoading();
     try {
         // Query for detailed person information
@@ -2541,12 +3069,14 @@ async function viewProfile(personName) {
             select $person, $company_name, $role;
         `);
         
+        console.log('Profile data loaded, displaying modal');
         displayProfileModal(personName, profileData, connectionsData, postsData, mutualConnectionsData, workHistoryData, isAlreadyConnected);
         
     } catch (error) {
         console.error('Error loading profile:', error);
         showModal('<div class="text-center"><h2 class="text-xl font-semibold text-gray-900 mb-4">Error</h2><p class="text-red-500">Failed to load profile information.</p><button onclick="hideModal()" class="mt-4 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">Close</button></div>');
     }
+    console.log('viewProfile completed, hiding loading');
     hideLoading();
 }
 
@@ -2562,15 +3092,15 @@ function displayProfileModal(personName, profileData, connectionsData, postsData
         currentCompany = String(employment.data.company_name?.value || employment.data.company_name || 'Unknown Company');
     }
     
-    // Deduplicate and count connections
+    // Deduplicate and count connections by ID
     let uniqueConnectionCount = 0;
     if (connectionsData.ok && connectionsData.ok.answers && connectionsData.ok.answers.length > 0) {
-        const seenConnectionNames = new Set();
+        const seenConnectionIds = new Set();
         for (const connection of connectionsData.ok.answers) {
-            const friendName = String(connection.data.friend_name?.value || connection.data.friend_name || 'Unknown');
-            seenConnectionNames.add(friendName);
+            const friendId = connection.data.friend?.iid || JSON.stringify(connection.data.friend);
+            seenConnectionIds.add(friendId);
         }
-        uniqueConnectionCount = seenConnectionNames.size;
+        uniqueConnectionCount = seenConnectionIds.size;
     }
     
     // Deduplicate and count posts
@@ -2620,12 +3150,12 @@ function displayProfileModal(personName, profileData, connectionsData, postsData
     if (connectionsData.ok && connectionsData.ok.answers && connectionsData.ok.answers.length > 0) {
         // Deduplicate connections based on friend name
         const uniqueConnections = [];
-        const seenNames = new Set();
+        const seenIds = new Set();
         
         for (const connection of connectionsData.ok.answers) {
-            const friendName = String(connection.data.friend_name?.value || connection.data.friend_name || 'Unknown');
-            if (!seenNames.has(friendName)) {
-                seenNames.add(friendName);
+            const friendId = connection.data.friend?.iid || JSON.stringify(connection.data.friend);
+            if (!seenIds.has(friendId)) {
+                seenIds.add(friendId);
                 uniqueConnections.push(connection);
             }
         }
@@ -2656,12 +3186,13 @@ function displayProfileModal(personName, profileData, connectionsData, postsData
     let mutualConnectionsHTML = '';
     if (mutualConnectionsData.ok && mutualConnectionsData.ok.answers && mutualConnectionsData.ok.answers.length > 0) {
         const uniqueMutuals = [];
-        const seenMutualNames = new Set();
+        const seenMutualIds = new Set();
         
         for (const mutual of mutualConnectionsData.ok.answers) {
+            const mutualId = mutual.data.mutual?.iid || JSON.stringify(mutual.data.mutual);
             const mutualName = String(mutual.data.mutual_name?.value || mutual.data.mutual_name || 'Unknown');
-            if (!seenMutualNames.has(mutualName)) {
-                seenMutualNames.add(mutualName);
+            if (!seenMutualIds.has(mutualId)) {
+                seenMutualIds.add(mutualId);
                 uniqueMutuals.push(mutual);
             }
         }
