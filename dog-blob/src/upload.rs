@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use crate::{
-    BlobCtx, BlobId, BlobResult, PartReceipt, UploadId, UploadSession, UploadStatus, ByteStream
+    BlobCtx, BlobId, BlobResult, PartReceipt, UploadId, UploadSession, ByteStream
 };
 
 /// Coordinates multipart and resumable uploads

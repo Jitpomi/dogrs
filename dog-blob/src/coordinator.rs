@@ -36,10 +36,7 @@ impl DefaultUploadCoordinator {
         }
     }
 
-    /// Check if we should use native multipart (always false for now - use staged)
-    fn should_use_native_multipart(&self) -> bool {
-        false // Simplified: always use staged assembly for now
-    }
+    
 
     /// Concatenate staged parts into a single stream
     fn concat_part_streams(&self, part_keys: Vec<String>) -> ByteStream {
