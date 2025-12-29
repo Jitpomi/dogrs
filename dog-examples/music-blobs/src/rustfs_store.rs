@@ -11,31 +11,25 @@ use dog_blob::{
 };
 
 /// RustFS configuration from environment variables
-pub struct RustFSConfig {
-    pub region: String,
-    pub access_key_id: String,
-    pub secret_access_key: String,
-    pub endpoint_url: String,
+#[derive(Debug)]
+struct RustFSConfig {
+    region: String,
+    access_key_id: String,
+    secret_access_key: String,
+    endpoint_url: String,
 }
 
 impl RustFSConfig {
-    pub fn from_env() -> BlobResult<Self> {
-        let region = env::var("RUSTFS_REGION")
-            .map_err(|_| BlobError::invalid("RUSTFS_REGION environment variable required"))?;
-        let access_key_id = env::var("RUSTFS_ACCESS_KEY_ID").map_err(|_| {
-            BlobError::invalid("RUSTFS_ACCESS_KEY_ID environment variable required")
-        })?;
-        let secret_access_key = env::var("RUSTFS_SECRET_ACCESS_KEY").map_err(|_| {
-            BlobError::invalid("RUSTFS_SECRET_ACCESS_KEY environment variable required")
-        })?;
-        let endpoint_url = env::var("RUSTFS_ENDPOINT_URL")
-            .map_err(|_| BlobError::invalid("RUSTFS_ENDPOINT_URL environment variable required"))?;
+    fn from_env() -> BlobResult<Self> {
+        fn get_env(key: &str) -> BlobResult<String> {
+            env::var(key).map_err(|_| BlobError::invalid(format!("{} environment variable required", key)))
+        }
 
-        Ok(RustFSConfig {
-            region,
-            access_key_id,
-            secret_access_key,
-            endpoint_url,
+        Ok(Self {
+            region: get_env("RUSTFS_REGION")?,
+            access_key_id: get_env("RUSTFS_ACCESS_KEY_ID")?,
+            secret_access_key: get_env("RUSTFS_SECRET_ACCESS_KEY")?,
+            endpoint_url: get_env("RUSTFS_ENDPOINT_URL")?,
         })
     }
 }
@@ -50,7 +44,11 @@ pub struct RustFSStore {
 impl RustFSStore {
     pub async fn new(bucket: String) -> BlobResult<Self> {
         let config = RustFSConfig::from_env()?;
+        let client = Self::create_client(config).await;
+        Ok(Self { client, bucket })
+    }
 
+    async fn create_client(config: RustFSConfig) -> Client {
         let credentials = Credentials::new(
             config.access_key_id,
             config.secret_access_key,
@@ -59,22 +57,46 @@ impl RustFSStore {
             "rustfs",
         );
 
-        let region = Region::new(config.region);
-
         let aws_config = aws_config::defaults(BehaviorVersion::latest())
-            .region(region)
+            .region(Region::new(config.region))
             .credentials_provider(credentials)
             .endpoint_url(config.endpoint_url)
             .load()
             .await;
 
-        let client = Client::from_conf(
+        Client::from_conf(
             aws_sdk_s3::config::Builder::from(&aws_config)
                 .force_path_style(true) // Required for RustFS compatibility
                 .build(),
-        );
+        )
+    }
 
-        Ok(Self { client, bucket })
+    async fn collect_stream(&self, stream: &mut ByteStream) -> BlobResult<Vec<u8>> {
+        let mut data = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(Self::map_aws_error)?;
+            data.extend_from_slice(&chunk);
+        }
+        Ok(data)
+    }
+
+    fn format_range(&self, range: &ByteRange) -> String {
+        match range.end {
+            Some(end) => format!("bytes={}-{}", range.start, end),
+            None => format!("bytes={}-", range.start),
+        }
+    }
+
+    fn resolve_range(&self, range: &ByteRange, content_length: u64) -> dog_blob::store::ResolvedRange {
+        dog_blob::store::ResolvedRange {
+            start: range.start,
+            end: range.end.unwrap_or(content_length.saturating_sub(1)),
+            total_size: content_length,
+        }
+    }
+
+    fn map_aws_error(err: impl std::error::Error + Send + Sync + 'static) -> BlobError {
+        BlobError::backend(err)
     }
 }
 
@@ -89,29 +111,10 @@ impl BlobStore for RustFSStore {
         content_type: Option<&str>,
         mut stream: ByteStream,
     ) -> BlobResult<PutResult> {
-        println!("🗄️  RustFS storage operation:");
-        println!("   Key: {}", key);
-        println!("   Content-Type: {:?}", content_type);
-        // Collect stream into bytes for AWS SDK
-        println!("   Collecting stream chunks...");
-        let mut data = Vec::new();
-        let mut chunk_count = 0;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| BlobError::backend(e))?;
-            chunk_count += 1;
-            println!("   Chunk {}: {} bytes", chunk_count, chunk.len());
-            data.extend_from_slice(&chunk);
-        }
-        println!(
-            "   Total collected: {} bytes from {} chunks",
-            data.len(),
-            chunk_count
-        );
-
+        let data = self.collect_stream(&mut stream).await?;
         let aws_stream = AwsByteStream::from(data.clone());
 
-        let mut request = self
-            .client
+        let mut request = self.client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
@@ -121,7 +124,7 @@ impl BlobStore for RustFSStore {
             request = request.content_type(ct);
         }
 
-        let result = request.send().await.map_err(|e| BlobError::backend(e))?;
+        let result = request.send().await.map_err(Self::map_aws_error)?;
 
         Ok(PutResult {
             etag: result.e_tag,
@@ -134,48 +137,32 @@ impl BlobStore for RustFSStore {
         let mut request = self.client.get_object().bucket(&self.bucket).key(key);
 
         if let Some(ref range) = range {
-            let range_str = if let Some(end) = range.end {
-                format!("bytes={}-{}", range.start, end)
-            } else {
-                format!("bytes={}-", range.start)
-            };
-            request = request.range(range_str);
+            request = request.range(self.format_range(range));
         }
 
-        let result = request.send().await.map_err(|e| BlobError::backend(e))?;
+        let result = request.send().await.map_err(Self::map_aws_error)?;
+        let content_length = result.content_length.unwrap_or(0) as u64;
 
-        let body = result
-            .body
-            .collect()
-            .await
-            .map_err(|e| BlobError::backend(e))?;
-
+        let body = result.body.collect().await.map_err(Self::map_aws_error)?;
         let stream = futures::stream::once(async move { Ok(body.into_bytes()) });
 
         Ok(GetResult {
             stream: Box::pin(stream),
-            size_bytes: result.content_length.unwrap_or(0) as u64,
+            size_bytes: content_length,
             content_type: result.content_type,
             etag: result.e_tag,
-            resolved_range: range.as_ref().map(|r| dog_blob::store::ResolvedRange {
-                start: r.start,
-                end: r
-                    .end
-                    .unwrap_or(result.content_length.unwrap_or(0) as u64 - 1),
-                total_size: result.content_length.unwrap_or(0) as u64,
-            }),
+            resolved_range: range.as_ref().map(|r| self.resolve_range(r, content_length)),
         })
     }
 
     async fn head(&self, key: &str) -> BlobResult<ObjectHead> {
-        let result = self
-            .client
+        let result = self.client
             .head_object()
             .bucket(&self.bucket)
             .key(key)
             .send()
             .await
-            .map_err(|e| BlobError::backend(e))?;
+            .map_err(Self::map_aws_error)?;
 
         Ok(ObjectHead {
             size_bytes: result.content_length.unwrap_or(0) as u64,
@@ -192,7 +179,7 @@ impl BlobStore for RustFSStore {
             .key(key)
             .send()
             .await
-            .map_err(|e| BlobError::backend(e))?;
+            .map_err(Self::map_aws_error)?;
         Ok(())
     }
 

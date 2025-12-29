@@ -15,11 +15,7 @@ impl DogAroundHook<serde_json::Value, MusicParams> for LogAround {
         ctx: &mut HookContext<serde_json::Value, MusicParams>,
         next: Next<serde_json::Value, MusicParams>,
     ) -> Result<()> {
-        let provider = ctx.params.provider.clone();
-        let path = ctx.params.path.clone();
-        let method = ctx.params.method.clone();
-
-        eprintln!("[relay] -> {method} {path} provider={provider}");
+        // Request processed
 
         next.run(ctx).await?;
 
@@ -31,13 +27,8 @@ pub struct LogAfter;
 
 #[async_trait]
 impl DogAfterHook<serde_json::Value, MusicParams> for LogAfter {
-    async fn run(&self, ctx: &mut HookContext<serde_json::Value, MusicParams>) -> Result<()> {
-        if let Some(err) = &ctx.error {
-            eprintln!("[relay] <- ERROR: {err}");
-        } else {
-            eprintln!("[relay] <- OK");
-        }
-
+    async fn run(&self, _ctx: &mut HookContext<serde_json::Value, MusicParams>) -> Result<()> {
+        // Response processed
         Ok(())
     }
 }

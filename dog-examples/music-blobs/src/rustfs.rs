@@ -1,6 +1,6 @@
 use crate::rustfs_store::RustFSStore;
 use crate::services::MusicParams;
-use crate::upload_store::MemoryUploadSessionStore;
+use dog_blob::MemoryUploadSessionStore;
 use anyhow::Result;
 use dog_blob::adapter::BlobState;
 use dog_blob::{BlobConfig, DefaultKeyStrategy, DefaultUploadCoordinator};
@@ -34,16 +34,7 @@ impl RustFsState {
             checksum_alg: None,
         };
 
-        println!("🔧 Dog-blob configuration:");
-        println!("   Max blob size: {} MB", config.max_blob_bytes / 1_000_000);
-        println!(
-            "   Multipart threshold: {} MB",
-            config.multipart_threshold_bytes / 1_000_000
-        );
-        println!(
-            "   Part size: {} MB",
-            config.upload_rules.part_size / 1_000_000
-        );
+        // Configuration applied
 
         // Create upload coordinator with session store
         let session_store = MemoryUploadSessionStore::new();

@@ -1,17 +1,21 @@
 use async_trait::async_trait;
-use dog_blob::{
+use crate::{
     BlobError, BlobResult, PartReceipt, UploadId, UploadSession, UploadSessionStore, UploadStatus,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-/// Simple in-memory upload session store for the demo
+/// Simple in-memory upload session store provided by dog-blob
+/// 
+/// This is a basic implementation suitable for development and single-instance deployments.
+/// For production use with multiple instances, consider implementing a database-backed store.
 #[derive(Clone)]
 pub struct MemoryUploadSessionStore {
     sessions: Arc<Mutex<HashMap<String, UploadSession>>>,
 }
 
 impl MemoryUploadSessionStore {
+    /// Create a new in-memory session store
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -33,6 +37,12 @@ impl MemoryUploadSessionStore {
     /// Get current timestamp
     fn current_timestamp() -> i64 {
         chrono::Utc::now().timestamp()
+    }
+}
+
+impl Default for MemoryUploadSessionStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

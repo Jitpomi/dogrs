@@ -26,10 +26,7 @@ impl RustFsAdapter {
         let result = self.adapter
             .put_from_multipart(ctx, &data)
             .await
-            .map_err(|e| {
-                println!("❌ BlobAdapter.put_from_multipart() failed: {}", e);
-                anyhow::anyhow!("Upload failed: {}", e)
-            })?;
+            .map_err(|e| anyhow::anyhow!("Upload failed: {}", e))?;
 
         // Convert result to application response format
         match result {

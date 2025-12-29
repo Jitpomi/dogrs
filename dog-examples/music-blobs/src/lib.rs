@@ -4,7 +4,6 @@ mod hooks;
 mod rustfs;
 mod rustfs_store;
 mod services;
-mod upload_store;
 
 use std::sync::Arc;
 
@@ -77,11 +76,7 @@ where
 fn process_audio_file(
     ctx: &mut dog_axum::middlewares::FieldContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!(
-        "🎵 Processing: {} ({} bytes)",
-        ctx.filename.as_deref().unwrap_or("audio"),
-        ctx.data.len()
-    );
+    // Audio file processed successfully
 
     if let Some(filename) = &ctx.filename {
         let format = if filename.ends_with(".mp3") {
@@ -123,12 +118,18 @@ fn multipart_config() -> MultipartConfig {
         _ => FileEncoding::Base64,
     };
 
-    MultipartConfig::new()
+    let mut config = MultipartConfig::new()
         .max_file_size(max_file_mb * 1024 * 1024)
         .max_total_size(max_total_mb * 1024 * 1024)
         .file_field("file")
         .file_encoding(encoding)
         .include_metadata(include_metadata)
-        .field_processor("file", process_audio_file)
-        // Allow all content types by not specifying any restrictions
+        .field_processor("file", process_audio_file);
+
+    // Add each allowed content type
+    for content_type in MusicMultipartDefaults::ALLOWED_TYPES.split(',') {
+        config = config.allow_content_type(content_type.trim());
+    }
+
+    config
 }

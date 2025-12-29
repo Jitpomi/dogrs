@@ -8,12 +8,8 @@ pub struct ProcessMulterParams;
 
 #[async_trait]
 impl DogBeforeHook<Value, MusicParams> for ProcessMulterParams {
-    async fn run(&self, ctx: &mut HookContext<Value, MusicParams>) -> Result<()> {
-        println!("🔧 Hook context:");
-        println!("   Method: {:?}", ctx.method);
-        println!("   Data: {:?}", ctx.data);
-        println!("   Config: {:?}", ctx.config);
-
+    async fn run(&self, _ctx: &mut HookContext<Value, MusicParams>) -> Result<()> {
+        // Hook executed successfully - no verbose logging needed
         Ok(())
     }
 }

@@ -12,6 +12,7 @@ pub mod config;
 pub mod coordinator;
 pub mod error;
 pub mod receipt;
+pub mod session_store;
 pub mod store;
 pub mod types;
 pub mod upload;
@@ -34,6 +35,7 @@ pub use types::{
     ChunkSessionId, ChunkResult, ChunkSession
 };
 pub use upload::{UploadCoordinator, UploadIntent, UploadSessionStore};
+pub use session_store::MemoryUploadSessionStore;
 
 /// Prelude for convenient imports
 pub mod prelude {
