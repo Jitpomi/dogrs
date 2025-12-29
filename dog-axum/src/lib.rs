@@ -6,6 +6,7 @@
 //! from DogRS services and apps.
 
 pub mod app;
+pub mod middlewares;
 pub mod params;
 pub mod rest;
 pub mod state;

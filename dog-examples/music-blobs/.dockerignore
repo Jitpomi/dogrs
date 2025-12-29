@@ -1,0 +1,11 @@
+target/
+Dockerfile*
+docker-compose*
+.dockerignore
+.git
+.gitignore
+README.md
+.env
+.env.local
+.env.example
+*.log

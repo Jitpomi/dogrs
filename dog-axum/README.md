@@ -5,118 +5,323 @@
 
 
 
-# crates/dog-axum
+# dog-axum
 
-This template provides a foundation for creating a Rust library crate with a well-structured `lib.rs` file and testing infrastructure.
+A high-level REST framework built on Axum that provides service-oriented architecture with pluggable middleware support.
 
 ## Features
 
-- Library crate structure with documentation
-- Unit tests setup
-- Benchmarking with Criterion
-- Error handling with anyhow
-- Ready for publishing to crates.io
+- **Service-oriented REST API** - Clean separation between routes and business logic
+- **Pluggable middleware** - Apply middleware per service or globally
+- **Multipart upload support** - Built-in middleware for handling file uploads with BlobRef pattern
+- **Framework-safe patterns** - Memory-efficient handling of large files
+- **Tower ecosystem integration** - Full compatibility with Tower middleware
 
-## Getting Started
+## Quick Start
 
-After generating your project with FerrisUp, follow these steps:
+### 1. Basic REST Server
 
-1. Navigate to your project directory:
-   ```bash
-   cd crates/dog-axum
-   ```
-
-2. Run the tests:
-   ```bash
-   cargo test
-   ```
-
-3. Run benchmarks:
-   ```bash
-   cargo bench
-   ```
-
-4. Build the documentation:
-   ```bash
-   cargo doc --open
-   ```
-
-## Project Structure
-
-- `src/lib.rs`: Main library file with documentation and tests
-- `Cargo.toml`: Project configuration with development dependencies
-
-## Customization
-
-### Adding Modules
-
-As your library grows, consider organizing it into modules:
+Create a minimal dog-axum server:
 
 ```rust
-// In src/lib.rs
-pub mod utils;
-pub mod models;
+use dog_axum::AxumApp;
+use dog_core::{DogApp, DogService};
+use std::sync::Arc;
 
-// Create src/utils.rs or src/utils/mod.rs
-// Create src/models.rs or src/models/mod.rs
-```
+// Define your request/response types
+#[derive(serde::Deserialize)]
+struct CreateUserRequest {
+    name: String,
+    email: String,
+}
 
-### Documentation
+#[derive(serde::Serialize)]
+struct User {
+    id: u32,
+    name: String,
+    email: String,
+}
 
-The template includes doc comments. Expand them to document your API:
+// Create a service
+struct UserService;
 
-```rust
-/// Performs an important calculation.
-///
-/// # Examples
-///
-/// ```
-/// let result = crates/dog-axum::calculate(42);
-/// assert_eq!(result, 84);
-/// ```
-///
-/// # Errors
-///
-/// Returns an error if the input is invalid.
-pub fn calculate(input: i32) -> Result<i32, Error> {
-    // Implementation
+#[async_trait::async_trait]
+impl DogService<CreateUserRequest, ()> for UserService {
+    async fn create(&self, _tenant: TenantContext, data: CreateUserRequest) -> Result<User> {
+        Ok(User {
+            id: 1,
+            name: data.name,
+            email: data.email,
+        })
+    }
+}
+
+// Build the server
+#[tokio::main]
+async fn main() -> Result<()> {
+    let app = DogApp::new();
+    let user_service = Arc::new(UserService);
+    
+    let server = AxumApp::new(app)
+        .use_service("/users", user_service)
+        .service("/health", || async { "ok" });
+    
+    server.listen("0.0.0.0:3030").await
 }
 ```
 
-### Publishing
+### 2. Adding Middleware
 
-Prepare your library for publishing:
+Apply middleware to specific services:
 
-1. Update `Cargo.toml` with metadata:
-   ```toml
-   [package]
-   name = "crates/dog-axum"
-   version = "0.1.0"
-   authors = ["Your Name <your.email@example.com>"]
-   edition = "2021"
-   description = "A brief description of your library"
-   repository = "https://github.com/yourusername/crates/dog-axum"
-   license = "MIT OR Apache-2.0"
-   keywords = ["keyword1", "keyword2"]
-   categories = ["category1", "category2"]
-   ```
+```rust
+use dog_axum::{AxumApp, middlewares::MultipartToJson};
+use tower::ServiceBuilder;
 
-2. Publish to crates.io:
-   ```bash
-   cargo publish
-   ```
+let server = AxumApp::new(app)
+    // Single middleware
+    .use_service_with("/upload", upload_service, MultipartToJson::default())
+    
+    // Multiple middleware with ServiceBuilder
+    .use_service_with("/api", api_service,
+        ServiceBuilder::new()
+            .layer(CorsMiddleware::permissive())
+            .layer(AuthenticationMiddleware::new())
+            .layer(RateLimitingMiddleware::new(100))
+    )
+    
+    // Service without middleware
+    .use_service("/health", health_service);
+```
 
-## Next Steps
+### 3. Global Middleware
 
-- Add your library's core functionality to `src/lib.rs`
-- Create additional modules as needed
-- Write comprehensive tests and examples
-- Set up CI/CD with GitHub Actions
-- Add a README.md with usage examples
+Apply middleware to all routes:
 
-## Resources
+```rust
+let mut server = AxumApp::new(app)
+    .use_service("/users", user_service)
+    .use_service("/posts", post_service);
 
-- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
-- [Cargo Book: Publishing on crates.io](https://doc.rust-lang.org/cargo/reference/publishing.html)
-- [Rust Documentation Guidelines](https://doc.rust-lang.org/rustdoc/what-is-rustdoc.html)
-- [Criterion Benchmarking](https://bheisler.github.io/criterion.rs/book/)
+// Add global middleware to the router
+server.router = server.router
+    .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024))
+    .layer(tower_http::cors::CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any)
+    );
+```
+
+## Middleware
+
+### Built-in Middleware
+
+#### MultipartToJson
+
+Handles multipart form uploads and converts them to JSON with BlobRef pattern for files:
+
+```rust
+use dog_axum::middlewares::{MultipartToJson, MultipartConfig};
+
+let config = MultipartConfig::default()
+    .with_max_file_size(50 * 1024 * 1024)  // 50MB per file
+    .with_max_total_size(200 * 1024 * 1024); // 200MB total
+
+let server = AxumApp::new(app)
+    .use_service_with("/upload", upload_service, 
+        MultipartToJson::with_config(config)
+    );
+```
+
+**BlobRef Pattern**: Files are streamed to temporary storage and services receive references:
+
+**Visual BlobRef Flow:**
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  Multipart      │    │  MultipartToJson│    │  Temp Storage   │    │    Service      │
+│  Upload         │───▶│  Middleware     │───▶│  /tmp/file_*    │───▶│  Gets BlobRef   │
+│  (7MB file)     │    │                 │    │                 │    │  (not raw data) │
+└─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
+                                │                        │                        │
+                                ▼                        ▼                        ▼
+                       ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+                       │ Streams chunks  │    │ File written to │    │ JSON with       │
+                       │ (no memory      │    │ disk (not RAM)  │    │ file reference  │
+                       │ buffering)      │    │                 │    │ (framework-safe)│
+                       └─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+```rust
+// Service receives this JSON structure for file uploads:
+{
+    "name": "John Doe",
+    "avatar": {
+        "key": "temp/uuid",
+        "temp_path": "/tmp/multipart_file_uuid", 
+        "filename": "avatar.jpg",
+        "content_type": "image/jpeg",
+        "size": 1024000
+    }
+}
+
+// Your service can then process the file:
+#[derive(serde::Deserialize)]
+struct CreateUserRequest {
+    name: String,
+    avatar: Option<BlobRef>,
+}
+
+#[derive(serde::Deserialize)]
+struct BlobRef {
+    temp_path: String,
+    filename: Option<String>,
+    content_type: Option<String>,
+    size: u64,
+}
+```
+
+### Custom Middleware
+
+Create custom middleware using Tower patterns:
+
+```rust
+use tower::{Layer, Service};
+use axum::{response::Response, body::Body};
+
+#[derive(Clone)]
+pub struct LoggingMiddleware;
+
+impl<S> Layer<S> for LoggingMiddleware {
+    type Service = LoggingService<S>;
+    
+    fn layer(&self, inner: S) -> Self::Service {
+        LoggingService { inner }
+    }
+}
+
+#[derive(Clone)]
+pub struct LoggingService<S> {
+    inner: S,
+}
+
+impl<S> Service<Request<Body>> for LoggingService<S>
+where
+    S: Service<Request<Body>, Response = Response> + Clone + Send + 'static,
+    S::Future: Send,
+{
+    type Response = Response;
+    type Error = S::Error;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
+    
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        println!("Request: {} {}", req.method(), req.uri());
+        let future = self.inner.call(req);
+        Box::pin(async move {
+            let response = future.await?;
+            println!("Response: {}", response.status());
+            Ok(response)
+        })
+    }
+}
+```
+
+### Middleware Execution Order
+
+Middleware executes in **reverse order** of how it's added:
+
+```rust
+ServiceBuilder::new()
+    .layer(CorsMiddleware::new())        // Executes 1st (outermost)
+    .layer(AuthMiddleware::new())        // Executes 2nd  
+    .layer(RateLimitMiddleware::new())   // Executes 3rd
+    .layer(MultipartToJson::default())   // Executes 4th (innermost)
+```
+
+**Visual Request Flow:**
+
+```
+┌─────────────┐    ┌──────────────┐    ┌─────────────┐    ┌──────────────┐    ┌─────────────┐
+│   Request   │───▶│ CORS Layer   │───▶│ Auth Layer  │───▶│ RateLimit    │───▶│ Multipart   │
+│  (Client)   │    │ (Outermost)  │    │             │    │ Layer        │    │ Layer       │
+└─────────────┘    └──────────────┘    └─────────────┘    └──────────────┘    └─────────────┘
+                                                                                       │
+                                                                                       ▼
+┌─────────────┐    ┌──────────────┐    ┌─────────────┐    ┌──────────────┐    ┌─────────────┐
+│  Response   │◀───│ CORS Layer   │◀───│ Auth Layer  │◀───│ RateLimit    │◀───│   Service   │
+│  (Client)   │    │              │    │             │    │ Layer        │    │ (Business)  │
+└─────────────┘    └──────────────┘    └─────────────┘    └──────────────┘    └─────────────┘
+```
+
+## Examples
+
+See the `dog-examples/` directory for complete examples:
+
+- **music-blobs**: File upload service with multipart middleware
+- **blog-axum**: Basic REST API with CRUD operations
+- **social-typedb**: Complex service with authentication middleware
+
+## Dependencies
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+dog-axum = "0.1.0"
+dog-core = "0.1.0"
+axum = "0.7"
+tower = "0.4"
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+```
+
+## Architecture
+
+dog-axum provides a service-oriented architecture where:
+
+- **Services** implement business logic (`DogService` trait)
+- **Routes** are automatically generated for CRUD operations
+- **Middleware** can be applied per-service or globally
+- **Request/Response** types are strongly typed with serde
+
+**Visual Architecture:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                                  dog-axum                                           │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
+│  │   Client    │───▶│   Router    │───▶│ Middleware  │───▶│   Service   │         │
+│  │ (HTTP Req)  │    │ (Axum)      │    │ (Tower)     │    │ (Business)  │         │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘         │
+│                             │                   │                   │              │
+│                             ▼                   ▼                   ▼              │
+│                    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
+│                    │ Auto Routes │    │ Per-Service │    │ Typed Data  │         │
+│                    │ GET/POST/   │    │ or Global   │    │ Serde JSON  │         │
+│                    │ PUT/DELETE  │    │ Layers      │    │ Validation  │         │
+│                    └─────────────┘    └─────────────┘    └─────────────┘         │
+│                                                                                     │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                              Built on Tower + Axum                                 │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Service Registration Flow:**
+
+```
+AxumApp::new(app)
+    │
+    ├─ .use_service("/users", user_service)
+    │   └─ Creates: GET/POST/PUT/DELETE /users routes
+    │
+    ├─ .use_service_with("/upload", upload_service, MultipartToJson)
+    │   └─ Creates: Routes + applies middleware to this service only
+    │
+    └─ .service("/health", health_handler)
+        └─ Creates: Custom route with handler function
+```
+
+This separation allows for clean, testable code with flexible middleware composition.

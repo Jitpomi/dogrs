@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MusicBlobs - Your Music Storage</title>
+    <link rel="stylesheet" href="https://unpkg.com/dropzone@5/dist/min/dropzone.min.css" type="text/css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 20px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .logo {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #667eea;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .nav {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .nav-item {
+            color: #666;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+
+        .nav-item:hover, .nav-item.active {
+            color: #667eea;
+        }
+
+        .main-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .upload-section {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 3rem;
+            text-align: center;
+            transition: all 0.3s;
+            cursor: pointer;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: rgba(118, 75, 162, 0.1);
+        }
+
+        .upload-area.dragover {
+            border-color: #28a745;
+            background: rgba(40, 167, 69, 0.1);
+        }
+
+        .upload-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            color: #667eea;
+        }
+
+        .upload-text {
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+            color: #333;
+        }
+
+        .upload-subtext {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 0.8rem 2rem;
+            border-radius: 25px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin: 1rem 0.5rem;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .playlist-section {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 1.5rem;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .music-item {
+            display: flex;
+            align-items: center;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 0.5rem;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .music-item:hover {
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .music-cover {
+            width: 50px;
+            height: 50px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            margin-right: 1rem;
+        }
+
+        .music-info {
+            flex: 1;
+        }
+
+        .music-title {
+            font-weight: 600;
+            margin-bottom: 0.2rem;
+        }
+
+        .music-artist {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .music-duration {
+            color: #999;
+            font-size: 0.9rem;
+        }
+
+        .player-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .play-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s;
+        }
+
+        .play-btn:hover {
+            transform: scale(1.1);
+        }
+
+        .progress-bar {
+            flex: 1;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .status-message {
+            padding: 1rem;
+            border-radius: 10px;
+            margin: 1rem 0;
+            display: none;
+        }
+
+        .status-success {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+            border: 1px solid rgba(40, 167, 69, 0.3);
+        }
+
+        .status-error {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+            border: 1px solid rgba(220, 53, 69, 0.3);
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+        }
+
+        .empty-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                🎵 MusicBlobs
+            </div>
+            <nav class="nav">
+                <a href="#" class="nav-item active">Library</a>
+                <a href="#" class="nav-item">Upload</a>
+                <a href="#" class="nav-item">Playlists</a>
+                <a href="http://localhost:9001" target="_blank" class="nav-item">Storage Console</a>
+            </nav>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <section class="upload-section">
+            <h2 class="section-title">
+                📤 Upload Music
+            </h2>
+            
+            <div id="musicDropzone" class="dropzone">
+                <div class="dz-message">
+                    <div class="upload-icon">🎵</div>
+                    <div class="upload-text">Drop your music files here</div>
+                    <div class="upload-subtext">or click to browse (MP3, WAV, FLAC supported)</div>
+                </div>
+            </div>
+
+            <div class="status-message" id="statusMessage"></div>
+        </section>
+
+        <section class="playlist-section">
+            <h2 class="section-title">
+                🎶 Your Music Library
+            </h2>
+            
+            <div id="musicList">
+                <div class="empty-state">
+                    <div class="empty-icon">🎵</div>
+                    <div>No music uploaded yet</div>
+                    <div style="margin-top: 0.5rem; font-size: 0.9rem;">Upload some tracks to get started!</div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="https://unpkg.com/dropzone@5/dist/min/dropzone.min.js"></script>
+    <script>
+        // Disable Dropzone auto-discovery
+        Dropzone.autoDiscover = false;
+        
+        let musicLibrary = [];
+        const statusMessage = document.getElementById('statusMessage');
+
+        // Initialize Dropzone with native chunking
+        const musicDropzone = new Dropzone("#musicDropzone", {
+            url: "/music",
+            method: "POST",
+            paramName: "file",
+            headers: {
+                "x-service-method": "upload"
+            },
+            acceptedFiles: "audio/*",
+            maxFilesize: 1024, // 1GB max
+            timeout: 0, // no XHR timeout
+            
+            // Native Dropzone chunking - the proper way!
+            chunking: true,
+            forceChunking: true,
+            chunkSize: 5 * 1024 * 1024, // 5MB chunks
+            retryChunks: true,
+            retryChunksLimit: 3,
+            parallelChunkUploads: false, // sequential chunks for simplicity
+            
+            parallelUploads: 1,
+            uploadMultiple: false,
+            addRemoveLinks: true,
+            
+            dictDefaultMessage: `
+                <div class="upload-icon">🎵</div>
+                <div class="upload-text">Drop your music files here</div>
+                <div class="upload-subtext">or click to browse (MP3, WAV, FLAC supported)</div>
+            `,
+            
+            init: function() {
+                this.on("addedfile", function(file) {
+                    console.log(`📤 File added: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`);
+                    showStatus(`⏳ Starting upload of ${file.name}...`, 'info');
+                });
+                
+                this.on("sending", function(file, xhr, formData) {
+                    console.log(`📤 Sending chunk for: ${file.name}`);
+                });
+                
+                this.on("uploadprogress", function(file, progress) {
+                    showStatus(`⏳ Uploading ${file.name}: ${Math.round(progress)}%`, 'info');
+                });
+                
+                this.on("success", function(file, response) {
+                    console.log(`✅ Chunk/File uploaded:`, response);
+                });
+                
+                this.on("error", function(file, errorMessage) {
+                    console.error(`❌ Upload failed:`, errorMessage);
+                    showStatus(`❌ Upload failed: ${errorMessage}`, 'error');
+                });
+                
+                this.on("complete", function(file) {
+                    if (file.status === "success") {
+                        showStatus(`✅ ${file.name} uploaded successfully!`, 'success');
+                        
+                        // Add to music library
+                        musicLibrary.push({
+                            filename: file.name,
+                            size: file.size,
+                            type: file.type,
+                            uploaded_at: new Date()
+                        });
+                        updateMusicLibrary();
+                        
+                        // Remove file from dropzone after completion
+                        setTimeout(() => {
+                            this.removeFile(file);
+                        }, 2000);
+                    }
+                });
+            }
+        });
+
+        // Utility functions
+        function showStatus(message, type) {
+            statusMessage.textContent = message;
+            statusMessage.className = `status-message ${type}`;
+            statusMessage.style.display = 'block';
+            
+            if (type === 'success' || type === 'error') {
+                setTimeout(() => {
+                    statusMessage.style.display = 'none';
+                }, 5000);
+            }
+        }
+        
+        function updateMusicLibrary() {
+            const musicList = document.getElementById('musicList');
+            
+            if (musicLibrary.length === 0) {
+                musicList.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">🎵</div>
+                        <div>No music uploaded yet</div>
+                        <div style="margin-top: 0.5rem; font-size: 0.9rem;">Upload some tracks to get started!</div>
+                    </div>
+                `;
+            } else {
+                musicList.innerHTML = musicLibrary.map(track => `
+                    <div class="music-item">
+                        <div class="music-cover">${track.filename.charAt(0).toUpperCase()}</div>
+                        <div class="music-info">
+                            <div class="music-title">${track.filename}</div>
+                            <div class="music-artist">${(track.size / 1024 / 1024).toFixed(1)} MB</div>
+                        </div>
+                        <div class="music-duration">${track.type}</div>
+                        <div class="player-controls">
+                            <button class="play-btn">▶️</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        async function loadMusicLibrary() {
+            // This would fetch the music list from the backend
+            // For now, we'll show uploaded files in a simple list
+            const musicList = document.getElementById('musicList');
+            
+            if (musicLibrary.length === 0) {
+                musicList.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">🎵</div>
+                        <div>No music uploaded yet</div>
+                        <div style="margin-top: 0.5rem; font-size: 0.9rem;">Upload some tracks to get started!</div>
+                    </div>
+                `;
+            } else {
+                // Render music items
+                musicList.innerHTML = musicLibrary.map(track => `
+                    <div class="music-item">
+                        <div class="music-cover">${track.name.charAt(0).toUpperCase()}</div>
+                        <div class="music-info">
+                            <div class="music-title">${track.name}</div>
+                            <div class="music-artist">Unknown Artist</div>
+                        </div>
+                        <div class="music-duration">--:--</div>
+                        <div class="player-controls">
+                            <button class="play-btn" onclick="playTrack('${track.id}')">
+                                ▶️
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function playTrack(trackId) {
+            // This would implement music playback
+            console.log('Playing track:', trackId);
+            showStatus('🎵 Playback functionality coming soon!', 'success');
+        }
+
+        // Initialize the app
+        loadMusicLibrary();
+    </script>
+</body>
+</html>

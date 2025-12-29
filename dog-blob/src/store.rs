@@ -5,6 +5,8 @@ use crate::{BlobResult, ByteRange, ByteStream, UploadId};
 /// Core blob storage operations - must be implemented by all storage backends
 #[async_trait]
 pub trait BlobStore: Send + Sync {
+    /// Enable downcasting to concrete types
+    fn as_any(&self) -> &dyn std::any::Any;
     /// Store a blob from a stream
     async fn put(
         &self,

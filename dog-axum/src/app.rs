@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::handler::Handler;
-use axum::http::{HeaderName, HeaderValue};
 use axum::http::Request;
+use axum::http::{HeaderName, HeaderValue};
 use axum::routing::get;
 use axum::Router;
 use axum::{middleware, response::Response};
@@ -18,6 +18,39 @@ use uuid::Uuid;
 use crate::params::FromRestParams;
 use crate::rest;
 use crate::DogAxumState;
+
+/// Wrapper for service middleware
+pub enum ServiceMiddleware<L> {
+    Some(L),
+    None,
+}
+
+impl<L> ServiceMiddleware<L>
+where
+    L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
+    L::Service: tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
+    <L::Service as tower::Service<Request<Body>>>::Future: Send,
+    <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
+{
+    pub fn apply(self, router: Router<()>) -> Router<()> {
+        match self {
+            ServiceMiddleware::Some(layer) => router.layer(layer),
+            ServiceMiddleware::None => router,
+        }
+    }
+}
+
+impl<L> From<L> for ServiceMiddleware<L>
+where
+    L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
+    L::Service: tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
+    <L::Service as tower::Service<Request<Body>>>::Future: Send,
+    <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
+{
+    fn from(layer: L) -> Self {
+        ServiceMiddleware::Some(layer)
+    }
+}
 
 async fn ensure_request_id(req: Request<Body>, next: middleware::Next) -> Response {
     let request_id_header = HeaderName::from_static("x-request-id");
@@ -61,6 +94,7 @@ where
 {
     pub app: Arc<DogApp<R, P>>,
     pub router: Router<()>,
+    pending_middleware: Vec<Box<dyn Fn(Router<()>) -> Router<()> + Send + Sync>>,
 }
 
 impl<R, P> Clone for AxumApp<R, P>
@@ -72,6 +106,7 @@ where
         Self {
             app: Arc::clone(&self.app),
             router: self.router.clone(),
+            pending_middleware: vec![], // Can't clone closures, so start fresh
         }
     }
 }
@@ -83,10 +118,13 @@ where
 {
     pub fn new(app: DogApp<R, P>) -> Self {
         let app = Arc::new(app);
-        let state = DogAxumState { app: Arc::clone(&app) };
+        let state = DogAxumState {
+            app: Arc::clone(&app),
+        };
         Self {
             app,
             router: layer_defaults(Router::new().with_state(state)),
+            pending_middleware: vec![],
         }
     }
 
@@ -125,9 +163,48 @@ where
         self.app.register_service(name, service);
 
         let service_name = Arc::new(name.to_string());
-        let router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
+        let mut router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
+
+        // Apply pending middleware to this service router
+        for middleware_fn in &self.pending_middleware {
+            router = middleware_fn(router);
+        }
 
         self.router = layer_defaults(self.router.nest(path, router));
+        self
+    }
+
+    pub fn use_service_with<L>(mut self, path: &'static str, service: Arc<dyn DogService<R, P>>, middleware: L) -> Self
+    where
+        R: Serialize + DeserializeOwned,
+        P: FromRestParams,
+        L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
+        L::Service: tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
+        <L::Service as tower::Service<Request<Body>>>::Future: Send,
+        <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
+    {
+        let name = path.trim_start_matches('/');
+        self.app.register_service(name, service);
+
+        let service_name = Arc::new(name.to_string());
+        let router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
+
+        // Apply the specific middleware to this service router
+        let router = router.layer(middleware);
+
+        self.router = layer_defaults(self.router.nest(path, router));
+        self
+    }
+
+    pub fn use_middleware<L>(mut self, layer: L) -> Self
+    where
+        L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
+        L::Service: tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
+        <L::Service as tower::Service<Request<Body>>>::Future: Send,
+        <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
+    {
+        // Store middleware to be applied to next service
+        self.pending_middleware.push(Box::new(move |router| router.layer(layer.clone())));
         self
     }
 

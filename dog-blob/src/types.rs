@@ -249,3 +249,58 @@ pub struct PartReceipt {
     pub checksum: Option<String>,
     pub uploaded_at: i64,
 }
+
+/// Unique identifier for a chunked upload session
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ChunkSessionId(pub String);
+
+impl ChunkSessionId {
+    /// Create from existing string (e.g., Dropzone UUID)
+    pub fn from_string(id: String) -> Self {
+        Self(id)
+    }
+
+    /// Generate a new random chunk session ID
+    pub fn new() -> Self {
+        Self(format!("chunk_{}", Uuid::new_v4().simple()))
+    }
+
+    /// Get the inner string
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ChunkSessionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Result of uploading a chunk
+#[derive(Debug, Clone)]
+pub enum ChunkResult {
+    /// Chunk received, waiting for more chunks
+    Partial {
+        chunks_received: u32,
+        total_chunks: u32,
+    },
+    /// All chunks received, file assembled and uploaded
+    Complete {
+        receipt: crate::BlobReceipt,
+    },
+}
+
+/// State tracking for a chunked upload session
+#[derive(Debug, Clone)]
+pub struct ChunkSession {
+    pub session_id: ChunkSessionId,
+    pub blob_id: BlobId,
+    pub tenant_id: String,
+    pub total_chunks: u32,
+    pub received_chunks: std::collections::BTreeSet<u32>,
+    pub content_type: Option<String>,
+    pub filename: Option<String>,
+    pub temp_dir: String,
+    pub created_at: i64,
+}

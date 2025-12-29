@@ -4,6 +4,7 @@ members = [
     "dog-axum",
     "dog-typedb",
     "dog-blob",
+    "dog-examples/music-blobs",
     "dog-schema",
     "dog-schema-macros",
     "dog-schema-validator",

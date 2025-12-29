@@ -2,29 +2,22 @@ use std::sync::Arc;
 
 use axum::{
     extract::{OriginalUri, Path, Query, State},
-    extract::rejection::JsonRejection,
-    http::HeaderMap,
+    http::{HeaderMap, Request},
     routing,
     Json,
     Router,
+    body::Body,
 };
 use dog_core::{tenant::TenantContext, DogApp, ServiceMethodKind};
 use dog_core::errors::DogError;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_json::json;
 
 use crate::{
     params::{FromRestParams, RestParams},
     DogAxumError, DogAxumState,
 };
 
-fn map_json_rejection(rejection: JsonRejection) -> DogAxumError {
-    DogError::bad_request("Failed to parse the request body as JSON")
-        .with_errors(json!({"_schema": [rejection.to_string()]}))
-        .into_anyhow()
-        .into()
-}
 
 fn tenant_from_headers(headers: &HeaderMap) -> TenantContext {
     headers
@@ -109,10 +102,15 @@ where
                       headers: HeaderMap,
                       Query(query): Query<std::collections::HashMap<String, String>>,
                       OriginalUri(uri): OriginalUri,
-                      data: Result<Json<R>, JsonRejection>| async move {
+                      request: Request<Body>| async move {
                     let tenant = tenant_from_headers(&headers);
 
-                    let Json(data) = data.map_err(map_json_rejection)?;
+                    // Use clean Json extractor - multipart is handled by middleware
+                    let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024).await // 10MB limit for JSON
+                        .map_err(|e| anyhow::anyhow!("Failed to read request body: {}", e))?;
+                    
+                    let data: R = serde_json::from_slice(&body_bytes)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
 
                     let params = RestParams::from_parts("rest", &headers, query, "POST", &uri);
                     let params = P::from_rest_params(params);
@@ -155,10 +153,10 @@ where
                       Query(query): Query<std::collections::HashMap<String, String>>,
                       OriginalUri(uri): OriginalUri,
                       Path(id): Path<String>,
-                      data: Result<Json<R>, JsonRejection>| async move {
+                      data: Json<R>| async move {
                     let tenant = tenant_from_headers(&headers);
 
-                    let Json(data) = data.map_err(map_json_rejection)?;
+                    let Json(data) = data;
 
                     let params = RestParams::from_parts("rest", &headers, query, "PUT", &uri);
                     let params = P::from_rest_params(params);
@@ -175,10 +173,10 @@ where
                       Query(query): Query<std::collections::HashMap<String, String>>,
                       OriginalUri(uri): OriginalUri,
                       Path(id): Path<String>,
-                      data: Result<Json<R>, JsonRejection>| async move {
+                      data: Json<R>| async move {
                     let tenant = tenant_from_headers(&headers);
 
-                    let Json(data) = data.map_err(map_json_rejection)?;
+                    let Json(data) = data;
 
                     let params = RestParams::from_parts("rest", &headers, query, "PATCH", &uri);
                     let params = P::from_rest_params(params);

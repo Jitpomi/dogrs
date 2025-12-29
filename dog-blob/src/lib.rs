@@ -30,7 +30,8 @@ pub use store::{
 };
 pub use types::{
     BlobCtx, BlobId, BlobPut, ByteRange, ByteStream, 
-    UploadId, UploadSession, UploadStatus, PartReceipt, UploadProgress
+    UploadId, UploadSession, UploadStatus, PartReceipt, UploadProgress,
+    ChunkSessionId, ChunkResult, ChunkSession
 };
 pub use upload::{UploadCoordinator, UploadIntent, UploadSessionStore};
 
