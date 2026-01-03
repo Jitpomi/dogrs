@@ -28,6 +28,17 @@ impl DogService<Value, MusicParams> for MusicService {
         music_shared::capabilities()
     }
 
+    async fn find(&self, _ctx: &TenantContext, _params: MusicParams) -> Result<Vec<Value>> {
+        let result = self.adapter.find(None).await?;
+        
+        // Extract files array from the adapter response
+        if let Some(files) = result.get("files").and_then(|f| f.as_array()) {
+            Ok(files.clone())
+        } else {
+            Ok(vec![])
+        }
+    }
+
     async fn custom(
         &self,
         ctx: &TenantContext,

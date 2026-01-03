@@ -26,7 +26,7 @@ pub use coordinator::DefaultUploadCoordinator;
 pub use error::{BlobError, BlobResult};
 pub use receipt::{BlobReceipt, OpenedBlob, ResolvedRange};
 pub use store::{
-    BlobStore, MultipartBlobStore, SignedUrlBlobStore, BlobKeyStrategy, DefaultKeyStrategy,
+    BlobInfo, BlobStore, MultipartBlobStore, SignedUrlBlobStore, BlobKeyStrategy, DefaultKeyStrategy,
     PutResult, GetResult, ObjectHead, StoreCapabilities
 };
 pub use types::{

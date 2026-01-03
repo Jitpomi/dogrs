@@ -17,6 +17,43 @@ impl RustFsAdapter {
         Self { adapter }
     }
 
+    /// Decode MIME-encoded filename (RFC 2047 format)
+    fn decode_mime_filename(filename: &str) -> String {
+        use base64::Engine;
+        
+        // Handle MIME encoded filenames like =?UTF-8?B?base64data?=
+        if filename.starts_with("=?") && filename.ends_with("?=") {
+            // Simple MIME decoding for UTF-8 Base64 encoded filenames
+            if let Some(captures) = filename.strip_prefix("=?UTF-8?B?").and_then(|s| s.strip_suffix("?=")) {
+                if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(captures) {
+                    if let Ok(decoded_string) = String::from_utf8(decoded_bytes) {
+                        return decoded_string;
+                    }
+                }
+            }
+            // Handle multiple encoded segments (split by space)
+            let segments: Vec<&str> = filename.split_whitespace().collect();
+            if segments.len() > 1 {
+                let mut decoded_parts = Vec::new();
+                for segment in segments {
+                    if let Some(captures) = segment.strip_prefix("=?UTF-8?B?").and_then(|s| s.strip_suffix("?=")) {
+                        if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(captures) {
+                            if let Ok(decoded_string) = String::from_utf8(decoded_bytes) {
+                                decoded_parts.push(decoded_string);
+                            }
+                        }
+                    }
+                }
+                if !decoded_parts.is_empty() {
+                    return decoded_parts.join("");
+                }
+            }
+        }
+        
+        // Return original filename if not MIME encoded or decoding fails
+        filename.to_string()
+    }
+
     // Handle multipart form data from Dropzone
     pub async fn upload(&self, data: Value) -> Result<Value> {
         let user_id = "default"; // Will be extracted from TenantContext in future
@@ -63,6 +100,61 @@ impl RustFsAdapter {
                         "total_chunks": total_chunks,
                         "is_complete": dzuuid.is_some()
                     }
+                }))
+            }
+        }
+    }
+
+    pub async fn find(&self, data: Option<Value>) -> Result<Value> {
+        let user_id = "default"; // Will be extracted from TenantContext in future
+        let ctx = dog_blob::BlobCtx::new(user_id.to_string());
+
+        // Extract query parameters from data if provided
+        let query = data.as_ref()
+            .and_then(|d| d.get("query"))
+            .and_then(|q| q.as_str());
+
+        let limit = data.as_ref()
+            .and_then(|d| d.get("limit"))
+            .and_then(|l| l.as_u64())
+            .unwrap_or(50) as usize;
+
+        // Use dog-blob's list method to find uploaded files
+        match self.adapter.list(ctx, query, Some(limit)).await {
+            Ok(blobs) => {
+                let music_files: Vec<serde_json::Value> = blobs
+                    .into_iter()
+                    // Since files are uploaded through music service which validates audio types,
+                    // all blobs in this bucket should be audio files. No need to filter by extension
+                    // as keys are UUIDs, not filenames.
+                    .map(|blob| {
+                        // Decode MIME-encoded filename if present
+                        let decoded_filename = blob.filename.as_ref().map(|f| {
+                            Self::decode_mime_filename(f)
+                        });
+                        
+                        serde_json::json!({
+                            "key": blob.key,
+                            "size_bytes": blob.size_bytes,
+                            "content_type": blob.content_type,
+                            "filename": decoded_filename,
+                            "etag": blob.etag,
+                            "last_modified": blob.last_modified
+                        })
+                    })
+                    .collect();
+
+                Ok(serde_json::json!({
+                    "status": "success",
+                    "count": music_files.len(),
+                    "files": music_files
+                }))
+            }
+            Err(e) => {
+                Ok(serde_json::json!({
+                    "status": "error",
+                    "message": format!("Failed to list files: {}", e),
+                    "files": []
                 }))
             }
         }

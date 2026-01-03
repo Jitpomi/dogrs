@@ -2,6 +2,17 @@ use async_trait::async_trait;
 use chrono::Datelike;
 use crate::{BlobResult, ByteRange, ByteStream, UploadId};
 
+/// Information about a stored blob
+#[derive(Debug, Clone)]
+pub struct BlobInfo {
+    pub key: String,
+    pub size_bytes: u64,
+    pub content_type: Option<String>,
+    pub filename: Option<String>,
+    pub etag: Option<String>,
+    pub last_modified: Option<i64>,
+}
+
 /// Core blob storage operations - must be implemented by all storage backends
 #[async_trait]
 pub trait BlobStore: Send + Sync {
@@ -15,6 +26,18 @@ pub trait BlobStore: Send + Sync {
         stream: ByteStream,
     ) -> BlobResult<PutResult>;
 
+    /// Store a blob from a stream with metadata
+    async fn put_with_metadata(
+        &self,
+        key: &str,
+        content_type: Option<&str>,
+        _filename: Option<&str>,
+        stream: ByteStream,
+    ) -> BlobResult<PutResult> {
+        // Default implementation falls back to regular put
+        self.put(key, content_type, stream).await
+    }
+
     /// Get a blob as a stream, optionally with range support
     async fn get(
         &self,
@@ -27,6 +50,12 @@ pub trait BlobStore: Send + Sync {
 
     /// Delete a blob
     async fn delete(&self, key: &str) -> BlobResult<()>;
+
+    /// List blobs with optional prefix filter
+    async fn list(&self, prefix: Option<&str>, limit: Option<usize>) -> BlobResult<Vec<BlobInfo>> {
+        let _ = (prefix, limit);
+        Err(crate::BlobError::Unsupported)
+    }
 
     /// Get store capabilities
     fn capabilities(&self) -> StoreCapabilities;

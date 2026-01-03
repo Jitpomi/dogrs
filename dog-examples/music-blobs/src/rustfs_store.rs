@@ -6,7 +6,7 @@ use futures::StreamExt;
 use std::env;
 
 use dog_blob::{
-    BlobError, BlobResult, BlobStore, ByteRange, ByteStream, GetResult, ObjectHead, PutResult,
+    BlobError, BlobInfo, BlobResult, BlobStore, ByteRange, ByteStream, GetResult, ObjectHead, PutResult,
     StoreCapabilities,
 };
 
@@ -133,6 +133,40 @@ impl BlobStore for RustFSStore {
         })
     }
 
+    async fn put_with_metadata(
+        &self,
+        key: &str,
+        content_type: Option<&str>,
+        filename: Option<&str>,
+        mut stream: ByteStream,
+    ) -> BlobResult<PutResult> {
+        let data = self.collect_stream(&mut stream).await?;
+        let aws_stream = AwsByteStream::from(data.clone());
+
+        let mut request = self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .body(aws_stream);
+
+        if let Some(ct) = content_type {
+            request = request.content_type(ct);
+        }
+
+        // Add filename as metadata if provided
+        if let Some(filename) = filename {
+            request = request.metadata("filename", filename);
+        }
+
+        let result = request.send().await.map_err(Self::map_aws_error)?;
+
+        Ok(PutResult {
+            size_bytes: data.len() as u64,
+            etag: result.e_tag,
+            checksum: None,
+        })
+    }
+
     async fn get(&self, key: &str, range: Option<ByteRange>) -> BlobResult<GetResult> {
         let mut request = self.client.get_object().bucket(&self.bucket).key(key);
 
@@ -181,6 +215,54 @@ impl BlobStore for RustFSStore {
             .await
             .map_err(Self::map_aws_error)?;
         Ok(())
+    }
+
+    async fn list(&self, prefix: Option<&str>, limit: Option<usize>) -> BlobResult<Vec<BlobInfo>> {
+        let mut request = self.client
+            .list_objects_v2()
+            .bucket(&self.bucket);
+
+        if let Some(prefix) = prefix {
+            request = request.prefix(prefix);
+        }
+
+        if let Some(limit) = limit {
+            request = request.max_keys(limit as i32);
+        }
+
+        let result = request.send().await.map_err(Self::map_aws_error)?;
+
+        let mut blobs = Vec::new();
+        if let Some(objects) = result.contents {
+            for object in objects {
+                if let Some(key) = object.key {
+                    // Get additional metadata including filename from head_object
+                    let head_result = self.client
+                        .head_object()
+                        .bucket(&self.bucket)
+                        .key(&key)
+                        .send()
+                        .await
+                        .map_err(Self::map_aws_error)?;
+
+                    // Extract filename from metadata if available
+                    let filename = head_result.metadata()
+                        .and_then(|metadata| metadata.get("filename"))
+                        .map(|f| f.to_string());
+
+                    blobs.push(BlobInfo {
+                        key: key.clone(),
+                        size_bytes: object.size.unwrap_or(0) as u64,
+                        content_type: head_result.content_type,
+                        filename,
+                        etag: object.e_tag,
+                        last_modified: object.last_modified.map(|dt| dt.secs()),
+                    });
+                }
+            }
+        }
+
+        Ok(blobs)
     }
 
     fn capabilities(&self) -> StoreCapabilities {

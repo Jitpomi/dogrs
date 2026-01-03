@@ -79,12 +79,21 @@ impl BlobAdapter {
         let blob_id = BlobId::new();
         let key = self.state.keys.object_key(&ctx.tenant_id, blob_id.as_str(), &put.key_hints);
 
-        // Store the blob
-        let result = self.state.store.put(
-            &key,
-            put.content_type.as_deref(),
-            body,
-        ).await?;
+        // Store the blob with metadata if filename is available
+        let result = if put.filename.is_some() {
+            self.state.store.put_with_metadata(
+                &key,
+                put.content_type.as_deref(),
+                put.filename.as_deref(),
+                body,
+            ).await?
+        } else {
+            self.state.store.put(
+                &key,
+                put.content_type.as_deref(),
+                body,
+            ).await?
+        };
 
         // Create receipt
         let mut receipt = BlobReceipt::new(blob_id, key, result.size_bytes)
@@ -303,6 +312,23 @@ self.state.uploads.is_some()
         self.state.store.capabilities().supports_range
     }
 
+    /// List blobs with optional prefix filter
+    pub async fn list(
+        &self,
+        ctx: BlobCtx,
+        prefix: Option<&str>,
+        limit: Option<usize>,
+    ) -> BlobResult<Vec<crate::BlobInfo>> {
+        // Use tenant-specific prefix if provided
+        let full_prefix = if let Some(prefix) = prefix {
+            Some(format!("{}/{}", ctx.tenant_id, prefix))
+        } else {
+            Some(ctx.tenant_id.clone())
+        };
+
+        self.state.store.list(full_prefix.as_deref(), limit).await
+    }
+
     /// Extract file data from multipart request, handling BlobRef and base64 formats
     pub async fn extract_file_data(request_data: &serde_json::Value) -> BlobResult<Vec<u8>> {
         if let Some(blob_ref) = request_data.get("file").and_then(|v| v.as_object()) {
@@ -435,11 +461,18 @@ self.state.uploads.is_some()
         ctx: BlobCtx,
         request_data: &serde_json::Value,
     ) -> BlobResult<ChunkResult> {
-        // Extract metadata
+        // Extract metadata - check both direct field and BlobRef
         let filename = request_data
             .get("filename")
             .and_then(|v| v.as_str())
-            .unwrap_or("upload.bin");
+            .or_else(|| {
+                // Check if filename is in the BlobRef under "file" field
+                request_data
+                    .get("file")
+                    .and_then(|f| f.get("filename"))
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or("unknown");
 
         let content_type = request_data
             .get("content_type")
