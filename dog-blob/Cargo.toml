@@ -2,8 +2,14 @@
 name = "dog-blob"
 version = "0.1.0"
 edition = "2021"
-description = "Blob/media handling infrastructure for DogRS - server and storage agnostic"
+authors = ["DogRS Contributors"]
+description = "Production-ready blob storage infrastructure with streaming, multipart uploads, and range requests"
+documentation = "https://docs.rs/dog-blob"
+repository = "https://github.com/Jitpomi/dogrs"
 license = "MIT OR Apache-2.0"
+keywords = ["blob", "storage", "streaming", "s3", "media"]
+categories = ["web-programming", "multimedia", "filesystem"]
+readme = "README.md"
 
 [package.metadata]
 
