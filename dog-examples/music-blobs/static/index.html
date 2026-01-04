@@ -213,27 +213,26 @@
             gap: 1rem;
         }
 
-        .play-btn {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border: none;
-            color: white;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s;
-        }
+            .play-btn, .download-btn {
+                background: none;
+                border: none;
+                font-size: 20px;
+                cursor: pointer;
+                padding: 8px;
+                border-radius: 50%;
+                transition: background-color 0.2s;
+                margin-left: 4px;
+            }
 
-        .play-btn:hover {
-            transform: scale(1.1);
-        }
+            .play-btn:hover, .download-btn:hover {
+                background-color: rgba(255, 255, 255, 0.1);
+            }
 
-        .progress-bar {
-            flex: 1;
-            height: 4px;
+            .download-btn {
+                font-size: 18px;
+            }
+
+        .progress-container {
             background: #e0e0e0;
             border-radius: 2px;
             overflow: hidden;
@@ -470,6 +469,7 @@
                             <div class="music-duration">${duration}</div>
                             <div class="player-controls">
                                 <button class="play-btn" onclick="playTrack('${track.id}')">▶️</button>
+                                <button class="download-btn" onclick="downloadTrack('${track.id}', '${title}')">⬇️</button>
                             </div>
                         </div>
                     `;
@@ -648,6 +648,65 @@
                 currentAudio.pause();
                 updatePlayButton(trackId, false);
                 showStatus('⏸️ Track paused', 'info');
+            }
+        }
+
+        async function downloadTrack(trackId, trackTitle) {
+            console.log('📥 Starting download for track:', trackId);
+            showStatus('📥 Starting download...', 'info');
+
+            try {
+                // Call the stream method to get the audio content
+                const response = await fetch('/music', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-service-method': 'stream'
+                    },
+                    body: JSON.stringify({ key: trackId })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to get audio content: ${response.status}`);
+                }
+
+                const streamInfo = await response.json();
+                console.log('📥 Stream response for download:', streamInfo);
+
+                if (streamInfo.audio_data && streamInfo.audio_data.length > 0) {
+                    // Convert base64 to blob
+                    const binaryString = atob(streamInfo.audio_data);
+                    const bytes = new Uint8Array(binaryString.length);
+                    
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    
+                    const audioBlob = new Blob([bytes], { type: streamInfo.content_type || 'audio/mpeg' });
+                    
+                    // Create download link and trigger download
+                    const downloadUrl = URL.createObjectURL(audioBlob);
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = downloadUrl;
+                    downloadLink.download = `${trackTitle}.mp3`;
+                    
+                    // Trigger download
+                    document.body.appendChild(downloadLink);
+                    downloadLink.click();
+                    document.body.removeChild(downloadLink);
+                    
+                    // Clean up the object URL
+                    URL.revokeObjectURL(downloadUrl);
+                    
+                    showStatus(`📥 Downloaded: ${trackTitle}`, 'success');
+                    console.log('📥 Download completed successfully');
+                } else {
+                    throw new Error('No audio data available for download');
+                }
+
+            } catch (error) {
+                console.error('❌ Failed to download track:', error);
+                showStatus(`❌ Download failed: ${error.message}`, 'error');
             }
         }
 
