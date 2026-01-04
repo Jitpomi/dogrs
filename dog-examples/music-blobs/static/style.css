@@ -376,25 +376,134 @@ body {
 .track-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 16px;
     background: transparent;
     border-radius: 8px;
     overflow: hidden;
 }
 
 .track-item {
-    display: grid;
-    grid-template-columns: 40px 48px 48px 1fr 80px 20px 60px 20px 60px 1fr 140px;
-    gap: 16px;
+    display: flex;
     align-items: center;
-    padding: 12px 16px;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    gap: 20px;
+    padding: 20px 24px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    border-radius: 8px;
+    border-radius: 12px;
     margin: 0;
     position: relative;
     overflow: visible;
+    min-height: 80px;
+}
+
+/* Track item child elements with flexible sizing */
+.track-index {
+    flex: 0 0 40px;
+    text-align: center;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.track-play-btn {
+    flex: 0 0 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.track-artwork {
+    flex: 0 0 64px;
+    height: 64px;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.track-info {
+    flex: 2;
+    min-width: 0; /* Allow text truncation */
+    padding-right: 16px;
+}
+
+.track-genre-tag {
+    flex: 0 0 auto;
+    min-width: 60px;
+}
+
+.track-duration {
+    flex: 0 0 60px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+}
+
+.track-vocal-indicator {
+    flex: 0 0 20px;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.track-waveform {
+    flex: 4;
+    min-width: 300px;
+    max-width: 500px;
+    height: 60px;
+}
+
+.track-actions {
+    flex: 0 0 120px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* Responsive behavior for smaller screens */
+@media (max-width: 1200px) {
+    .track-waveform {
+        flex: 2;
+        min-width: 150px;
+        max-width: 300px;
+    }
+    
+    .track-info {
+        flex: 1.5;
+    }
+}
+
+@media (max-width: 900px) {
+    .track-vocal-indicator {
+        display: none;
+    }
+    
+    .track-genre-tag {
+        display: none;
+    }
+    
+    .track-waveform {
+        flex: 1;
+        min-width: 120px;
+        max-width: 200px;
+    }
+}
+
+@media (max-width: 600px) {
+    .track-item {
+        gap: 12px;
+        padding: 8px 12px;
+    }
+    
+    .track-waveform {
+        display: none;
+    }
+    
+    .track-actions {
+        flex: 0 0 80px;
+    }
+    
+    .track-info {
+        flex: 1;
+    }
 }
 
 .track-item::before {
@@ -514,8 +623,8 @@ min-width: 0;
 }
 
 .track-waveform-canvas {
-    width: 320px;
-    height: 40px;
+    width: 100%;
+    height: 48px;
     border-radius: 6px;
     cursor: pointer;
     opacity: 0.95;
@@ -795,6 +904,20 @@ min-width: 0;
 
 .track-item:hover .track-actions {
     opacity: 1;
+}
+
+.track-waveform {
+    width: 100%;
+    height: 60px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.02) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
 }
 
 .action-btn {

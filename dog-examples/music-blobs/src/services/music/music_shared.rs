@@ -14,6 +14,7 @@ pub fn capabilities() -> ServiceCapabilities {
         ServiceMethodKind::Custom("pause"),
         ServiceMethodKind::Custom("resume"),
         ServiceMethodKind::Custom("cancel"),
+        ServiceMethodKind::Custom("peaks"),
     ])
 }
 

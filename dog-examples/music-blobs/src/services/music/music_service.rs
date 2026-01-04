@@ -65,6 +65,7 @@ impl DogService<Value, MusicParams> for MusicService {
             "resume" => self.adapter.resume(data.unwrap()).await,
             "stop" => self.adapter.stop(data.unwrap()).await,
             "cancel" => self.adapter.cancel(data.unwrap()).await,
+            "peaks" => self.adapter.peaks(data.unwrap()).await,
             _ => Err(DogError::new(
                 ErrorKind::MethodNotAllowed,
                 format!("Unknown method: {}", method),

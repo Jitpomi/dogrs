@@ -518,4 +518,347 @@ impl RustFsAdapter {
             }))
         }
     }
+
+    pub async fn peaks(&self, data: Value) -> Result<Value> {
+        // Extract key from request data
+        let key = data.get("key")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in peaks request"))?;
+            
+        println!("📊 Generating waveform peaks for key: {}", key);
+        
+        // Read the audio content
+        let audio_content = self.read_blob_content(key).await?;
+        
+        // Generate peaks from audio content
+        let peaks = self.generate_waveform_peaks(&audio_content).await?;
+        
+        println!("📊 Generated {} peak points for key: {}", peaks.len(), key);
+        
+        Ok(serde_json::json!({
+            "status": "success",
+            "key": key,
+            "peaks": peaks,
+            "cached": false,
+            "sample_rate": 44100,
+            "duration": 0.0, // Could be extracted from audio metadata if needed
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        }))
+    }
+
+    /// Generate waveform peaks from audio content using Symphonia for real audio decoding
+    async fn generate_waveform_peaks(&self, audio_data: &[u8]) -> Result<Vec<f32>> {
+
+        const PEAK_COUNT: usize = 2000; // Higher resolution for better accuracy
+        
+        // Try to decode the audio using Symphonia
+        match self.decode_audio_with_symphonia(audio_data).await {
+            Ok(samples) => {
+                println!("📊 Successfully decoded {} audio samples", samples.len());
+                Ok(self.calculate_peaks_from_samples(&samples, PEAK_COUNT))
+            }
+            Err(e) => {
+                println!("⚠️ Symphonia decoding failed: {}, falling back to byte analysis", e);
+                // Fallback to simplified byte-based analysis
+                Ok(self.generate_fallback_peaks(audio_data, PEAK_COUNT))
+            }
+        }
+    }
+
+    /// Decode audio using Symphonia to get real PCM samples
+    async fn decode_audio_with_symphonia(&self, audio_data: &[u8]) -> Result<Vec<f32>> {
+        use symphonia::core::audio::{AudioBufferRef, Signal};
+        use symphonia::core::codecs::DecoderOptions;
+        use symphonia::core::formats::FormatOptions;
+        use symphonia::core::io::MediaSourceStream;
+        use symphonia::core::meta::MetadataOptions;
+        use symphonia::core::probe::Hint;
+        use std::io::Cursor;
+
+        let cursor = Cursor::new(audio_data.to_vec());
+        let media_source = MediaSourceStream::new(Box::new(cursor), Default::default());
+
+        let mut hint = Hint::new();
+        hint.with_extension("mp3"); // Assume MP3 for now
+
+        let meta_opts = MetadataOptions::default();
+        let fmt_opts = FormatOptions::default();
+
+        let probed = symphonia::default::get_probe()
+            .format(&hint, media_source, &fmt_opts, &meta_opts)
+            .map_err(|e| anyhow::anyhow!("Failed to probe audio format: {}", e))?;
+
+        let mut format = probed.format;
+        let track = format
+            .tracks()
+            .iter()
+            .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+            .ok_or_else(|| anyhow::anyhow!("No supported audio tracks found"))?;
+
+        let dec_opts = DecoderOptions::default();
+        let mut decoder = symphonia::default::get_codecs()
+            .make(&track.codec_params, &dec_opts)
+            .map_err(|e| anyhow::anyhow!("Failed to create decoder: {}", e))?;
+
+        let track_id = track.id;
+        let mut samples = Vec::new();
+
+        // Decode packets and collect samples
+        loop {
+            let packet = match format.next_packet() {
+                Ok(packet) => packet,
+                Err(symphonia::core::errors::Error::ResetRequired) => {
+                    // Reset decoder and continue
+                    decoder.reset();
+                    continue;
+                }
+                Err(symphonia::core::errors::Error::IoError(e)) 
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(anyhow::anyhow!("Format error: {}", e)),
+            };
+
+            if packet.track_id() != track_id {
+                continue;
+            }
+
+            match decoder.decode(&packet) {
+                Ok(audio_buf) => {
+                    // Convert audio buffer to f32 samples
+                    match audio_buf {
+                        AudioBufferRef::F32(buf) => {
+                            // For stereo, take left channel or mix to mono
+                            let chan = buf.chan(0);
+                            samples.extend_from_slice(chan);
+                        }
+                        AudioBufferRef::U8(buf) => {
+                            let chan = buf.chan(0);
+                            samples.extend(chan.iter().map(|&s| (s as f32 - 128.0) / 128.0));
+                        }
+                        AudioBufferRef::U16(buf) => {
+                            let chan = buf.chan(0);
+                            samples.extend(chan.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
+                        }
+                        AudioBufferRef::U24(buf) => {
+                            let chan = buf.chan(0);
+                            samples.extend(chan.iter().map(|&s| s.inner() as f32 / 8388608.0));
+                        }
+                        AudioBufferRef::U32(buf) => {
+                            let chan = buf.chan(0);
+                            samples.extend(chan.iter().map(|&s| (s as f32 - 2147483648.0) / 2147483648.0));
+                        }
+                        AudioBufferRef::S8(buf) => {
+                            let chan = buf.chan(0);
+                            samples.extend(chan.iter().map(|&s| s as f32 / 128.0));
+                        }
+                        AudioBufferRef::S16(buf) => {
+                            let chan = buf.chan(0);
+                            samples.extend(chan.iter().map(|&s| s as f32 / 32768.0));
+                        }
+                        AudioBufferRef::S24(buf) => {
+                            let chan = buf.chan(0);
+                            samples.extend(chan.iter().map(|&s| s.inner() as f32 / 8388608.0));
+                        }
+                        AudioBufferRef::S32(buf) => {
+                            let chan = buf.chan(0);
+                            samples.extend(chan.iter().map(|&s| s as f32 / 2147483648.0));
+                        }
+                        AudioBufferRef::F64(buf) => {
+                            let chan = buf.chan(0);
+                            samples.extend(chan.iter().map(|&s| s as f32));
+                        }
+                    }
+                }
+                Err(symphonia::core::errors::Error::IoError(e)) 
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(symphonia::core::errors::Error::DecodeError(e)) => {
+                    println!("⚠️ Decode error: {}", e);
+                    continue;
+                }
+                Err(e) => return Err(anyhow::anyhow!("Decode error: {}", e)),
+            }
+        }
+
+        Ok(samples)
+    }
+
+    /// Calculate waveform peaks from real audio samples with advanced analysis
+    fn calculate_peaks_from_samples(&self, samples: &[f32], peak_count: usize) -> Vec<f32> {
+        if samples.is_empty() {
+            return vec![0.0; peak_count];
+        }
+
+        let mut peaks = Vec::with_capacity(peak_count);
+        let samples_per_peak = samples.len() / peak_count;
+
+        // Pre-calculate global statistics for normalization
+        let global_peak = samples.iter().map(|&s| s.abs()).fold(0.0f32, f32::max);
+        
+        for i in 0..peak_count {
+            let start = i * samples_per_peak;
+            let end = std::cmp::min(start + samples_per_peak, samples.len());
+            
+            if start < samples.len() {
+                let chunk = &samples[start..end];
+                
+                if chunk.is_empty() {
+                    peaks.push(0.0);
+                    continue;
+                }
+                
+                // 1. RMS (Root Mean Square) - average energy
+                let rms = {
+                    let sum_squares: f32 = chunk.iter().map(|&s| s * s).sum();
+                    (sum_squares / chunk.len() as f32).sqrt()
+                };
+                
+                // 2. Peak amplitude - maximum instantaneous level
+                let peak_amp = chunk.iter().map(|&s| s.abs()).fold(0.0f32, f32::max);
+                
+                // 3. Crest factor - dynamic range indicator
+                let crest_factor = if rms > 0.0 { peak_amp / rms } else { 1.0 };
+                
+                // 4. Perceptual loudness weighting (simplified A-weighting approximation)
+                let perceptual_weight = self.calculate_perceptual_weight(chunk);
+                
+                // 5. Zero crossing rate - indicates frequency content
+                let zcr = self.calculate_zero_crossing_rate(chunk);
+                
+                // Advanced combination algorithm
+                let base_amplitude = rms * 0.6 + peak_amp * 0.4;
+                
+                // Apply perceptual weighting
+                let perceptual_amplitude = base_amplitude * perceptual_weight;
+                
+                // Dynamic range enhancement based on crest factor
+                let dynamic_factor = 1.0 + (crest_factor - 1.0) * 0.3;
+                let enhanced_amplitude = perceptual_amplitude * dynamic_factor;
+                
+                // Frequency content adjustment
+                let freq_factor = 1.0 + zcr * 0.2;
+                let final_amplitude = enhanced_amplitude * freq_factor;
+                
+                // Adaptive normalization based on global context
+                let normalized = if global_peak > 0.0 {
+                    final_amplitude / global_peak
+                } else {
+                    final_amplitude
+                };
+                
+                // Apply gentle compression for better visual contrast
+                let compressed = self.apply_soft_compression(normalized);
+                
+                peaks.push(compressed.clamp(0.0, 1.0));
+            } else {
+                peaks.push(0.0);
+            }
+        }
+
+        // Post-process for visual enhancement
+        self.enhance_visual_contrast(&mut peaks);
+        
+        println!("📊 Generated {} high-accuracy waveform peaks from {} samples", peaks.len(), samples.len());
+        peaks
+    }
+    
+    
+    /// Calculate perceptual loudness weighting (simplified A-weighting)
+    fn calculate_perceptual_weight(&self, chunk: &[f32]) -> f32 {
+        // Simplified perceptual weighting based on signal characteristics
+        let avg_amplitude = chunk.iter().map(|&s| s.abs()).sum::<f32>() / chunk.len() as f32;
+        
+        // Human hearing is most sensitive around 1-4kHz
+        // This is a simplified approximation without FFT
+        let mid_freq_emphasis = 1.0 + avg_amplitude * 0.3;
+        
+        // Reduce very low amplitude signals (noise floor)
+        if avg_amplitude < 0.01 {
+            0.5
+        } else {
+            mid_freq_emphasis.min(1.5)
+        }
+    }
+    
+    /// Calculate zero crossing rate for frequency content estimation
+    fn calculate_zero_crossing_rate(&self, chunk: &[f32]) -> f32 {
+        if chunk.len() < 2 { return 0.0; }
+        
+        let mut crossings = 0;
+        for i in 1..chunk.len() {
+            if (chunk[i-1] >= 0.0) != (chunk[i] >= 0.0) {
+                crossings += 1;
+            }
+        }
+        
+        (crossings as f32) / (chunk.len() as f32)
+    }
+    
+    /// Apply soft compression for better visual contrast
+    fn apply_soft_compression(&self, amplitude: f32) -> f32 {
+        // Soft knee compression to enhance quiet details while preserving loud parts
+        if amplitude < 0.1 {
+            // Boost quiet signals
+            amplitude * 2.0
+        } else if amplitude > 0.7 {
+            // Gentle limiting of loud signals
+            0.7 + (amplitude - 0.7) * 0.5
+        } else {
+            // Linear region
+            amplitude
+        }
+    }
+    
+    /// Enhance visual contrast for better waveform appearance
+    fn enhance_visual_contrast(&self, peaks: &mut [f32]) {
+        if peaks.is_empty() { return; }
+        
+        // Find dynamic range
+        let min_val = peaks.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+        let max_val = peaks.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        let range = max_val - min_val;
+        
+        if range > 0.0 {
+            // Normalize to use full dynamic range
+            for peak in peaks.iter_mut() {
+                *peak = (*peak - min_val) / range;
+                
+                // Apply subtle S-curve for better contrast
+                *peak = self.apply_s_curve(*peak);
+            }
+        }
+    }
+    
+    /// Apply S-curve for enhanced visual contrast
+    fn apply_s_curve(&self, x: f32) -> f32 {
+        // Smooth S-curve using tanh approximation
+        let enhanced = x * 2.0 - 1.0; // Map to [-1, 1]
+        let curved = enhanced.tanh() * 0.8; // Apply curve with gentle limiting
+        (curved + 1.0) / 2.0 // Map back to [0, 1]
+    }
+
+    /// Fallback peaks generation when Symphonia fails
+    fn generate_fallback_peaks(&self, audio_data: &[u8], peak_count: usize) -> Vec<f32> {
+        let mut peaks = Vec::with_capacity(peak_count);
+        let chunk_size = audio_data.len() / peak_count;
+        
+        for i in 0..peak_count {
+            let start = i * chunk_size;
+            let end = std::cmp::min(start + chunk_size, audio_data.len());
+            
+            if start < audio_data.len() {
+                let chunk = &audio_data[start..end];
+                let sum_squares: u64 = chunk.iter().map(|&b| {
+                    let centered = (b as i16) - 128;
+                    (centered * centered) as u64
+                }).sum();
+                
+                let rms = ((sum_squares as f64) / (chunk.len() as f64)).sqrt() / 128.0;
+                peaks.push(rms as f32);
+            } else {
+                peaks.push(0.0);
+            }
+        }
+        
+        println!("📊 Generated {} fallback peaks from byte analysis", peaks.len());
+        peaks
+    }
 }
