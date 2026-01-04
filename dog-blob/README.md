@@ -648,10 +648,24 @@ impl VideoService {
 }
 ```
 
+## Examples
+
+The `dog-examples/` directory contains real-world implementations:
+
+- **`music-blobs/`** - Complete music streaming application with waveform visualization
+  - Demonstrates S3-compatible storage integration
+  - Shows multipart upload handling for large audio files
+  - Implements range requests for audio scrubbing
+  - Features real-time waveform generation using Symphonia audio decoding
+  - Production-ready service architecture with dog-blob integration
+
 ## Roadmap
 
+- [x] S3-compatible store implementation ✅
+- [x] Multipart upload coordination ✅
+- [x] Range request support ✅
+- [x] Production examples (music-blobs) ✅
 - [ ] Filesystem store implementation
-- [ ] S3-compatible store implementation  
 - [ ] Video processing pipeline (optional)
 - [ ] Signed URL support
 - [ ] Compression support
