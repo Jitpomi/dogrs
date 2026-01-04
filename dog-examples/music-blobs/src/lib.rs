@@ -1,6 +1,7 @@
 mod app;
 mod channels;
 mod hooks;
+mod metadata;
 mod rustfs;
 mod rustfs_store;
 mod services;

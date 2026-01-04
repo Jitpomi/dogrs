@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{primitives::ByteStream as AwsByteStream, Client};
-use base64::{Engine as _, engine::general_purpose};
 use futures::StreamExt;
 use std::env;
 
@@ -11,6 +10,7 @@ use dog_blob::{
     StoreCapabilities,
 };
 use dog_blob::store::ResolvedRange;
+use crate::metadata::AudioMetadataExtractor;
 
 /// RustFS configuration from environment variables
 #[derive(Debug)]
@@ -138,134 +138,10 @@ impl RustFSStore {
         request
     }
 
-    /// Get audio format info from filename extension
-    fn get_audio_format_info(filename_lower: &str) -> Option<(String, String)> {
-        if filename_lower.ends_with(".flac") {
-            Some(("FLAC".to_string(), "audio/flac".to_string()))
-        } else if filename_lower.ends_with(".wav") {
-            Some(("WAV".to_string(), "audio/wav".to_string()))
-        } else if filename_lower.ends_with(".aac") {
-            Some(("AAC".to_string(), "audio/aac".to_string()))
-        } else if filename_lower.ends_with(".ogg") {
-            Some(("OGG".to_string(), "audio/ogg".to_string()))
-        } else if filename_lower.ends_with(".m4a") {
-            Some(("M4A".to_string(), "audio/mp4".to_string()))
-        } else {
-            None
-        }
-    }
 
-    /// Extract metadata from file content (ID3 tags, etc.)
+    /// Extract metadata from file content using dedicated extractor
     fn extract_file_metadata(data: &[u8], filename: Option<&str>) -> Option<BlobMetadata> {
-        let mut metadata = BlobMetadata::default();
-        let mut has_metadata = false;
-
-        // Determine file type from filename extension
-        if let Some(filename) = filename {
-            let filename_lower = filename.to_lowercase();
-            
-            if filename_lower.ends_with(".mp3") {
-                // Extract ID3 tags from MP3 files
-                if let Ok(tag) = id3::Tag::read_from2(std::io::Cursor::new(data)) {
-                    println!("🎵 Found ID3 tag with {} frames", tag.frames().count());
-                    // Extract basic metadata using frame iteration
-                    for frame in tag.frames() {
-                        println!("🔍 Processing frame: {}", frame.id());
-                        match frame.id() {
-                            "TIT2" => { // Title
-                                if let Some(text) = frame.content().text() {
-                                    metadata.title = Some(text.to_string());
-                                }
-                            },
-                            "TPE1" => { // Artist
-                                if let Some(text) = frame.content().text() {
-                                    metadata.artist = Some(text.to_string());
-                                }
-                            },
-                            "TALB" => { // Album
-                                if let Some(text) = frame.content().text() {
-                                    metadata.album = Some(text.to_string());
-                                }
-                            },
-                            "TCON" => { // Genre
-                                if let Some(text) = frame.content().text() {
-                                    metadata.genre = Some(text.to_string());
-                                }
-                            },
-                            "TYER" | "TDRC" => { // Year
-                                if let Some(text) = frame.content().text() {
-                                    metadata.year = text.chars().take(4).collect::<String>().parse().ok();
-                                }
-                            },
-                            "TLEN" => { // Duration in milliseconds
-                                if let Some(text) = frame.content().text() {
-                                    if let Ok(duration_ms) = text.parse::<u32>() {
-                                        metadata.duration = Some(duration_ms / 1000);
-                                    }
-                                }
-                            },
-                            "APIC" => { // Attached Picture (Album Art)
-                                println!("🖼️ Found APIC frame");
-                                if let Some(picture) = frame.content().picture() {
-                                    println!("📸 Picture data: {} bytes, mime: {}, type: {:?}", 
-                                        picture.data.len(), picture.mime_type, picture.picture_type);
-                                    
-                                    // Convert image data to base64 for storage
-                                    let base64_data = general_purpose::STANDARD.encode(&picture.data);
-                                    let data_url = format!("data:{};base64,{}", picture.mime_type, base64_data);
-                                    println!("🔗 Generated data URL (first 100 chars): {}", 
-                                        if data_url.len() > 100 { &data_url[..100] } else { &data_url });
-                                    
-                                    // Set as album art URL (could also be thumbnail_url depending on picture type)
-                                    match picture.picture_type {
-                                        id3::frame::PictureType::CoverFront => {
-                                            println!("✅ Setting as album_art_url (CoverFront)");
-                                            metadata.album_art_url = Some(data_url);
-                                        },
-                                        id3::frame::PictureType::Other => {
-                                            // Use as thumbnail if no specific cover front
-                                            if metadata.album_art_url.is_none() {
-                                                println!("✅ Setting as thumbnail_url (Other, no album art yet)");
-                                                metadata.thumbnail_url = Some(data_url);
-                                            }
-                                        },
-                                        _ => {
-                                            // Use as thumbnail for any other picture type
-                                            if metadata.thumbnail_url.is_none() {
-                                                println!("✅ Setting as thumbnail_url (other type: {:?})", picture.picture_type);
-                                                metadata.thumbnail_url = Some(data_url);
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    println!("❌ APIC frame found but no picture content");
-                                }
-                            },
-                            _ => {}
-                        }
-                    }
-                    
-                    // Set encoding info
-                    metadata.encoding = Some("MP3".to_string());
-                    metadata.mime_type = Some("audio/mpeg".to_string());
-                    
-                    has_metadata = true;
-                }
-            } else {
-                // Handle other audio formats
-                if let Some((encoding, mime_type)) = Self::get_audio_format_info(&filename_lower) {
-                    metadata.encoding = Some(encoding);
-                    metadata.mime_type = Some(mime_type);
-                    has_metadata = true;
-                }
-            }
-        }
-
-        if has_metadata {
-            Some(metadata)
-        } else {
-            None
-        }
+        AudioMetadataExtractor::extract(data, filename)
     }
 
     /// Extract rich metadata from S3 head_object response

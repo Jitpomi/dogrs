@@ -1,4 +1,5 @@
 use crate::rustfs::RustFsState;
+use crate::metadata::MimeDecoder;
 use anyhow::Result;
 use dog_blob::BlobAdapter;
 use serde_json::Value;
@@ -17,47 +18,10 @@ impl RustFsAdapter {
         Self { adapter }
     }
 
-    /// Decode MIME-encoded filename (RFC 2047 format)
-    fn decode_mime_filename(filename: &str) -> String {
-        use base64::Engine;
-        
-        // Handle MIME encoded filenames like =?UTF-8?B?base64data?=
-        if filename.starts_with("=?") && filename.ends_with("?=") {
-            // Simple MIME decoding for UTF-8 Base64 encoded filenames
-            if let Some(captures) = filename.strip_prefix("=?UTF-8?B?").and_then(|s| s.strip_suffix("?=")) {
-                if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(captures) {
-                    if let Ok(decoded_string) = String::from_utf8(decoded_bytes) {
-                        return decoded_string;
-                    }
-                }
-            }
-            // Handle multiple encoded segments (split by space)
-            let segments: Vec<&str> = filename.split_whitespace().collect();
-            if segments.len() > 1 {
-                let mut decoded_parts = Vec::new();
-                for segment in segments {
-                    if let Some(captures) = segment.strip_prefix("=?UTF-8?B?").and_then(|s| s.strip_suffix("?=")) {
-                        if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(captures) {
-                            if let Ok(decoded_string) = String::from_utf8(decoded_bytes) {
-                                decoded_parts.push(decoded_string);
-                            }
-                        }
-                    }
-                }
-                if !decoded_parts.is_empty() {
-                    return decoded_parts.join("");
-                }
-            }
-        }
-        
-        // Return original filename if not MIME encoded or decoding fails
-        filename.to_string()
-    }
 
     // Handle multipart form data from Dropzone
     pub async fn upload(&self, data: Value) -> Result<Value> {
-        let user_id = "default"; // Will be extracted from TenantContext in future
-        let ctx = dog_blob::BlobCtx::new(user_id.to_string());
+        let ctx = Self::create_default_context();
 
         // Use dog-blob's high-level convenience method
         let result = self.adapter
@@ -106,8 +70,7 @@ impl RustFsAdapter {
     }
 
     pub async fn find(&self, data: Option<Value>) -> Result<Value> {
-        let user_id = "default"; // Will be extracted from TenantContext in future
-        let ctx = dog_blob::BlobCtx::new(user_id.to_string());
+        let ctx = Self::create_default_context();
 
         // Extract query parameters from data if provided
         let query = data.as_ref()
@@ -127,40 +90,7 @@ impl RustFsAdapter {
                     // Since files are uploaded through music service which validates audio types,
                     // all blobs in this bucket should be audio files. No need to filter by extension
                     // as keys are UUIDs, not filenames.
-                    .map(|blob| {
-                        // Decode MIME-encoded filename if present
-                        let decoded_filename = blob.filename.as_ref().map(|f| {
-                            Self::decode_mime_filename(f)
-                        });
-                        
-                        serde_json::json!({
-                            "key": blob.key,
-                            "size_bytes": blob.size_bytes,
-                            "content_type": blob.content_type,
-                            "filename": decoded_filename,
-                            "etag": blob.etag,
-                            "last_modified": blob.last_modified,
-                            "metadata": {
-                                "title": blob.metadata.title.as_ref().map(|t| Self::decode_mime_filename(t)),
-                                "artist": blob.metadata.artist.as_ref().map(|a| Self::decode_mime_filename(a)),
-                                "album": blob.metadata.album.as_ref().map(|a| Self::decode_mime_filename(a)),
-                                "genre": blob.metadata.genre,
-                                "year": blob.metadata.year,
-                                "duration": blob.metadata.duration,
-                                "bitrate": blob.metadata.bitrate,
-                                "thumbnail_url": blob.metadata.thumbnail_url,
-                                "album_art_url": blob.metadata.album_art_url,
-                                "latitude": blob.metadata.latitude,
-                                "longitude": blob.metadata.longitude,
-                                "location_name": blob.metadata.location_name,
-                                "mime_type": blob.metadata.mime_type,
-                                "encoding": blob.metadata.encoding,
-                                "sample_rate": blob.metadata.sample_rate,
-                                "channels": blob.metadata.channels,
-                                "custom": blob.metadata.custom
-                            }
-                        })
-                    })
+                    .map(|blob| Self::serialize_music_file(blob))
                     .collect();
 
                 Ok(serde_json::json!({
@@ -177,6 +107,42 @@ impl RustFsAdapter {
                 }))
             }
         }
+    }
+
+    /// Create default blob context (will be extracted from TenantContext in future)
+    fn create_default_context() -> dog_blob::BlobCtx {
+        dog_blob::BlobCtx::new("default".to_string())
+    }
+
+    /// Serialize a blob into music file JSON with MIME decoding
+    fn serialize_music_file(blob: dog_blob::BlobInfo) -> serde_json::Value {
+        serde_json::json!({
+            "key": blob.key,
+            "size_bytes": blob.size_bytes,
+            "content_type": blob.content_type,
+            "filename": MimeDecoder::decode_option(blob.filename.as_ref()),
+            "etag": blob.etag,
+            "last_modified": blob.last_modified,
+            "metadata": {
+                "title": MimeDecoder::decode_option(blob.metadata.title.as_ref()),
+                "artist": MimeDecoder::decode_option(blob.metadata.artist.as_ref()),
+                "album": MimeDecoder::decode_option(blob.metadata.album.as_ref()),
+                "genre": blob.metadata.genre,
+                "year": blob.metadata.year,
+                "duration": blob.metadata.duration,
+                "bitrate": blob.metadata.bitrate,
+                "thumbnail_url": blob.metadata.thumbnail_url,
+                "album_art_url": blob.metadata.album_art_url,
+                "latitude": blob.metadata.latitude,
+                "longitude": blob.metadata.longitude,
+                "location_name": blob.metadata.location_name,
+                "mime_type": blob.metadata.mime_type,
+                "encoding": blob.metadata.encoding,
+                "sample_rate": blob.metadata.sample_rate,
+                "channels": blob.metadata.channels,
+                "custom": blob.metadata.custom
+            }
+        })
     }
 
     pub async fn download(&self, data: Value) -> Result<Value> {
