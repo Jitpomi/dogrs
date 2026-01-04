@@ -213,7 +213,7 @@
             gap: 1rem;
         }
 
-            .play-btn, .download-btn {
+            .play-btn, .pause-btn, .download-btn, .stop-btn, .delete-btn {
                 background: none;
                 border: none;
                 font-size: 20px;
@@ -224,12 +224,30 @@
                 margin-left: 4px;
             }
 
-            .play-btn:hover, .download-btn:hover {
+            .hidden {
+                display: none !important;
+                visibility: hidden !important;
+            }
+            
+            .visible {
+                display: inline-block !important;
+                visibility: visible !important;
+            }
+
+            .play-btn:hover, .pause-btn:hover, .download-btn:hover, .stop-btn:hover, .delete-btn:hover {
                 background-color: rgba(255, 255, 255, 0.1);
             }
 
-            .download-btn {
+            .download-btn, .stop-btn, .delete-btn {
                 font-size: 18px;
+            }
+
+            .stop-btn:hover {
+                background-color: rgba(255, 165, 0, 0.2);
+            }
+
+            .delete-btn:hover {
+                background-color: rgba(255, 0, 0, 0.2);
             }
 
         .progress-container {
@@ -469,7 +487,10 @@
                             <div class="music-duration">${duration}</div>
                             <div class="player-controls">
                                 <button class="play-btn" onclick="playTrack('${track.id}')">▶️</button>
+                                <button class="pause-btn" onclick="pauseTrack('${track.id}')" style="display: none;">⏸️</button>
                                 <button class="download-btn" onclick="downloadTrack('${track.id}', '${title}')">⬇️</button>
+                                <button class="stop-btn" onclick="stopOperation('${track.id}', '${title}')" style="display: none;">⏹️</button>
+                                <button class="delete-btn" onclick="deleteTrack('${track.id}', '${title}')">🗑️</button>
                             </div>
                         </div>
                     `;
@@ -523,19 +544,51 @@
         let currentAudio = null;
         let currentTrackId = null;
         let isPlaying = false;
+        let isPaused = false;
+        let pausedPosition = 0;
+        let isStopping = false; // Flag to prevent event listener interference during stop
 
         async function playTrack(trackId) {
             console.log('🎵 Playing track:', trackId);
             
             try {
-                // Stop current track if playing
-                if (currentAudio) {
+                // If this is the same track and it's paused, just resume
+                if (currentTrackId === trackId && isPaused && currentAudio) {
+                    console.log('🎵 Resuming paused track from position:', pausedPosition);
+                    
+                    // Call backend resume method
+                    const resumeResponse = await fetch('/music', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-service-method': 'resume'
+                        },
+                        body: JSON.stringify({ key: trackId })
+                    });
+
+                    if (resumeResponse.ok) {
+                        const resumeInfo = await resumeResponse.json();
+                        console.log('🎵 Backend resume response:', resumeInfo);
+                    }
+
+                    // Resume audio from saved position
+                    currentAudio.currentTime = pausedPosition;
+                    currentAudio.play();
+                    isPlaying = true;
+                    isPaused = false;
+                    updatePlayPauseButtons(trackId, true);
+                    showStatus('▶️ Resumed playback', 'success');
+                    return;
+                }
+                
+                // Stop current track if playing a different one
+                if (currentAudio && currentTrackId !== trackId) {
                     currentAudio.pause();
                     currentAudio = null;
                     updatePlayButton(currentTrackId, false);
                 }
                 
-                // Get streaming info from backend
+                // Get streaming info from backend for new track
                 const streamResponse = await fetch('/music', {
                     method: 'POST',
                     headers: {
@@ -565,31 +618,37 @@
                 currentAudio.addEventListener('canplay', () => {
                     console.log('🎵 Audio ready to play');
                     showStatus('🎵 Playing track', 'success');
-                    updatePlayButton(trackId, true);
+                    updatePlayPauseButtons(trackId, true);
                 });
                 
                 currentAudio.addEventListener('play', () => {
                     isPlaying = true;
-                    updatePlayButton(trackId, true);
+                    updatePlayPauseButtons(trackId, true);
                 });
                 
                 currentAudio.addEventListener('pause', () => {
+                    console.log('🎵 Audio pause event triggered, isStopping:', isStopping);
+                    if (isStopping) {
+                        console.log('🚫 Ignoring pause event during stop operation');
+                        return; // Don't interfere during stop operation
+                    }
                     isPlaying = false;
-                    updatePlayButton(trackId, false);
+                    console.log('⏸️ Pause event calling updatePlayPauseButtons');
+                    updatePlayPauseButtons(trackId, false);
                 });
                 
                 currentAudio.addEventListener('ended', () => {
                     isPlaying = false;
                     currentAudio = null;
                     currentTrackId = null;
-                    updatePlayButton(trackId, false);
+                    updatePlayPauseButtons(trackId, false);
                     showStatus('🎵 Track finished', 'info');
                 });
                 
                 currentAudio.addEventListener('error', (e) => {
                     console.error('🎵 Audio error:', e);
                     showStatus('❌ Playback error', 'error');
-                    updatePlayButton(trackId, false);
+                    updatePlayPauseButtons(trackId, false);
                 });
                 
                 // Handle the stream response
@@ -642,14 +701,243 @@
                 playBtn.onclick = playing ? () => pauseTrack(trackId) : () => playTrack(trackId);
             }
         }
-        
-        function pauseTrack(trackId) {
-            if (currentAudio && currentTrackId === trackId) {
-                currentAudio.pause();
-                updatePlayButton(trackId, false);
-                showStatus('⏸️ Track paused', 'info');
+
+        function updatePlayPauseButtons(trackId, playing) {
+            console.log(`🔄 updatePlayPauseButtons called for trackId: ${trackId}, playing: ${playing}`);
+            
+            // Find the track container first, then find buttons within it
+            const playBtn = document.querySelector(`button[onclick="playTrack('${trackId}')"]`);
+            if (!playBtn) {
+                console.log(`❌ Could not find play button for trackId: ${trackId}`);
+                return; // If we can't find the play button, exit
+            }
+            
+            const trackContainer = playBtn.closest('.music-item');
+            if (!trackContainer) {
+                console.log(`❌ Could not find track container for trackId: ${trackId}`);
+                return; // If we can't find the container, exit
+            }
+            
+            const pauseBtn = trackContainer.querySelector(`button[onclick="pauseTrack('${trackId}')"]`);
+            const stopBtn = trackContainer.querySelector('.stop-btn');
+            const deleteBtn = trackContainer.querySelector('.delete-btn');
+            
+            console.log(`🔍 Found buttons - play: ${!!playBtn}, pause: ${!!pauseBtn}, stop: ${!!stopBtn}, delete: ${!!deleteBtn}`);
+            
+            if (playing) {
+                // Playing state: show pause + stop buttons, hide play + delete
+                console.log('🎵 Setting to playing state');
+                if (playBtn) {
+                    playBtn.classList.add('hidden');
+                    playBtn.classList.remove('visible');
+                }
+                if (pauseBtn) {
+                    pauseBtn.classList.remove('hidden');
+                    pauseBtn.classList.add('visible');
+                }
+                if (stopBtn) {
+                    stopBtn.classList.remove('hidden');
+                    stopBtn.classList.add('visible');
+                }
+                if (deleteBtn) {
+                    deleteBtn.classList.add('hidden');
+                    deleteBtn.classList.remove('visible');
+                }
+            } else {
+                // Not playing state: show play + delete buttons, hide pause + stop
+                console.log('⏹️ Setting to stopped state');
+                if (playBtn) {
+                    console.log('🔧 Showing play button');
+                    playBtn.classList.remove('hidden');
+                    playBtn.classList.add('visible');
+                    console.log('Play button classes:', playBtn.className);
+                }
+                if (pauseBtn) {
+                    console.log('🔧 Hiding pause button');
+                    pauseBtn.classList.add('hidden');
+                    pauseBtn.classList.remove('visible');
+                    console.log('Pause button classes:', pauseBtn.className);
+                }
+                if (stopBtn) {
+                    console.log('🔧 Hiding stop button');
+                    stopBtn.classList.add('hidden');
+                    stopBtn.classList.remove('visible');
+                    console.log('Stop button classes:', stopBtn.className);
+                }
+                if (deleteBtn) {
+                    console.log('🔧 Showing delete button');
+                    deleteBtn.classList.remove('hidden');
+                    deleteBtn.classList.add('visible');
+                    console.log('Delete button classes:', deleteBtn.className);
+                }
+            }
+            
+            console.log('✅ Button visibility updated');
+        }
+
+        async function stopOperation(trackId, trackTitle) {
+            console.log('⏹️ Stopping operation for track:', trackId);
+            
+            // Prevent multiple simultaneous stop operations
+            if (isStopping) {
+                console.log('🚫 Stop operation already in progress, ignoring');
+                return;
+            }
+            
+            showStatus('⏹️ Stopping operation...', 'info');
+
+            try {
+                // Set stopping flag immediately to prevent interference
+                isStopping = true;
+                
+                // Call backend cancel method for ongoing operations
+                const response = await fetch('/music', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-service-method': 'cancel'
+                    },
+                    body: JSON.stringify({ key: trackId })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to stop: ${response.status}`);
+                }
+
+                const stopInfo = await response.json();
+                console.log('⏹️ Backend stop response:', stopInfo);
+
+                // Actually stop the frontend audio playback and reset everything
+                if (currentAudio && currentTrackId === trackId) {
+                    // Store reference to audio
+                    const audioToStop = currentAudio;
+                    
+                    // Clear state first
+                    currentAudio = null;
+                    currentTrackId = null;
+                    isPlaying = false;
+                    isPaused = false;
+                    pausedPosition = 0;
+                    
+                    // Now stop the audio
+                    audioToStop.pause();
+                    audioToStop.currentTime = 0;
+                }
+
+                // Update UI buttons to reflect stopped state
+                updatePlayPauseButtons(trackId, false);
+                showStatus(`⏹️ ${stopInfo.message}`, 'warning');
+
+            } catch (error) {
+                console.error('❌ Failed to stop operation:', error);
+                showStatus(`❌ Failed to stop: ${error.message}`, 'error');
+            } finally {
+                // Always reset stopping flag after a delay
+                setTimeout(() => {
+                    isStopping = false;
+                }, 200);
             }
         }
+
+        async function deleteTrack(trackId, trackTitle) {
+            if (!confirm(`Are you sure you want to delete "${trackTitle}"? This cannot be undone.`)) {
+                return;
+            }
+
+            console.log('🗑️ Deleting track:', trackId);
+            showStatus('🗑️ Deleting track...', 'info');
+
+            try {
+                // Use DELETE HTTP method to delete the file
+                const response = await fetch('/music', {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ key: trackId })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to delete: ${response.status}`);
+                }
+
+                const deleteInfo = await response.json();
+                console.log('🗑️ Backend delete response:', deleteInfo);
+
+                // Stop playback if this track is playing
+                if (currentAudio && currentTrackId === trackId) {
+                    currentAudio.pause();
+                    currentAudio = null;
+                    currentTrackId = null;
+                }
+
+                // Refresh the music library to remove the deleted track
+                await loadMusicLibrary();
+
+                showStatus(`🗑️ ${deleteInfo.message}`, deleteInfo.deleted ? 'success' : 'warning');
+
+            } catch (error) {
+                console.error('❌ Failed to delete track:', error);
+                showStatus(`❌ Failed to delete: ${error.message}`, 'error');
+            }
+        }
+        
+        async function pauseTrack(trackId) {
+            console.log('⏸️ Pausing track:', trackId);
+            
+            try {
+                // Save current position before pausing
+                if (currentAudio && currentTrackId === trackId) {
+                    pausedPosition = currentAudio.currentTime;
+                    console.log('⏸️ Saving position:', pausedPosition);
+                }
+
+                // Call backend pause method with current position
+                const response = await fetch('/music', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-service-method': 'pause'
+                    },
+                    body: JSON.stringify({ 
+                        key: trackId,
+                        position: Math.floor(pausedPosition)
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to pause: ${response.status}`);
+                }
+
+                const pauseInfo = await response.json();
+                console.log('⏸️ Backend pause response:', pauseInfo);
+
+                // Pause the frontend audio
+                if (currentAudio && currentTrackId === trackId) {
+                    currentAudio.pause();
+                    isPlaying = false;
+                    isPaused = true;
+                }
+
+                // Update UI
+                updatePlayPauseButtons(trackId, false);
+                showStatus(`⏸️ Paused at ${Math.floor(pausedPosition)}s (Sessions: ${pauseInfo.active_sessions})`, 'info');
+
+            } catch (error) {
+                console.error('❌ Failed to pause track:', error);
+                showStatus(`❌ Failed to pause: ${error.message}`, 'error');
+                
+                // Fallback to client-side pause
+                if (currentAudio && currentTrackId === trackId) {
+                    pausedPosition = currentAudio.currentTime;
+                    currentAudio.pause();
+                    isPlaying = false;
+                    isPaused = true;
+                    updatePlayPauseButtons(trackId, false);
+                }
+            }
+        }
+
 
         async function downloadTrack(trackId, trackTitle) {
             console.log('📥 Starting download for track:', trackId);

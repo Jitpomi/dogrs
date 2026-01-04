@@ -39,6 +39,13 @@ impl DogService<Value, MusicParams> for MusicService {
         }
     }
 
+    async fn remove(&self, _ctx: &TenantContext, id: Option<&str>, _params: MusicParams) -> Result<Value> {
+        // Use the id parameter as the key for deletion
+        let key = id.ok_or_else(|| anyhow::anyhow!("Missing id for remove operation"))?;
+        let data = serde_json::json!({ "key": key });
+        self.adapter.remove(data).await
+    }
+
     async fn custom(
         &self,
         ctx: &TenantContext,
@@ -57,6 +64,7 @@ impl DogService<Value, MusicParams> for MusicService {
             "stream" => self.adapter.stream(data.unwrap()).await,
             "pause" => self.adapter.pause(data.unwrap()).await,
             "resume" => self.adapter.resume(data.unwrap()).await,
+            "stop" => self.adapter.stop(data.unwrap()).await,
             "cancel" => self.adapter.cancel(data.unwrap()).await,
             _ => Err(DogError::new(
                 ErrorKind::MethodNotAllowed,

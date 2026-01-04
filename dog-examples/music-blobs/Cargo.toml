@@ -43,3 +43,9 @@ base64 = "0.22.1"
 
 # Multipart form data parsing
 multer = "3.0"
+
+# Production session management
+once_cell = "1.19"
+dashmap = "5.5"
+parking_lot = "0.12"
+tokio-util = "0.7"

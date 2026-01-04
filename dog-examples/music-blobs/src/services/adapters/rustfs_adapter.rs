@@ -5,16 +5,102 @@ use dog_blob::BlobAdapter;
 use serde_json::Value;
 use std::sync::Arc;
 use futures::StreamExt;
-use axum::{
-    body::Body,
-    http::{HeaderMap, HeaderValue, StatusCode},
-    response::Response,
-};
+use chrono;
+use once_cell::sync::Lazy;
+use dashmap::DashMap;
+use std::time::{Duration, Instant};
+
+/// Playback session state with production-grade features
+#[derive(Debug, Clone)]
+pub struct PlaybackSession {
+    pub status: PlaybackStatus,
+    pub position: u64,
+    pub last_updated: chrono::DateTime<chrono::Utc>,
+    pub last_activity: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum PlaybackStatus {
+    Playing,
+    Paused,
+    Stopped,
+    Buffering,
+    Error,
+}
+
+
+/// Production-grade session manager with concurrent access and cleanup
+pub struct SessionManager {
+    sessions: DashMap<String, PlaybackSession>,
+    session_timeout: Duration,
+}
+
+impl SessionManager {
+    pub fn new() -> Self {
+        Self {
+            sessions: DashMap::new(),
+            session_timeout: Duration::from_secs(3600), // 1 hour
+        }
+    }
+
+    pub fn create_session(&self, key: String, _client_id: Option<String>, _user_agent: Option<String>) -> PlaybackSession {
+        let session = PlaybackSession {
+            status: PlaybackStatus::Playing,
+            position: 0,
+            last_updated: chrono::Utc::now(),
+            last_activity: Instant::now(),
+        };
+        
+        self.sessions.insert(key, session.clone());
+        session
+    }
+
+    pub fn update_session_status(&self, key: &str, status: PlaybackStatus, position: Option<u64>) -> Option<PlaybackSession> {
+        self.sessions.get_mut(key).map(|mut session| {
+            session.status = status;
+            session.last_updated = chrono::Utc::now();
+            session.last_activity = Instant::now();
+            if let Some(pos) = position {
+                session.position = pos;
+                println!("🎵 Updated session position to: {} seconds", pos);
+            }
+            session.clone()
+        })
+    }
+
+
+
+    pub fn cleanup_expired_sessions(&self) {
+        let now = Instant::now();
+        self.sessions.retain(|_, session| {
+            now.duration_since(session.last_activity) < self.session_timeout
+        });
+    }
+
+    pub fn get_active_sessions_count(&self) -> usize {
+        self.sessions.len()
+    }
+}
+
+/// Global session manager instance
+static SESSION_MANAGER: Lazy<SessionManager> = Lazy::new(|| {
+    let manager = SessionManager::new();
+    
+    // Start cleanup task
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            SESSION_MANAGER.cleanup_expired_sessions();
+        }
+    });
+    
+    manager
+});
 
 /// RustFsAdapter wraps BlobAdapter and implements music-specific methods
 pub struct RustFsAdapter {
     adapter: BlobAdapter,
-    state: Arc<RustFsState>,
 }
 
 impl RustFsAdapter {
@@ -22,7 +108,7 @@ impl RustFsAdapter {
         // Create BlobAdapter from the BlobState inside RustFsState
         let adapter = BlobAdapter::new(state.blob_state.clone());
 
-        Self { adapter, state }
+        Self { adapter }
     }
 
 
@@ -217,6 +303,13 @@ impl RustFsAdapter {
                 // Read the actual audio content using the full key
                 let audio_content = self.read_blob_content(key).await?;
                 
+                // Create a playback session for this stream using the session manager
+                let session = SESSION_MANAGER.create_session(
+                    key.to_string(),
+                    None, // client_id - could be extracted from headers
+                    None, // user_agent - could be extracted from headers
+                );
+                
                 // Return the audio content as base64 for the frontend to convert to blob
                 use base64::Engine;
                 let base64_content = base64::engine::general_purpose::STANDARD.encode(&audio_content);
@@ -228,7 +321,10 @@ impl RustFsAdapter {
                     "key": key,
                     "content_type": "audio/mpeg",
                     "size_bytes": audio_content.len(),
-                    "audio_data": base64_content
+                    "audio_data": base64_content,
+                    "session_created": true,
+                    "session_status": session.status,
+                    "active_sessions": SESSION_MANAGER.get_active_sessions_count()
                 }))
             },
             Err(e) => {
@@ -288,17 +384,177 @@ impl RustFsAdapter {
   
 
     pub async fn pause(&self, data: Value) -> Result<Value> {
-        // Implementation for pause functionality
-        Ok(serde_json::json!({"status": "paused", "data": data}))
+        // Extract track information from request data
+        let key = data.get("key")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in pause request"))?;
+            
+        println!("⏸️ Pausing playback for key: {}", key);
+        
+        // Extract position from request data if provided
+        let position = data.get("position")
+            .and_then(|p| p.as_u64());
+            
+        // Update the playback session status using SessionManager
+        if let Some(session) = SESSION_MANAGER.update_session_status(key, PlaybackStatus::Paused, position) {
+            println!("✅ Updated session status to paused for key: {}", key);
+            
+            Ok(serde_json::json!({
+                "status": "paused",
+                "key": key,
+                "message": "Playback paused successfully",
+                "session_status": "paused",
+                "position": session.position,
+                "active_sessions": SESSION_MANAGER.get_active_sessions_count(),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }))
+        } else {
+            println!("⚠️ No active session found for key: {}", key);
+            
+            Ok(serde_json::json!({
+                "status": "paused",
+                "key": key,
+                "message": "No active session found, but pause acknowledged",
+                "session_status": "not_found",
+                "active_sessions": SESSION_MANAGER.get_active_sessions_count(),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }))
+        }
     }
 
     pub async fn resume(&self, data: Value) -> Result<Value> {
-        // Implementation for resume functionality
-        Ok(serde_json::json!({"status": "resumed", "data": data}))
+        // Extract track information from request data
+        let key = data.get("key")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in resume request"))?;
+            
+        println!("▶️ Resuming playback for key: {}", key);
+        
+        // Update the playback session status using SessionManager
+        if let Some(session) = SESSION_MANAGER.update_session_status(key, PlaybackStatus::Playing, None) {
+            println!("✅ Updated session status to playing for key: {}", key);
+            
+            Ok(serde_json::json!({
+                "status": "resumed",
+                "key": key,
+                "message": "Playback resumed successfully",
+                "session_status": "playing",
+                "position": session.position,
+                "active_sessions": SESSION_MANAGER.get_active_sessions_count(),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }))
+        } else {
+            println!("⚠️ No active session found for key: {}", key);
+            
+            Ok(serde_json::json!({
+                "status": "resumed",
+                "key": key,
+                "message": "No active session found, but resume acknowledged",
+                "session_status": "not_found",
+                "active_sessions": SESSION_MANAGER.get_active_sessions_count(),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }))
+        }
+    }
+
+    pub async fn stop(&self, data: Value) -> Result<Value> {
+        // Extract key from request data
+        let key = data.get("key")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in stop request"))?;
+            
+        println!("⏹️ Stopping operation for key: {}", key);
+        
+        // Update session status to stopped if it exists
+        if let Some(_session) = SESSION_MANAGER.update_session_status(key, PlaybackStatus::Stopped, None) {
+            println!("✅ Stopped session for key: {}", key);
+            
+            Ok(serde_json::json!({
+                "status": "stopped",
+                "key": key,
+                "message": "Operation stopped successfully",
+                "session_status": "stopped",
+                "active_sessions": SESSION_MANAGER.get_active_sessions_count(),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }))
+        } else {
+            // No session found, but acknowledge the stop request
+            println!("⚠️ No active session found for key: {}", key);
+            Ok(serde_json::json!({
+                "status": "stopped",
+                "key": key,
+                "message": "No active operation found, but stop acknowledged",
+                "session_status": "not_found",
+                "active_sessions": SESSION_MANAGER.get_active_sessions_count(),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }))
+        }
+    }
+
+    pub async fn remove(&self, data: Value) -> Result<Value> {
+        let ctx = Self::create_default_context();
+        
+        // Extract key from request data
+        let key = data.get("key")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in remove request"))?;
+            
+        println!("🗑️ Deleting blob for key: {}", key);
+        
+        // Extract blob ID from the key (last part after the last slash)
+        let blob_id_str = key.split('/').last().unwrap_or(key);
+        let blob_id = dog_blob::BlobId(blob_id_str.to_string());
+        
+        // Use the adapter's delete method to remove the blob
+        match self.adapter.delete(ctx, blob_id).await {
+            Ok(_) => {
+                println!("✅ Successfully deleted blob: {}", key);
+                Ok(serde_json::json!({
+                    "status": "deleted",
+                    "key": key,
+                    "message": "File deleted successfully",
+                    "deleted": true,
+                    "timestamp": chrono::Utc::now().to_rfc3339()
+                }))
+            },
+            Err(e) => {
+                println!("❌ Failed to delete blob: {}", e);
+                Err(anyhow::anyhow!("Failed to delete file: {}", e))
+            }
+        }
     }
 
     pub async fn cancel(&self, data: Value) -> Result<Value> {
-        // Implementation using self.blob_adapter.delete() or abort operations
-        Ok(serde_json::json!({"status": "cancelled", "data": data}))
+        // Extract key from request data
+        let key = data.get("key")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in cancel request"))?;
+            
+        println!("⏹️ Stopping operation for key: {}", key);
+        
+        // Update session status to stopped if it exists
+        if let Some(_session) = SESSION_MANAGER.update_session_status(key, PlaybackStatus::Stopped, None) {
+            println!("✅ Stopped session for key: {}", key);
+            
+            Ok(serde_json::json!({
+                "status": "stopped",
+                "key": key,
+                "message": "Operation stopped successfully",
+                "session_status": "stopped",
+                "active_sessions": SESSION_MANAGER.get_active_sessions_count(),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }))
+        } else {
+            // No session found, but acknowledge the stop request
+            println!("⚠️ No active session found for key: {}", key);
+            Ok(serde_json::json!({
+                "status": "stopped",
+                "key": key,
+                "message": "No active operation found, but stop acknowledged",
+                "session_status": "not_found",
+                "active_sessions": SESSION_MANAGER.get_active_sessions_count(),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }))
+        }
     }
 }

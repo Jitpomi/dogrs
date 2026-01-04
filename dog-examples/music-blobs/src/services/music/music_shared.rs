@@ -6,6 +6,7 @@ use std::sync::Arc;
 pub fn capabilities() -> ServiceCapabilities {
     ServiceCapabilities::from_methods(vec![
         ServiceMethodKind::Find,
+        ServiceMethodKind::Remove,
         ServiceMethodKind::Custom("upload"),
         ServiceMethodKind::Custom("chunk"),
         ServiceMethodKind::Custom("complete"),
