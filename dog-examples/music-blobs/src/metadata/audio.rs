@@ -1,5 +1,10 @@
 use base64::{Engine as _, engine::general_purpose};
 use dog_blob::BlobMetadata;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
+use std::io::Cursor;
 
 /// Audio metadata extractor for various formats
 pub struct AudioMetadataExtractor;
@@ -64,8 +69,8 @@ impl AudioMetadataExtractor {
             }
         }
 
-        // Extract technical audio properties from MP3 header
-        if let Some(audio_props) = Self::extract_mp3_audio_properties(data) {
+        // Extract technical audio properties using symphonia
+        if let Some(audio_props) = Self::extract_audio_properties_with_symphonia(data) {
             if metadata.duration.is_none() {
                 metadata.duration = audio_props.duration;
             }
@@ -123,60 +128,91 @@ impl AudioMetadataExtractor {
         }
     }
 
-    /// Extract technical audio properties from MP3 data
-    fn extract_mp3_audio_properties(data: &[u8]) -> Option<AudioProperties> {
-        // Simple MP3 frame header parsing for basic properties
-        // Look for MP3 frame sync (0xFF followed by 0xE0-0xFF)
-        for i in 0..data.len().saturating_sub(4) {
-            if data[i] == 0xFF && (data[i + 1] & 0xE0) == 0xE0 {
-                let header = u32::from_be_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
-                if let Some(props) = Self::parse_mp3_header(header, data.len()) {
-                    return Some(props);
-                }
+    /// Extract technical audio properties using symphonia
+    fn extract_audio_properties_with_symphonia(data: &[u8]) -> Option<AudioProperties> {
+        println!("🎼 Using symphonia to extract audio properties from {} bytes", data.len());
+        
+        // Create a media source from the byte data
+        let cursor = Cursor::new(data.to_vec());
+        let media_source = MediaSourceStream::new(Box::new(cursor), Default::default());
+        
+        // Create a probe hint (symphonia will auto-detect format)
+        let mut hint = Hint::new();
+        hint.with_extension("mp3");
+        
+        // Probe the media source
+        let format_opts = FormatOptions::default();
+        let metadata_opts = MetadataOptions::default();
+        
+        let probed = match symphonia::default::get_probe()
+            .format(&hint, media_source, &format_opts, &metadata_opts) {
+            Ok(probed) => {
+                println!("✅ Symphonia successfully probed the audio format");
+                probed
+            },
+            Err(e) => {
+                println!("❌ Symphonia probe failed: {:?}", e);
+                return None;
             }
-        }
-        None
-    }
-
-    /// Parse MP3 frame header to extract audio properties
-    fn parse_mp3_header(header: u32, file_size: usize) -> Option<AudioProperties> {
-        // Extract fields from MP3 header
-        let version = (header >> 19) & 0x3;
-        let layer = (header >> 17) & 0x3;
-        let bitrate_index = (header >> 12) & 0xF;
-        let sample_rate_index = (header >> 10) & 0x3;
-        let channel_mode = (header >> 6) & 0x3;
-
-        // Validate header
-        if version == 1 || layer == 0 || bitrate_index == 0 || bitrate_index == 15 || sample_rate_index == 3 {
-            return None;
-        }
-
-        // Bitrate table for MPEG-1 Layer III (most common)
-        let bitrates = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
-        let sample_rates = [44100, 48000, 32000, 0];
-
-        let bitrate = bitrates[bitrate_index as usize];
-        let sample_rate = sample_rates[sample_rate_index as usize];
-        let channels = if channel_mode == 3 { 1 } else { 2 };
-
-        if bitrate == 0 || sample_rate == 0 {
-            return None;
-        }
-
-        // Estimate duration: file_size * 8 / bitrate (in seconds)
-        let duration = if bitrate > 0 {
-            Some(((file_size * 8) / (bitrate * 1000)) as u32)
-        } else {
-            None
         };
-
-        Some(AudioProperties {
-            bitrate: Some(bitrate as u32),
-            sample_rate: Some(sample_rate),
-            channels: Some(channels),
+        
+        let format = probed.format;
+        
+        // Extract track information and calculate proper duration
+        let (sample_rate, channels, duration, bitrate) = {
+            let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)?;
+            
+            println!("🎵 Found track with codec: {:?}", track.codec_params.codec);
+            
+            let codec_params = &track.codec_params;
+            let sample_rate = codec_params.sample_rate;
+            let channels = codec_params.channels.map(|ch| ch.count() as u32);
+            
+            println!("📊 Codec params - Sample rate: {:?}, Channels: {:?}", sample_rate, channels);
+            println!("📊 Time base: {:?}, N frames: {:?}", codec_params.time_base, codec_params.n_frames);
+            
+            // Calculate duration from symphonia's codec parameters
+            let duration = if let (Some(time_base), Some(n_frames)) = (codec_params.time_base, codec_params.n_frames) {
+                let duration_seconds = (n_frames as f64 * time_base.numer as f64) / time_base.denom as f64;
+                println!("🕐 Calculated duration from symphonia time base: {:.2}s", duration_seconds);
+                Some(duration_seconds as u32)
+            } else if let Some(sample_rate) = sample_rate {
+                // Fallback: estimate from file size and sample rate
+                let bytes_per_sample = 2; // 16-bit samples
+                let estimated_samples = data.len() / (bytes_per_sample * channels.unwrap_or(2) as usize);
+                let duration_seconds = estimated_samples as f64 / sample_rate as f64;
+                println!("🕐 Estimated duration from sample rate: {:.2}s", duration_seconds);
+                Some(duration_seconds as u32)
+            } else {
+                println!("❌ Could not calculate duration - no time base or sample rate");
+                None
+            };
+            
+            // Calculate bitrate from file size and duration
+            let bitrate = if let Some(dur) = duration {
+                if dur > 0 {
+                    let calculated_bitrate = ((data.len() * 8) / (dur as usize * 1000)) as u32;
+                    println!("📈 Calculated bitrate from duration: {} kbps", calculated_bitrate);
+                    Some(calculated_bitrate)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
+            (sample_rate, channels, duration, bitrate)
+        };
+        
+        let result = AudioProperties {
+            sample_rate,
+            channels,
             duration,
-        })
+            bitrate,
+        };
+        
+        println!("🎯 Final symphonia result: {:?}", result);
+        Some(result)
     }
 
     /// Get audio format info from filename extension
@@ -193,6 +229,7 @@ impl AudioMetadataExtractor {
 }
 
 /// Technical audio properties extracted from file header
+#[derive(Debug)]
 struct AudioProperties {
     bitrate: Option<u32>,
     sample_rate: Option<u32>,

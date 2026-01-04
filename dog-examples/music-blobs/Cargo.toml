@@ -11,10 +11,10 @@ dog-typedb = { path = "../../dog-typedb" }
 dog-blob = { path = "../../dog-blob" }
 
 # Web framework
-axum = { version = "0.7", features = ["multipart"] }
+axum = { version = "0.8.8", features = ["multipart"] }
 tokio = { version = "1.0", features = ["full"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "fs"] }
+tower = "0.5.2"
+tower-http = { version = "0.6.8", features = ["cors", "fs"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -27,6 +27,7 @@ async-trait = "0.1"
 
 # Audio metadata
 id3 = "1.0"
+symphonia = { version = "0.5", features = ["all"] }
 async-stream = "0.3"
 
 # AWS SDK for RustFS (S3-compatible)
@@ -38,7 +39,7 @@ aws-credential-types = "1.1.7"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0"
-base64 = "0.21"
+base64 = "0.22.1"
 
 # Multipart form data parsing
 multer = "3.0"
