@@ -239,45 +239,6 @@ impl RustFsAdapter {
         })
     }
 
-    pub async fn download(&self, data: Value) -> Result<Value> {
-        let ctx = Self::create_default_context();
-        
-        // Extract key from request data
-        let key = data.get("key")
-            .and_then(|k| k.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in download request"))?;
-            
-        println!("📥 Starting download for key: {}", key);
-        
-        // Extract blob ID from the key (last part after the last slash)
-        let blob_id_str = key.split('/').last().unwrap_or(key);
-        let blob_id = dog_blob::BlobId(blob_id_str.to_string());
-        
-        println!("📥 Extracted blob ID: {} from key: {}", blob_id_str, key);
-        
-        // Use the adapter's open method to get the blob content
-        match self.adapter.open(ctx, blob_id, None).await {
-            Ok(opened_blob) => {
-                println!("📥 Opened blob - Size: {} bytes", opened_blob.content_length());
-                
-                // For now, return a simple response that indicates the blob is available
-                // The frontend will need to handle this differently since we can't easily 
-                // extract the raw bytes from OpenedBlob without more complex stream handling
-                Ok(serde_json::json!({
-                    "status": "downloaded", 
-                    "key": key,
-                    "size_bytes": opened_blob.content_length(),
-                    "content_type": "audio/mpeg",
-                    "blob_available": true,
-                    "message": "Use a different approach for audio playback"
-                }))
-            },
-            Err(e) => {
-                println!("❌ Failed to open blob for download: {}", e);
-                Err(anyhow::anyhow!("Failed to download audio file: {}", e))
-            }
-        }
-    }
 
     pub async fn stream(&self, data: Value) -> Result<Value> {
         let ctx = Self::create_default_context();

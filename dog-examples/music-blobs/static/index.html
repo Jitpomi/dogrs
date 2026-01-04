@@ -3,1003 +3,203 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MusicBlobs - Your Music Storage</title>
-    <link rel="stylesheet" href="https://unpkg.com/dropzone@5/dist/min/dropzone.min.css" type="text/css" />
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            color: #333;
-        }
-
-        .header {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            padding: 1rem 2rem;
-            box-shadow: 0 2px 20px rgba(0,0,0,0.1);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-
-        .header-content {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        .logo {
-            font-size: 1.8rem;
-            font-weight: bold;
-            color: #667eea;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .nav {
-            display: flex;
-            gap: 2rem;
-            align-items: center;
-        }
-
-        .nav-item {
-            color: #666;
-            text-decoration: none;
-            font-weight: 500;
-            transition: color 0.3s;
-        }
-
-        .nav-item:hover, .nav-item.active {
-            color: #667eea;
-        }
-
-        .main-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
-
-        .upload-section {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 2rem;
-            margin-bottom: 2rem;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-        }
-
-        .upload-area {
-            border: 3px dashed #667eea;
-            border-radius: 15px;
-            padding: 3rem;
-            text-align: center;
-            transition: all 0.3s;
-            cursor: pointer;
-            background: rgba(102, 126, 234, 0.05);
-        }
-
-        .upload-area:hover {
-            border-color: #764ba2;
-            background: rgba(118, 75, 162, 0.1);
-        }
-
-        .upload-area.dragover {
-            border-color: #28a745;
-            background: rgba(40, 167, 69, 0.1);
-        }
-
-        .upload-icon {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-            color: #667eea;
-        }
-
-        .upload-text {
-            font-size: 1.2rem;
-            margin-bottom: 0.5rem;
-            color: #333;
-        }
-
-        .upload-subtext {
-            color: #666;
-            font-size: 0.9rem;
-        }
-
-        .file-input {
-            display: none;
-        }
-
-        .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 0.8rem 2rem;
-            border-radius: 25px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            margin: 1rem 0.5rem;
-        }
-
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
-        }
-
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .playlist-section {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 2rem;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-        }
-
-        .section-title {
-            font-size: 1.5rem;
-            font-weight: bold;
-            margin-bottom: 1.5rem;
-            color: #333;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .music-item {
-            display: flex;
-            align-items: center;
-            padding: 1rem;
-            border-radius: 10px;
-            margin-bottom: 0.5rem;
-            transition: all 0.3s;
-            cursor: pointer;
-        }
-
-        .music-item:hover {
-            background: rgba(102, 126, 234, 0.1);
-        }
-
-        .music-cover {
-            width: 50px;
-            height: 50px;
-            border-radius: 8px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-            margin-right: 1rem;
-        }
-
-        .music-info {
-            flex: 1;
-        }
-
-        .music-title {
-            font-weight: 600;
-            margin-bottom: 0.2rem;
-        }
-
-        .music-artist {
-            color: #666;
-            font-size: 0.9rem;
-        }
-
-        .music-duration {
-            color: #999;
-            font-size: 0.9rem;
-        }
-
-        .player-controls {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-
-            .play-btn, .pause-btn, .download-btn, .stop-btn, .delete-btn {
-                background: none;
-                border: none;
-                font-size: 20px;
-                cursor: pointer;
-                padding: 8px;
-                border-radius: 50%;
-                transition: background-color 0.2s;
-                margin-left: 4px;
-            }
-
-            .hidden {
-                display: none !important;
-                visibility: hidden !important;
-            }
-            
-            .visible {
-                display: inline-block !important;
-                visibility: visible !important;
-            }
-
-            .play-btn:hover, .pause-btn:hover, .download-btn:hover, .stop-btn:hover, .delete-btn:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
-
-            .download-btn, .stop-btn, .delete-btn {
-                font-size: 18px;
-            }
-
-            .stop-btn:hover {
-                background-color: rgba(255, 165, 0, 0.2);
-            }
-
-            .delete-btn:hover {
-                background-color: rgba(255, 0, 0, 0.2);
-            }
-
-        .progress-container {
-            background: #e0e0e0;
-            border-radius: 2px;
-            overflow: hidden;
-        }
-
-        .progress {
-            height: 100%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            width: 0%;
-            transition: width 0.3s;
-        }
-
-        .status-message {
-            padding: 1rem;
-            border-radius: 10px;
-            margin: 1rem 0;
-            display: none;
-        }
-
-        .status-success {
-            background: rgba(40, 167, 69, 0.1);
-            color: #28a745;
-            border: 1px solid rgba(40, 167, 69, 0.3);
-        }
-
-        .status-error {
-            background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
-            border: 1px solid rgba(220, 53, 69, 0.3);
-        }
-
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 2rem;
-        }
-
-        .spinner {
-            width: 40px;
-            height: 40px;
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 1rem;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 3rem;
-            color: #666;
-        }
-
-        .empty-icon {
-            font-size: 4rem;
-            margin-bottom: 1rem;
-            opacity: 0.5;
-        }
-    </style>
+    <title>MusicBlobs - Royalty Free Music</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.esm.js" type="module"></script>
 </head>
 <body>
-    <header class="header">
-        <div class="header-content">
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
             <div class="logo">
-                🎵 MusicBlobs
+                <i class="fas fa-music"></i>
+                <span>MusicBlobs</span>
             </div>
-            <nav class="nav">
-                <a href="#" class="nav-item active">Library</a>
-                <a href="#" class="nav-item">Upload</a>
-                <a href="#" class="nav-item">Playlists</a>
-                <a href="http://localhost:9001" target="_blank" class="nav-item">Storage Console</a>
+            
+            <nav class="nav-menu">
+                <div class="nav-section">
+                    <h3>Browse</h3>
+                    <ul>
+                        <li class="active"><i class="fas fa-home"></i> Home</li>
+                        <li><i class="fas fa-music"></i> All Music</li>
+                        <li><i class="fas fa-microphone"></i> AI Voiceover</li>
+                    </ul>
+                </div>
+                
+                <div class="nav-section">
+                    <h3>Library</h3>
+                    <ul>
+                        <li><i class="fas fa-heart"></i> Favorites</li>
+                        <li><i class="fas fa-download"></i> Downloads</li>
+                        <li><i class="fas fa-list"></i> Playlists</li>
+                    </ul>
+                </div>
             </nav>
-        </div>
-    </header>
+        </aside>
 
-    <div class="main-container">
-        <section class="upload-section">
-            <h2 class="section-title">
-                📤 Upload Music
-            </h2>
-            
-            <div id="musicDropzone" class="dropzone">
-                <div class="dz-message">
-                    <div class="upload-icon">🎵</div>
-                    <div class="upload-text">Drop your music files here</div>
-                    <div class="upload-subtext">or click to browse (MP3, WAV, FLAC supported)</div>
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="header">
+                <div class="header-left">
+                    <button class="mobile-menu-btn" id="mobileMenuBtn">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                </div>
+                
+                <div class="search-container">
+                    <i class="fas fa-search"></i>
+                    <input type="text" placeholder="Search music, artists, genres..." class="search-input">
+                </div>
+                
+                <div class="header-actions">
+                    <button class="upload-btn">
+                        <i class="fas fa-upload"></i>
+                        Upload Music
+                    </button>
+                    <div class="user-menu">
+                        <i class="fas fa-user-circle"></i>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Filters -->
+            <div class="filters-section">
+                <div class="filter-group">
+                    <label>Genre</label>
+                    <select class="filter-select">
+                        <option>All Genres</option>
+                        <option>Electronic</option>
+                        <option>Hip Hop</option>
+                        <option>Pop</option>
+                        <option>Rock</option>
+                        <option>Classical</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label>Mood</label>
+                    <select class="filter-select">
+                        <option>All Moods</option>
+                        <option>Upbeat</option>
+                        <option>Calm</option>
+                        <option>Dramatic</option>
+                        <option>Happy</option>
+                        <option>Sad</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label>Duration</label>
+                    <select class="filter-select">
+                        <option>Any Duration</option>
+                        <option>0-30 seconds</option>
+                        <option>30-60 seconds</option>
+                        <option>1-3 minutes</option>
+                        <option>3+ minutes</option>
+                    </select>
+                </div>
+                
+                <div class="view-options">
+                    <button class="view-btn active" data-view="list">
+                        <i class="fas fa-list"></i>
+                    </button>
+                    <button class="view-btn" data-view="grid">
+                        <i class="fas fa-th"></i>
+                    </button>
                 </div>
             </div>
 
-            <div class="status-message" id="statusMessage"></div>
-        </section>
+            <!-- Music Library -->
+            <div class="music-library">
+                <div class="library-header">
+                    <h2>Your Music Library</h2>
+                    <div class="sort-options">
+                        <label>Sort by:</label>
+                        <select class="sort-select">
+                            <option>Recently Added</option>
+                            <option>Name A-Z</option>
+                            <option>Duration</option>
+                            <option>Size</option>
+                        </select>
+                    </div>
+                </div>
 
-        <section class="playlist-section">
-            <h2 class="section-title">
-                🎶 Your Music Library
-            </h2>
-            
-            <div id="musicList">
-                <div class="empty-state">
-                    <div class="empty-icon">🎵</div>
-                    <div>No music uploaded yet</div>
-                    <div style="margin-top: 0.5rem; font-size: 0.9rem;">Upload some tracks to get started!</div>
+                <!-- Track List -->
+                <div class="track-list" id="trackList">
+                    <!-- Tracks will be populated by JavaScript -->
                 </div>
             </div>
-        </section>
+
+            <!-- Upload Modal -->
+            <div class="upload-modal" id="uploadModal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>Upload Music</h3>
+                        <button class="close-btn" onclick="closeUploadModal()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="upload-area" id="uploadArea">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <h4>Drop your music files here</h4>
+                        <p>or click to browse (MP3, WAV, FLAC supported)</p>
+                        <input type="file" id="fileInput" multiple accept="audio/*" style="display: none;">
+                    </div>
+                </div>
+            </div>
+        </main>
     </div>
 
-    <script src="https://unpkg.com/dropzone@5/dist/min/dropzone.min.js"></script>
-    <script>
-        // Disable Dropzone auto-discovery
-        Dropzone.autoDiscover = false;
+    <!-- Audio Player -->
+    <div class="audio-player" id="audioPlayer" style="display: none;">
+        <div class="player-track-info">
+            <div class="track-artwork">
+                <img id="playerArtwork" src="" alt="Track artwork">
+            </div>
+            <div class="track-details">
+                <div class="track-title" id="playerTitle">Track Title</div>
+                <div class="track-artist" id="playerArtist">Artist Name</div>
+            </div>
+        </div>
         
-        let musicLibrary = [];
-        const statusMessage = document.getElementById('statusMessage');
-
-        // Initialize Dropzone with native chunking
-        const musicDropzone = new Dropzone("#musicDropzone", {
-            url: "/music",
-            method: "POST",
-            paramName: "file",
-            headers: {
-                "x-service-method": "upload"
-            },
-            acceptedFiles: "audio/*",
-            maxFilesize: 1024, // 1GB max
-            timeout: 0, // no XHR timeout
-            
-            // Native Dropzone chunking - the proper way!
-            chunking: true,
-            forceChunking: true,
-            chunkSize: 5 * 1024 * 1024, // 5MB chunks
-            retryChunks: true,
-            retryChunksLimit: 3,
-            parallelChunkUploads: false, // sequential chunks for simplicity
-            
-            parallelUploads: 1,
-            uploadMultiple: false,
-            addRemoveLinks: true,
-            
-            dictDefaultMessage: `
-                <div class="upload-icon">🎵</div>
-                <div class="upload-text">Drop your music files here</div>
-                <div class="upload-subtext">or click to browse (MP3, WAV, FLAC supported)</div>
-            `,
-            
-            init: function() {
-                this.on("addedfile", function(file) {
-                    console.log(`📤 File added: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`);
-                    showStatus(`⏳ Starting upload of ${file.name}...`, 'info');
-                });
-                
-                this.on("sending", function(file, xhr, formData) {
-                    console.log(`📤 Sending chunk for: ${file.name}`);
-                });
-                
-                this.on("uploadprogress", function(file, progress) {
-                    showStatus(`⏳ Uploading ${file.name}: ${Math.round(progress)}%`, 'info');
-                });
-                
-                this.on("success", function(file, response) {
-                    console.log(`✅ Chunk/File uploaded:`, response);
-                });
-                
-                this.on("error", function(file, errorMessage) {
-                    console.error(`❌ Upload failed:`, errorMessage);
-                    showStatus(`❌ Upload failed: ${errorMessage}`, 'error');
-                });
-                
-                this.on("complete", function(file) {
-                    if (file.status === "success") {
-                        showStatus(`✅ ${file.name} uploaded successfully!`, 'success');
-                        
-                        // Refresh the music library from the backend to get the latest files with metadata
-                        loadMusicLibrary();
-                        
-                        // Remove file from dropzone after completion
-                        setTimeout(() => {
-                            this.removeFile(file);
-                        }, 2000);
-                    }
-                });
-            }
-        });
-
-        // Utility functions
-        function showStatus(message, type) {
-            statusMessage.textContent = message;
-            statusMessage.className = `status-message ${type}`;
-            statusMessage.style.display = 'block';
-            
-            if (type === 'success' || type === 'error') {
-                setTimeout(() => {
-                    statusMessage.style.display = 'none';
-                }, 5000);
-            }
-        }
+        <div class="player-controls">
+            <button class="control-btn" id="prevBtn">
+                <i class="fas fa-step-backward"></i>
+            </button>
+            <button class="control-btn play-pause-btn" id="playPauseBtn">
+                <i class="fas fa-play"></i>
+            </button>
+            <button class="control-btn" id="nextBtn">
+                <i class="fas fa-step-forward"></i>
+            </button>
+        </div>
         
-        function updateMusicLibrary() {
-            const musicList = document.getElementById('musicList');
-            
-            if (musicLibrary.length === 0) {
-                musicList.innerHTML = `
-                    <div class="empty-state">
-                        <div class="empty-icon">🎵</div>
-                        <div>No music uploaded yet</div>
-                        <div style="margin-top: 0.5rem; font-size: 0.9rem;">Upload some tracks to get started!</div>
-                    </div>
-                `;
-            } else {
-                musicList.innerHTML = musicLibrary.map(track => {
-                    const title = track.metadata?.title || track.filename || 'Unknown Track';
-                    const artist = track.metadata?.artist || 'Unknown Artist';
-                    const sizeInMB = (track.size / 1024 / 1024).toFixed(1);
-                    const duration = track.metadata?.duration ? `${Math.floor(track.metadata.duration / 60)}:${(track.metadata.duration % 60).toString().padStart(2, '0')}` : '--:--';
-                    
-                    // Use album art if available, otherwise fallback to letter cover
-                    const albumArt = track.metadata?.album_art_url || track.metadata?.thumbnail_url;
-                    const coverContent = albumArt 
-                        ? `<img src="${albumArt}" alt="Album Art" style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px;">`
-                        : title.charAt(0).toUpperCase();
-                    
-                    return `
-                        <div class="music-item">
-                            <div class="music-cover">${coverContent}</div>
-                            <div class="music-info">
-                                <div class="music-title">${title}</div>
-                                <div class="music-artist">${artist} • ${sizeInMB} MB</div>
-                            </div>
-                            <div class="music-duration">${duration}</div>
-                            <div class="player-controls">
-                                <button class="play-btn" onclick="playTrack('${track.id}')">▶️</button>
-                                <button class="pause-btn" onclick="pauseTrack('${track.id}')" style="display: none;">⏸️</button>
-                                <button class="download-btn" onclick="downloadTrack('${track.id}', '${title}')">⬇️</button>
-                                <button class="stop-btn" onclick="stopOperation('${track.id}', '${title}')" style="display: none;">⏹️</button>
-                                <button class="delete-btn" onclick="deleteTrack('${track.id}', '${title}')">🗑️</button>
-                            </div>
-                        </div>
-                    `;
-                }).join('');
-            }
-        }
-
-        async function loadMusicLibrary() {
-            const musicList = document.getElementById('musicList');
-            
-            try {
-                // Fetch music library from the backend find endpoint
-                const response = await fetch('/music', {
-                    method: 'GET'
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                const musicFiles = await response.json();
-                console.log('📚 Loaded music library:', musicFiles);
-                
-                // Update the global musicLibrary array with fetched data
-                musicLibrary.length = 0; // Clear existing array
-                musicLibrary.push(...musicFiles.map(file => ({
-                    id: file.key,
-                    filename: file.filename || 'Unknown Track',
-                    size: file.size_bytes,
-                    type: file.content_type,
-                    metadata: file.metadata,
-                    etag: file.etag,
-                    last_modified: file.last_modified
-                })));
-                
-                updateMusicLibrary();
-                
-            } catch (error) {
-                console.error('❌ Failed to load music library:', error);
-                musicList.innerHTML = `
-                    <div class="empty-state">
-                        <div class="empty-icon">⚠️</div>
-                        <div>Failed to load music library</div>
-                        <div style="margin-top: 0.5rem; font-size: 0.9rem; color: #e74c3c;">${error.message}</div>
-                    </div>
-                `;
-            }
-        }
-
-        // Audio player state
-        let currentAudio = null;
-        let currentTrackId = null;
-        let isPlaying = false;
-        let isPaused = false;
-        let pausedPosition = 0;
-        let isStopping = false; // Flag to prevent event listener interference during stop
-
-        async function playTrack(trackId) {
-            console.log('🎵 Playing track:', trackId);
-            
-            try {
-                // If this is the same track and it's paused, just resume
-                if (currentTrackId === trackId && isPaused && currentAudio) {
-                    console.log('🎵 Resuming paused track from position:', pausedPosition);
-                    
-                    // Call backend resume method
-                    const resumeResponse = await fetch('/music', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'x-service-method': 'resume'
-                        },
-                        body: JSON.stringify({ key: trackId })
-                    });
-
-                    if (resumeResponse.ok) {
-                        const resumeInfo = await resumeResponse.json();
-                        console.log('🎵 Backend resume response:', resumeInfo);
-                    }
-
-                    // Resume audio from saved position
-                    currentAudio.currentTime = pausedPosition;
-                    currentAudio.play();
-                    isPlaying = true;
-                    isPaused = false;
-                    updatePlayPauseButtons(trackId, true);
-                    showStatus('▶️ Resumed playback', 'success');
-                    return;
-                }
-                
-                // Stop current track if playing a different one
-                if (currentAudio && currentTrackId !== trackId) {
-                    currentAudio.pause();
-                    currentAudio = null;
-                    updatePlayButton(currentTrackId, false);
-                }
-                
-                // Get streaming info from backend for new track
-                const streamResponse = await fetch('/music', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-service-method': 'stream'
-                    },
-                    body: JSON.stringify({ key: trackId })
-                });
-                
-                if (!streamResponse.ok) {
-                    throw new Error(`Failed to start stream: ${streamResponse.status}`);
-                }
-                
-                const streamInfo = await streamResponse.json();
-                console.log('🎵 Stream info:', streamInfo);
-                
-                // Create audio element and start playback
-                currentAudio = new Audio();
-                currentTrackId = trackId;
-                
-                // Set up audio event listeners
-                currentAudio.addEventListener('loadstart', () => {
-                    console.log('🎵 Loading audio...');
-                    showStatus('🎵 Loading track...', 'info');
-                });
-                
-                currentAudio.addEventListener('canplay', () => {
-                    console.log('🎵 Audio ready to play');
-                    showStatus('🎵 Playing track', 'success');
-                    updatePlayPauseButtons(trackId, true);
-                });
-                
-                currentAudio.addEventListener('play', () => {
-                    isPlaying = true;
-                    updatePlayPauseButtons(trackId, true);
-                });
-                
-                currentAudio.addEventListener('pause', () => {
-                    console.log('🎵 Audio pause event triggered, isStopping:', isStopping);
-                    if (isStopping) {
-                        console.log('🚫 Ignoring pause event during stop operation');
-                        return; // Don't interfere during stop operation
-                    }
-                    isPlaying = false;
-                    console.log('⏸️ Pause event calling updatePlayPauseButtons');
-                    updatePlayPauseButtons(trackId, false);
-                });
-                
-                currentAudio.addEventListener('ended', () => {
-                    isPlaying = false;
-                    currentAudio = null;
-                    currentTrackId = null;
-                    updatePlayPauseButtons(trackId, false);
-                    showStatus('🎵 Track finished', 'info');
-                });
-                
-                currentAudio.addEventListener('error', (e) => {
-                    console.error('🎵 Audio error:', e);
-                    showStatus('❌ Playback error', 'error');
-                    updatePlayPauseButtons(trackId, false);
-                });
-                
-                // Handle the stream response
-                const track = musicLibrary.find(t => t.id === trackId);
-                if (track) {
-                    console.log('🎵 Stream response:', streamInfo);
-                    
-                    if (streamInfo.audio_data && streamInfo.audio_data.length > 0) {
-                        // We have actual audio data - convert base64 to blob and play
-                        console.log('🎵 Converting base64 audio data to blob for playback');
-                        
-                        const binaryString = atob(streamInfo.audio_data);
-                        const bytes = new Uint8Array(binaryString.length);
-                        
-                        for (let i = 0; i < binaryString.length; i++) {
-                            bytes[i] = binaryString.charCodeAt(i);
-                        }
-                        
-                        const audioBlob = new Blob([bytes], { type: streamInfo.content_type || 'audio/mpeg' });
-                        const audioUrl = URL.createObjectURL(audioBlob);
-                        
-                        currentAudio.src = audioUrl;
-                        currentAudio.play();
-                        
-                        console.log('🎵 Audio blob created and playback started');
-                    } else if (streamInfo.ready) {
-                        // Stream is ready but no audio data yet - show status
-                        showStatus('🎵 Audio stream ready - content reading implementation needed', 'info');
-                        updatePlayButton(trackId, false);
-                        console.log('🎵 Stream ready but no audio content available yet');
-                    } else {
-                        throw new Error('No audio data available in stream response');
-                    }
-                } else {
-                    throw new Error('Track not found in library');
-                }
-                
-            } catch (error) {
-                console.error('❌ Failed to play track:', error);
-                showStatus(`❌ Failed to play track: ${error.message}`, 'error');
-                updatePlayButton(trackId, false);
-            }
-        }
+        <div class="player-progress">
+            <span class="time-current" id="currentTime">0:00</span>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+                <div class="progress-handle" id="progressHandle"></div>
+            </div>
+            <span class="time-total" id="totalTime">0:00</span>
+        </div>
         
-        
-        function updatePlayButton(trackId, playing) {
-            const playBtn = document.querySelector(`button[onclick="playTrack('${trackId}')"]`);
-            if (playBtn) {
-                playBtn.textContent = playing ? '⏸️' : '▶️';
-                playBtn.onclick = playing ? () => pauseTrack(trackId) : () => playTrack(trackId);
-            }
-        }
+        <div class="player-actions">
+            <button class="action-btn" id="volumeBtn">
+                <i class="fas fa-volume-up"></i>
+            </button>
+            <button class="action-btn" id="downloadBtn">
+                <i class="fas fa-download"></i>
+            </button>
+            <button class="action-btn" id="favoriteBtn">
+                <i class="far fa-heart"></i>
+            </button>
+        </div>
+    </div>
 
-        function updatePlayPauseButtons(trackId, playing) {
-            console.log(`🔄 updatePlayPauseButtons called for trackId: ${trackId}, playing: ${playing}`);
-            
-            // Find the track container first, then find buttons within it
-            const playBtn = document.querySelector(`button[onclick="playTrack('${trackId}')"]`);
-            if (!playBtn) {
-                console.log(`❌ Could not find play button for trackId: ${trackId}`);
-                return; // If we can't find the play button, exit
-            }
-            
-            const trackContainer = playBtn.closest('.music-item');
-            if (!trackContainer) {
-                console.log(`❌ Could not find track container for trackId: ${trackId}`);
-                return; // If we can't find the container, exit
-            }
-            
-            const pauseBtn = trackContainer.querySelector(`button[onclick="pauseTrack('${trackId}')"]`);
-            const stopBtn = trackContainer.querySelector('.stop-btn');
-            const deleteBtn = trackContainer.querySelector('.delete-btn');
-            
-            console.log(`🔍 Found buttons - play: ${!!playBtn}, pause: ${!!pauseBtn}, stop: ${!!stopBtn}, delete: ${!!deleteBtn}`);
-            
-            if (playing) {
-                // Playing state: show pause + stop buttons, hide play + delete
-                console.log('🎵 Setting to playing state');
-                if (playBtn) {
-                    playBtn.classList.add('hidden');
-                    playBtn.classList.remove('visible');
-                }
-                if (pauseBtn) {
-                    pauseBtn.classList.remove('hidden');
-                    pauseBtn.classList.add('visible');
-                }
-                if (stopBtn) {
-                    stopBtn.classList.remove('hidden');
-                    stopBtn.classList.add('visible');
-                }
-                if (deleteBtn) {
-                    deleteBtn.classList.add('hidden');
-                    deleteBtn.classList.remove('visible');
-                }
-            } else {
-                // Not playing state: show play + delete buttons, hide pause + stop
-                console.log('⏹️ Setting to stopped state');
-                if (playBtn) {
-                    console.log('🔧 Showing play button');
-                    playBtn.classList.remove('hidden');
-                    playBtn.classList.add('visible');
-                    console.log('Play button classes:', playBtn.className);
-                }
-                if (pauseBtn) {
-                    console.log('🔧 Hiding pause button');
-                    pauseBtn.classList.add('hidden');
-                    pauseBtn.classList.remove('visible');
-                    console.log('Pause button classes:', pauseBtn.className);
-                }
-                if (stopBtn) {
-                    console.log('🔧 Hiding stop button');
-                    stopBtn.classList.add('hidden');
-                    stopBtn.classList.remove('visible');
-                    console.log('Stop button classes:', stopBtn.className);
-                }
-                if (deleteBtn) {
-                    console.log('🔧 Showing delete button');
-                    deleteBtn.classList.remove('hidden');
-                    deleteBtn.classList.add('visible');
-                    console.log('Delete button classes:', deleteBtn.className);
-                }
-            }
-            
-            console.log('✅ Button visibility updated');
-        }
-
-        async function stopOperation(trackId, trackTitle) {
-            console.log('⏹️ Stopping operation for track:', trackId);
-            
-            // Prevent multiple simultaneous stop operations
-            if (isStopping) {
-                console.log('🚫 Stop operation already in progress, ignoring');
-                return;
-            }
-            
-            showStatus('⏹️ Stopping operation...', 'info');
-
-            try {
-                // Set stopping flag immediately to prevent interference
-                isStopping = true;
-                
-                // Call backend cancel method for ongoing operations
-                const response = await fetch('/music', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-service-method': 'cancel'
-                    },
-                    body: JSON.stringify({ key: trackId })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Failed to stop: ${response.status}`);
-                }
-
-                const stopInfo = await response.json();
-                console.log('⏹️ Backend stop response:', stopInfo);
-
-                // Actually stop the frontend audio playback and reset everything
-                if (currentAudio && currentTrackId === trackId) {
-                    // Store reference to audio
-                    const audioToStop = currentAudio;
-                    
-                    // Clear state first
-                    currentAudio = null;
-                    currentTrackId = null;
-                    isPlaying = false;
-                    isPaused = false;
-                    pausedPosition = 0;
-                    
-                    // Now stop the audio
-                    audioToStop.pause();
-                    audioToStop.currentTime = 0;
-                }
-
-                // Update UI buttons to reflect stopped state
-                updatePlayPauseButtons(trackId, false);
-                showStatus(`⏹️ ${stopInfo.message}`, 'warning');
-
-            } catch (error) {
-                console.error('❌ Failed to stop operation:', error);
-                showStatus(`❌ Failed to stop: ${error.message}`, 'error');
-            } finally {
-                // Always reset stopping flag after a delay
-                setTimeout(() => {
-                    isStopping = false;
-                }, 200);
-            }
-        }
-
-        async function deleteTrack(trackId, trackTitle) {
-            if (!confirm(`Are you sure you want to delete "${trackTitle}"? This cannot be undone.`)) {
-                return;
-            }
-
-            console.log('🗑️ Deleting track:', trackId);
-            showStatus('🗑️ Deleting track...', 'info');
-
-            try {
-                // Use DELETE HTTP method to delete the file
-                const response = await fetch('/music', {
-                    method: 'DELETE',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ key: trackId })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Failed to delete: ${response.status}`);
-                }
-
-                const deleteInfo = await response.json();
-                console.log('🗑️ Backend delete response:', deleteInfo);
-
-                // Stop playback if this track is playing
-                if (currentAudio && currentTrackId === trackId) {
-                    currentAudio.pause();
-                    currentAudio = null;
-                    currentTrackId = null;
-                }
-
-                // Refresh the music library to remove the deleted track
-                await loadMusicLibrary();
-
-                showStatus(`🗑️ ${deleteInfo.message}`, deleteInfo.deleted ? 'success' : 'warning');
-
-            } catch (error) {
-                console.error('❌ Failed to delete track:', error);
-                showStatus(`❌ Failed to delete: ${error.message}`, 'error');
-            }
-        }
-        
-        async function pauseTrack(trackId) {
-            console.log('⏸️ Pausing track:', trackId);
-            
-            try {
-                // Save current position before pausing
-                if (currentAudio && currentTrackId === trackId) {
-                    pausedPosition = currentAudio.currentTime;
-                    console.log('⏸️ Saving position:', pausedPosition);
-                }
-
-                // Call backend pause method with current position
-                const response = await fetch('/music', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-service-method': 'pause'
-                    },
-                    body: JSON.stringify({ 
-                        key: trackId,
-                        position: Math.floor(pausedPosition)
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Failed to pause: ${response.status}`);
-                }
-
-                const pauseInfo = await response.json();
-                console.log('⏸️ Backend pause response:', pauseInfo);
-
-                // Pause the frontend audio
-                if (currentAudio && currentTrackId === trackId) {
-                    currentAudio.pause();
-                    isPlaying = false;
-                    isPaused = true;
-                }
-
-                // Update UI
-                updatePlayPauseButtons(trackId, false);
-                showStatus(`⏸️ Paused at ${Math.floor(pausedPosition)}s (Sessions: ${pauseInfo.active_sessions})`, 'info');
-
-            } catch (error) {
-                console.error('❌ Failed to pause track:', error);
-                showStatus(`❌ Failed to pause: ${error.message}`, 'error');
-                
-                // Fallback to client-side pause
-                if (currentAudio && currentTrackId === trackId) {
-                    pausedPosition = currentAudio.currentTime;
-                    currentAudio.pause();
-                    isPlaying = false;
-                    isPaused = true;
-                    updatePlayPauseButtons(trackId, false);
-                }
-            }
-        }
-
-
-        async function downloadTrack(trackId, trackTitle) {
-            console.log('📥 Starting download for track:', trackId);
-            showStatus('📥 Starting download...', 'info');
-
-            try {
-                // Call the stream method to get the audio content
-                const response = await fetch('/music', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-service-method': 'stream'
-                    },
-                    body: JSON.stringify({ key: trackId })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Failed to get audio content: ${response.status}`);
-                }
-
-                const streamInfo = await response.json();
-                console.log('📥 Stream response for download:', streamInfo);
-
-                if (streamInfo.audio_data && streamInfo.audio_data.length > 0) {
-                    // Convert base64 to blob
-                    const binaryString = atob(streamInfo.audio_data);
-                    const bytes = new Uint8Array(binaryString.length);
-                    
-                    for (let i = 0; i < binaryString.length; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                    }
-                    
-                    const audioBlob = new Blob([bytes], { type: streamInfo.content_type || 'audio/mpeg' });
-                    
-                    // Create download link and trigger download
-                    const downloadUrl = URL.createObjectURL(audioBlob);
-                    const downloadLink = document.createElement('a');
-                    downloadLink.href = downloadUrl;
-                    downloadLink.download = `${trackTitle}.mp3`;
-                    
-                    // Trigger download
-                    document.body.appendChild(downloadLink);
-                    downloadLink.click();
-                    document.body.removeChild(downloadLink);
-                    
-                    // Clean up the object URL
-                    URL.revokeObjectURL(downloadUrl);
-                    
-                    showStatus(`📥 Downloaded: ${trackTitle}`, 'success');
-                    console.log('📥 Download completed successfully');
-                } else {
-                    throw new Error('No audio data available for download');
-                }
-
-            } catch (error) {
-                console.error('❌ Failed to download track:', error);
-                showStatus(`❌ Download failed: ${error.message}`, 'error');
-            }
-        }
-
-        // Initialize the app
-        loadMusicLibrary();
-    </script>
+    <script src="app.js" type="module"></script>
 </body>
 </html>

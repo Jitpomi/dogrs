@@ -10,7 +10,6 @@ pub fn capabilities() -> ServiceCapabilities {
         ServiceMethodKind::Custom("upload"),
         ServiceMethodKind::Custom("chunk"),
         ServiceMethodKind::Custom("complete"),
-        ServiceMethodKind::Custom("download"),
         ServiceMethodKind::Custom("stream"),
         ServiceMethodKind::Custom("pause"),
         ServiceMethodKind::Custom("resume"),

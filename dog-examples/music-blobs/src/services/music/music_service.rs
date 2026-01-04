@@ -59,8 +59,7 @@ impl DogService<Value, MusicParams> for MusicService {
             "upload" => {
                 let data = data.ok_or_else(|| anyhow::anyhow!("Upload requires data"))?;
                 self.adapter.upload(data).await
-            }
-            "download" => self.adapter.download(data.unwrap()).await,
+            },
             "stream" => self.adapter.stream(data.unwrap()).await,
             "pause" => self.adapter.pause(data.unwrap()).await,
             "resume" => self.adapter.resume(data.unwrap()).await,
