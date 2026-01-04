@@ -1,28 +1,27 @@
+use async_stream;
 use async_trait::async_trait;
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{primitives::ByteStream as AwsByteStream, Client};
-use base64::{Engine as _, engine::general_purpose};
 use futures::StreamExt;
 use std::env;
 
-use dog_blob::{
+use crate::{
     BlobError, BlobInfo, BlobMetadata, BlobResult, BlobStore, ByteRange, ByteStream, GetResult, ObjectHead, PutResult,
     StoreCapabilities,
 };
-use dog_blob::store::ResolvedRange;
 
-/// RustFS configuration from environment variables
+/// S3-compatible configuration from environment variables
 #[derive(Debug)]
-struct RustFSConfig {
-    region: String,
-    access_key_id: String,
-    secret_access_key: String,
-    endpoint_url: String,
+pub struct S3Config {
+    pub region: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub endpoint_url: String,
 }
 
-impl RustFSConfig {
-    fn from_env() -> BlobResult<Self> {
+impl S3Config {
+    pub fn from_env() -> BlobResult<Self> {
         fn get_env(key: &str) -> BlobResult<String> {
             env::var(key).map_err(|_| BlobError::invalid(format!("{} environment variable required", key)))
         }
@@ -36,27 +35,32 @@ impl RustFSConfig {
     }
 }
 
-/// Production RustFS store implementation using AWS SDK (S3-compatible)
+/// Generic S3-compatible blob store implementation
 #[derive(Clone)]
-pub struct RustFSStore {
+pub struct S3CompatibleStore {
     client: Client,
     bucket: String,
 }
 
-impl RustFSStore {
+impl S3CompatibleStore {
     pub async fn new(bucket: String) -> BlobResult<Self> {
-        let config = RustFSConfig::from_env()?;
+        let config = S3Config::from_env()?;
         let client = Self::create_client(config).await;
         Ok(Self { client, bucket })
     }
 
-    async fn create_client(config: RustFSConfig) -> Client {
+    pub async fn with_config(bucket: String, config: S3Config) -> Self {
+        let client = Self::create_client(config).await;
+        Self { client, bucket }
+    }
+
+    async fn create_client(config: S3Config) -> Client {
         let credentials = Credentials::new(
             config.access_key_id,
             config.secret_access_key,
             None,
             None,
-            "rustfs",
+            "s3-compatible",
         );
 
         let aws_config = aws_config::defaults(BehaviorVersion::latest())
@@ -68,7 +72,7 @@ impl RustFSStore {
 
         Client::from_conf(
             aws_sdk_s3::config::Builder::from(&aws_config)
-                .force_path_style(true) // Required for RustFS compatibility
+                .force_path_style(true) // Required for S3-compatible services
                 .build(),
         )
     }
@@ -89,8 +93,8 @@ impl RustFSStore {
         }
     }
 
-    fn resolve_range(&self, range: &ByteRange, content_length: u64) -> ResolvedRange {
-        ResolvedRange {
+    fn resolve_range(&self, range: &ByteRange, content_length: u64) -> crate::store::ResolvedRange {
+        crate::store::ResolvedRange {
             start: range.start,
             end: range.end.unwrap_or(content_length.saturating_sub(1)),
             total_size: content_length,
@@ -102,7 +106,7 @@ impl RustFSStore {
     }
 
     /// Add metadata fields to S3 put request
-    fn add_metadata_to_request(
+    pub fn add_metadata_to_request(
         mut request: aws_sdk_s3::operation::put_object::builders::PutObjectFluentBuilder,
         metadata: &BlobMetadata,
     ) -> aws_sdk_s3::operation::put_object::builders::PutObjectFluentBuilder {
@@ -130,146 +134,22 @@ impl RustFSStore {
         add_optional_metadata!(metadata.sample_rate, "sample_rate", to_string);
         add_optional_metadata!(metadata.channels, "channels", to_string);
         add_optional_metadata!(&metadata.encoding, "encoding");
-        
-        // Visual metadata
-        add_optional_metadata!(&metadata.album_art_url, "album_art_url");
         add_optional_metadata!(&metadata.thumbnail_url, "thumbnail_url");
+        add_optional_metadata!(&metadata.album_art_url, "album_art_url");
+        add_optional_metadata!(metadata.latitude, "latitude", to_string);
+        add_optional_metadata!(metadata.longitude, "longitude", to_string);
+        add_optional_metadata!(&metadata.location_name, "location_name");
+
+        // Add custom attributes
+        for (key, value) in &metadata.custom {
+            request = request.metadata(key, value);
+        }
 
         request
     }
 
-    /// Get audio format info from filename extension
-    fn get_audio_format_info(filename_lower: &str) -> Option<(String, String)> {
-        if filename_lower.ends_with(".flac") {
-            Some(("FLAC".to_string(), "audio/flac".to_string()))
-        } else if filename_lower.ends_with(".wav") {
-            Some(("WAV".to_string(), "audio/wav".to_string()))
-        } else if filename_lower.ends_with(".aac") {
-            Some(("AAC".to_string(), "audio/aac".to_string()))
-        } else if filename_lower.ends_with(".ogg") {
-            Some(("OGG".to_string(), "audio/ogg".to_string()))
-        } else if filename_lower.ends_with(".m4a") {
-            Some(("M4A".to_string(), "audio/mp4".to_string()))
-        } else {
-            None
-        }
-    }
-
-    /// Extract metadata from file content (ID3 tags, etc.)
-    fn extract_file_metadata(data: &[u8], filename: Option<&str>) -> Option<BlobMetadata> {
-        let mut metadata = BlobMetadata::default();
-        let mut has_metadata = false;
-
-        // Determine file type from filename extension
-        if let Some(filename) = filename {
-            let filename_lower = filename.to_lowercase();
-            
-            if filename_lower.ends_with(".mp3") {
-                // Extract ID3 tags from MP3 files
-                if let Ok(tag) = id3::Tag::read_from2(std::io::Cursor::new(data)) {
-                    println!("🎵 Found ID3 tag with {} frames", tag.frames().count());
-                    // Extract basic metadata using frame iteration
-                    for frame in tag.frames() {
-                        println!("🔍 Processing frame: {}", frame.id());
-                        match frame.id() {
-                            "TIT2" => { // Title
-                                if let Some(text) = frame.content().text() {
-                                    metadata.title = Some(text.to_string());
-                                }
-                            },
-                            "TPE1" => { // Artist
-                                if let Some(text) = frame.content().text() {
-                                    metadata.artist = Some(text.to_string());
-                                }
-                            },
-                            "TALB" => { // Album
-                                if let Some(text) = frame.content().text() {
-                                    metadata.album = Some(text.to_string());
-                                }
-                            },
-                            "TCON" => { // Genre
-                                if let Some(text) = frame.content().text() {
-                                    metadata.genre = Some(text.to_string());
-                                }
-                            },
-                            "TYER" | "TDRC" => { // Year
-                                if let Some(text) = frame.content().text() {
-                                    metadata.year = text.chars().take(4).collect::<String>().parse().ok();
-                                }
-                            },
-                            "TLEN" => { // Duration in milliseconds
-                                if let Some(text) = frame.content().text() {
-                                    if let Ok(duration_ms) = text.parse::<u32>() {
-                                        metadata.duration = Some(duration_ms / 1000);
-                                    }
-                                }
-                            },
-                            "APIC" => { // Attached Picture (Album Art)
-                                println!("🖼️ Found APIC frame");
-                                if let Some(picture) = frame.content().picture() {
-                                    println!("📸 Picture data: {} bytes, mime: {}, type: {:?}", 
-                                        picture.data.len(), picture.mime_type, picture.picture_type);
-                                    
-                                    // Convert image data to base64 for storage
-                                    let base64_data = general_purpose::STANDARD.encode(&picture.data);
-                                    let data_url = format!("data:{};base64,{}", picture.mime_type, base64_data);
-                                    println!("🔗 Generated data URL (first 100 chars): {}", 
-                                        if data_url.len() > 100 { &data_url[..100] } else { &data_url });
-                                    
-                                    // Set as album art URL (could also be thumbnail_url depending on picture type)
-                                    match picture.picture_type {
-                                        id3::frame::PictureType::CoverFront => {
-                                            println!("✅ Setting as album_art_url (CoverFront)");
-                                            metadata.album_art_url = Some(data_url);
-                                        },
-                                        id3::frame::PictureType::Other => {
-                                            // Use as thumbnail if no specific cover front
-                                            if metadata.album_art_url.is_none() {
-                                                println!("✅ Setting as thumbnail_url (Other, no album art yet)");
-                                                metadata.thumbnail_url = Some(data_url);
-                                            }
-                                        },
-                                        _ => {
-                                            // Use as thumbnail for any other picture type
-                                            if metadata.thumbnail_url.is_none() {
-                                                println!("✅ Setting as thumbnail_url (other type: {:?})", picture.picture_type);
-                                                metadata.thumbnail_url = Some(data_url);
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    println!("❌ APIC frame found but no picture content");
-                                }
-                            },
-                            _ => {}
-                        }
-                    }
-                    
-                    // Set encoding info
-                    metadata.encoding = Some("MP3".to_string());
-                    metadata.mime_type = Some("audio/mpeg".to_string());
-                    
-                    has_metadata = true;
-                }
-            } else {
-                // Handle other audio formats
-                if let Some((encoding, mime_type)) = Self::get_audio_format_info(&filename_lower) {
-                    metadata.encoding = Some(encoding);
-                    metadata.mime_type = Some(mime_type);
-                    has_metadata = true;
-                }
-            }
-        }
-
-        if has_metadata {
-            Some(metadata)
-        } else {
-            None
-        }
-    }
-
     /// Extract rich metadata from S3 head_object response
-    fn extract_blob_metadata(head_result: &aws_sdk_s3::operation::head_object::HeadObjectOutput) -> BlobMetadata {
+    pub fn extract_blob_metadata(head_result: &aws_sdk_s3::operation::head_object::HeadObjectOutput) -> BlobMetadata {
         let mut metadata = BlobMetadata::default();
 
         if let Some(s3_metadata) = head_result.metadata() {
@@ -317,10 +197,11 @@ impl RustFSStore {
 }
 
 #[async_trait]
-impl BlobStore for RustFSStore {
+impl BlobStore for S3CompatibleStore {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
     async fn put(
         &self,
         key: &str,
@@ -374,16 +255,11 @@ impl BlobStore for RustFSStore {
             request = request.metadata("filename", filename);
         }
 
-        // Extract and store rich metadata from file content
-        if let Some(extracted_metadata) = Self::extract_file_metadata(&data, filename) {
-            request = Self::add_metadata_to_request(request, &extracted_metadata);
-        }
-
         let result = request.send().await.map_err(Self::map_aws_error)?;
 
         Ok(PutResult {
-            size_bytes: data.len() as u64,
             etag: result.e_tag,
+            size_bytes: data.len() as u64,
             checksum: None,
         })
     }
@@ -398,15 +274,22 @@ impl BlobStore for RustFSStore {
         let result = request.send().await.map_err(Self::map_aws_error)?;
         let content_length = result.content_length.unwrap_or(0) as u64;
 
-        let body = result.body.collect().await.map_err(Self::map_aws_error)?;
-        let stream = futures::stream::once(async move { Ok(body.into_bytes()) });
+        let resolved_range = range.map(|r| self.resolve_range(&r, content_length));
 
         Ok(GetResult {
-            stream: Box::pin(stream),
+            stream: Box::pin(async_stream::stream! {
+                let mut body = result.body;
+                while let Some(chunk) = body.next().await {
+                    match chunk {
+                        Ok(bytes) => yield Ok(bytes.into()),
+                        Err(e) => yield Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+                    }
+                }
+            }),
             size_bytes: content_length,
             content_type: result.content_type,
             etag: result.e_tag,
-            resolved_range: range.as_ref().map(|r| self.resolve_range(r, content_length)),
+            resolved_range,
         })
     }
 

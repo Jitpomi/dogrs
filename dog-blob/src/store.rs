@@ -11,6 +11,38 @@ pub struct BlobInfo {
     pub filename: Option<String>,
     pub etag: Option<String>,
     pub last_modified: Option<i64>,
+    pub metadata: BlobMetadata,
+}
+
+/// Rich metadata for blobs
+#[derive(Debug, Clone, Default)]
+pub struct BlobMetadata {
+    // Audio metadata
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+    pub year: Option<u32>,
+    pub duration: Option<u32>, // seconds
+    pub bitrate: Option<u32>,
+    
+    // Visual metadata
+    pub thumbnail_url: Option<String>,
+    pub album_art_url: Option<String>,
+    
+    // Location metadata
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub location_name: Option<String>,
+    
+    // Technical metadata
+    pub mime_type: Option<String>,
+    pub encoding: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u32>,
+    
+    // Custom attributes
+    pub custom: std::collections::HashMap<String, String>,
 }
 
 /// Core blob storage operations - must be implemented by all storage backends

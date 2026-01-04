@@ -411,14 +411,8 @@
                     if (file.status === "success") {
                         showStatus(`✅ ${file.name} uploaded successfully!`, 'success');
                         
-                        // Add to music library
-                        musicLibrary.push({
-                            filename: file.name,
-                            size: file.size,
-                            type: file.type,
-                            uploaded_at: new Date()
-                        });
-                        updateMusicLibrary();
+                        // Refresh the music library from the backend to get the latest files with metadata
+                        loadMusicLibrary();
                         
                         // Remove file from dropzone after completion
                         setTimeout(() => {
@@ -454,52 +448,74 @@
                     </div>
                 `;
             } else {
-                musicList.innerHTML = musicLibrary.map(track => `
-                    <div class="music-item">
-                        <div class="music-cover">${track.filename.charAt(0).toUpperCase()}</div>
-                        <div class="music-info">
-                            <div class="music-title">${track.filename}</div>
-                            <div class="music-artist">${(track.size / 1024 / 1024).toFixed(1)} MB</div>
+                musicList.innerHTML = musicLibrary.map(track => {
+                    const title = track.metadata?.title || track.filename || 'Unknown Track';
+                    const artist = track.metadata?.artist || 'Unknown Artist';
+                    const sizeInMB = (track.size / 1024 / 1024).toFixed(1);
+                    const duration = track.metadata?.duration ? `${Math.floor(track.metadata.duration / 60)}:${(track.metadata.duration % 60).toString().padStart(2, '0')}` : '--:--';
+                    
+                    // Use album art if available, otherwise fallback to letter cover
+                    const albumArt = track.metadata?.album_art_url || track.metadata?.thumbnail_url;
+                    const coverContent = albumArt 
+                        ? `<img src="${albumArt}" alt="Album Art" style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px;">`
+                        : title.charAt(0).toUpperCase();
+                    
+                    return `
+                        <div class="music-item">
+                            <div class="music-cover">${coverContent}</div>
+                            <div class="music-info">
+                                <div class="music-title">${title}</div>
+                                <div class="music-artist">${artist} • ${sizeInMB} MB</div>
+                            </div>
+                            <div class="music-duration">${duration}</div>
+                            <div class="player-controls">
+                                <button class="play-btn" onclick="playTrack('${track.id}')">▶️</button>
+                            </div>
                         </div>
-                        <div class="music-duration">${track.type}</div>
-                        <div class="player-controls">
-                            <button class="play-btn">▶️</button>
-                        </div>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
             }
         }
 
         async function loadMusicLibrary() {
-            // This would fetch the music list from the backend
-            // For now, we'll show uploaded files in a simple list
             const musicList = document.getElementById('musicList');
             
-            if (musicLibrary.length === 0) {
+            try {
+                // Fetch music library from the backend find endpoint
+                const response = await fetch('/music', {
+                    method: 'GET'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const musicFiles = await response.json();
+                console.log('📚 Loaded music library:', musicFiles);
+                
+                // Update the global musicLibrary array with fetched data
+                musicLibrary.length = 0; // Clear existing array
+                musicLibrary.push(...musicFiles.map(file => ({
+                    id: file.key,
+                    filename: file.filename || 'Unknown Track',
+                    size: file.size_bytes,
+                    type: file.content_type,
+                    metadata: file.metadata,
+                    etag: file.etag,
+                    last_modified: file.last_modified
+                })));
+                
+                updateMusicLibrary();
+                
+            } catch (error) {
+                console.error('❌ Failed to load music library:', error);
                 musicList.innerHTML = `
                     <div class="empty-state">
-                        <div class="empty-icon">🎵</div>
-                        <div>No music uploaded yet</div>
-                        <div style="margin-top: 0.5rem; font-size: 0.9rem;">Upload some tracks to get started!</div>
+                        <div class="empty-icon">⚠️</div>
+                        <div>Failed to load music library</div>
+                        <div style="margin-top: 0.5rem; font-size: 0.9rem; color: #e74c3c;">${error.message}</div>
                     </div>
                 `;
-            } else {
-                // Render music items
-                musicList.innerHTML = musicLibrary.map(track => `
-                    <div class="music-item">
-                        <div class="music-cover">${track.name.charAt(0).toUpperCase()}</div>
-                        <div class="music-info">
-                            <div class="music-title">${track.name}</div>
-                            <div class="music-artist">Unknown Artist</div>
-                        </div>
-                        <div class="music-duration">--:--</div>
-                        <div class="player-controls">
-                            <button class="play-btn" onclick="playTrack('${track.id}')">
-                                ▶️
-                            </button>
-                        </div>
-                    </div>
-                `).join('');
             }
         }
 

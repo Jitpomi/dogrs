@@ -139,7 +139,26 @@ impl RustFsAdapter {
                             "content_type": blob.content_type,
                             "filename": decoded_filename,
                             "etag": blob.etag,
-                            "last_modified": blob.last_modified
+                            "last_modified": blob.last_modified,
+                            "metadata": {
+                                "title": blob.metadata.title.as_ref().map(|t| Self::decode_mime_filename(t)),
+                                "artist": blob.metadata.artist.as_ref().map(|a| Self::decode_mime_filename(a)),
+                                "album": blob.metadata.album.as_ref().map(|a| Self::decode_mime_filename(a)),
+                                "genre": blob.metadata.genre,
+                                "year": blob.metadata.year,
+                                "duration": blob.metadata.duration,
+                                "bitrate": blob.metadata.bitrate,
+                                "thumbnail_url": blob.metadata.thumbnail_url,
+                                "album_art_url": blob.metadata.album_art_url,
+                                "latitude": blob.metadata.latitude,
+                                "longitude": blob.metadata.longitude,
+                                "location_name": blob.metadata.location_name,
+                                "mime_type": blob.metadata.mime_type,
+                                "encoding": blob.metadata.encoding,
+                                "sample_rate": blob.metadata.sample_rate,
+                                "channels": blob.metadata.channels,
+                                "custom": blob.metadata.custom
+                            }
                         })
                     })
                     .collect();

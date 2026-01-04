@@ -8,14 +8,15 @@
 //! - Zero boilerplate for DogService implementations
 
 pub mod adapter;
-pub mod config;
-pub mod coordinator;
-pub mod error;
-pub mod receipt;
-pub mod session_store;
+mod config;
+mod coordinator;
+mod error;
+mod receipt;
+mod s3_store;
+mod session_store;
 pub mod store;
-pub mod types;
-pub mod upload;
+mod types;
+mod upload;
 
 
 
@@ -25,8 +26,9 @@ pub use config::{BlobConfig, UploadRules};
 pub use coordinator::DefaultUploadCoordinator;
 pub use error::{BlobError, BlobResult};
 pub use receipt::{BlobReceipt, OpenedBlob, ResolvedRange};
+pub use s3_store::{S3CompatibleStore, S3Config};
 pub use store::{
-    BlobInfo, BlobStore, MultipartBlobStore, SignedUrlBlobStore, BlobKeyStrategy, DefaultKeyStrategy,
+    BlobInfo, BlobMetadata, BlobStore, MultipartBlobStore, SignedUrlBlobStore, BlobKeyStrategy, DefaultKeyStrategy,
     PutResult, GetResult, ObjectHead, StoreCapabilities
 };
 pub use types::{
