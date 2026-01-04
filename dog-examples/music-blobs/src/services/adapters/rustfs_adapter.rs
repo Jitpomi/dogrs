@@ -4,10 +4,17 @@ use anyhow::Result;
 use dog_blob::BlobAdapter;
 use serde_json::Value;
 use std::sync::Arc;
+use futures::StreamExt;
+use axum::{
+    body::Body,
+    http::{HeaderMap, HeaderValue, StatusCode},
+    response::Response,
+};
 
 /// RustFsAdapter wraps BlobAdapter and implements music-specific methods
 pub struct RustFsAdapter {
     adapter: BlobAdapter,
+    state: Arc<RustFsState>,
 }
 
 impl RustFsAdapter {
@@ -15,7 +22,7 @@ impl RustFsAdapter {
         // Create BlobAdapter from the BlobState inside RustFsState
         let adapter = BlobAdapter::new(state.blob_state.clone());
 
-        Self { adapter }
+        Self { adapter, state }
     }
 
 
@@ -114,6 +121,7 @@ impl RustFsAdapter {
         dog_blob::BlobCtx::new("default".to_string())
     }
 
+
     /// Serialize a blob into music file JSON with MIME decoding
     fn serialize_music_file(blob: dog_blob::BlobInfo) -> serde_json::Value {
         serde_json::json!({
@@ -146,14 +154,138 @@ impl RustFsAdapter {
     }
 
     pub async fn download(&self, data: Value) -> Result<Value> {
-        // Implementation using self.adapter.open()
-        Ok(serde_json::json!({"status": "downloaded", "data": data}))
+        let ctx = Self::create_default_context();
+        
+        // Extract key from request data
+        let key = data.get("key")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in download request"))?;
+            
+        println!("📥 Starting download for key: {}", key);
+        
+        // Extract blob ID from the key (last part after the last slash)
+        let blob_id_str = key.split('/').last().unwrap_or(key);
+        let blob_id = dog_blob::BlobId(blob_id_str.to_string());
+        
+        println!("📥 Extracted blob ID: {} from key: {}", blob_id_str, key);
+        
+        // Use the adapter's open method to get the blob content
+        match self.adapter.open(ctx, blob_id, None).await {
+            Ok(opened_blob) => {
+                println!("📥 Opened blob - Size: {} bytes", opened_blob.content_length());
+                
+                // For now, return a simple response that indicates the blob is available
+                // The frontend will need to handle this differently since we can't easily 
+                // extract the raw bytes from OpenedBlob without more complex stream handling
+                Ok(serde_json::json!({
+                    "status": "downloaded", 
+                    "key": key,
+                    "size_bytes": opened_blob.content_length(),
+                    "content_type": "audio/mpeg",
+                    "blob_available": true,
+                    "message": "Use a different approach for audio playback"
+                }))
+            },
+            Err(e) => {
+                println!("❌ Failed to open blob for download: {}", e);
+                Err(anyhow::anyhow!("Failed to download audio file: {}", e))
+            }
+        }
     }
 
     pub async fn stream(&self, data: Value) -> Result<Value> {
-        // Implementation using self.adapter.open() with streaming
-        Ok(serde_json::json!({"status": "streaming", "data": data}))
+        let ctx = Self::create_default_context();
+        
+        // Extract key from request data
+        let key = data.get("key")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in stream request"))?;
+            
+        println!("🎵 Starting audio stream for key: {}", key);
+        
+        // Extract blob ID from the key (last part after the last slash)
+        let blob_id_str = key.split('/').last().unwrap_or(key);
+        let blob_id = dog_blob::BlobId(blob_id_str.to_string());
+        
+        println!("🎵 Extracted blob ID: {} from key: {}", blob_id_str, key);
+        
+        // Open the blob and read the actual audio content
+        match self.adapter.open(ctx, blob_id, None).await {
+            Ok(opened_blob) => {
+                println!("🎵 Opened blob - Size: {} bytes", opened_blob.content_length());
+                
+                // Read the actual audio content using the full key
+                let audio_content = self.read_blob_content(key).await?;
+                
+                // Return the audio content as base64 for the frontend to convert to blob
+                use base64::Engine;
+                let base64_content = base64::engine::general_purpose::STANDARD.encode(&audio_content);
+                
+                println!("🎵 Returning {} bytes of audio content as base64", audio_content.len());
+                
+                Ok(serde_json::json!({
+                    "status": "streaming",
+                    "key": key,
+                    "content_type": "audio/mpeg",
+                    "size_bytes": audio_content.len(),
+                    "audio_data": base64_content
+                }))
+            },
+            Err(e) => {
+                println!("❌ Failed to open blob for streaming: {}", e);
+                Err(anyhow::anyhow!("Failed to start audio stream: {}", e))
+            }
+        }
     }
+
+
+    // Helper method to read blob content from the actual uploaded files
+    async fn read_blob_content(&self, full_key: &str) -> Result<Vec<u8>> {
+        println!("🎵 Reading actual blob content for key: {}", full_key);
+        
+        // Use the RustFS store directly to read the raw MP3 content
+        use crate::rustfs_store::RustFSStore;
+        use dog_blob::BlobStore;
+        
+        // Get the bucket name from environment
+        let bucket = std::env::var("RUSTFS_BUCKET").unwrap_or_else(|_| "music-blobs".to_string());
+        
+        // Create a new RustFS store instance to read the content
+        let store = RustFSStore::new(bucket).await?;
+        
+        // Use the full key as provided (e.g., "default/2026/01/uuid")
+        println!("🎵 Fetching object with key: {}", full_key);
+        
+        // Read the actual content from the store
+        match store.get(full_key, None).await {
+            Ok(get_result) => {
+                let mut content = Vec::new();
+                let mut stream = get_result.stream;
+                
+                // Read all chunks from the stream
+                while let Some(chunk_result) = stream.next().await {
+                    match chunk_result {
+                        Ok(chunk) => {
+                            content.extend_from_slice(&chunk);
+                        },
+                        Err(e) => {
+                            println!("❌ Error reading chunk: {}", e);
+                            return Err(anyhow::anyhow!("Failed to read audio chunk: {}", e));
+                        }
+                    }
+                }
+                
+                println!("🎵 Successfully read {} bytes of actual MP3 content", content.len());
+                Ok(content)
+            },
+            Err(e) => {
+                println!("❌ Failed to read from RustFS store: {}", e);
+                Err(anyhow::anyhow!("Failed to read audio content from store: {}", e))
+            }
+        }
+    }
+
+  
 
     pub async fn pause(&self, data: Value) -> Result<Value> {
         // Implementation for pause functionality

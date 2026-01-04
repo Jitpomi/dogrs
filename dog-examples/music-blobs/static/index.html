@@ -519,10 +519,136 @@
             }
         }
 
-        function playTrack(trackId) {
-            // This would implement music playback
-            console.log('Playing track:', trackId);
-            showStatus('🎵 Playback functionality coming soon!', 'success');
+        // Audio player state
+        let currentAudio = null;
+        let currentTrackId = null;
+        let isPlaying = false;
+
+        async function playTrack(trackId) {
+            console.log('🎵 Playing track:', trackId);
+            
+            try {
+                // Stop current track if playing
+                if (currentAudio) {
+                    currentAudio.pause();
+                    currentAudio = null;
+                    updatePlayButton(currentTrackId, false);
+                }
+                
+                // Get streaming info from backend
+                const streamResponse = await fetch('/music', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-service-method': 'stream'
+                    },
+                    body: JSON.stringify({ key: trackId })
+                });
+                
+                if (!streamResponse.ok) {
+                    throw new Error(`Failed to start stream: ${streamResponse.status}`);
+                }
+                
+                const streamInfo = await streamResponse.json();
+                console.log('🎵 Stream info:', streamInfo);
+                
+                // Create audio element and start playback
+                currentAudio = new Audio();
+                currentTrackId = trackId;
+                
+                // Set up audio event listeners
+                currentAudio.addEventListener('loadstart', () => {
+                    console.log('🎵 Loading audio...');
+                    showStatus('🎵 Loading track...', 'info');
+                });
+                
+                currentAudio.addEventListener('canplay', () => {
+                    console.log('🎵 Audio ready to play');
+                    showStatus('🎵 Playing track', 'success');
+                    updatePlayButton(trackId, true);
+                });
+                
+                currentAudio.addEventListener('play', () => {
+                    isPlaying = true;
+                    updatePlayButton(trackId, true);
+                });
+                
+                currentAudio.addEventListener('pause', () => {
+                    isPlaying = false;
+                    updatePlayButton(trackId, false);
+                });
+                
+                currentAudio.addEventListener('ended', () => {
+                    isPlaying = false;
+                    currentAudio = null;
+                    currentTrackId = null;
+                    updatePlayButton(trackId, false);
+                    showStatus('🎵 Track finished', 'info');
+                });
+                
+                currentAudio.addEventListener('error', (e) => {
+                    console.error('🎵 Audio error:', e);
+                    showStatus('❌ Playback error', 'error');
+                    updatePlayButton(trackId, false);
+                });
+                
+                // Handle the stream response
+                const track = musicLibrary.find(t => t.id === trackId);
+                if (track) {
+                    console.log('🎵 Stream response:', streamInfo);
+                    
+                    if (streamInfo.audio_data && streamInfo.audio_data.length > 0) {
+                        // We have actual audio data - convert base64 to blob and play
+                        console.log('🎵 Converting base64 audio data to blob for playback');
+                        
+                        const binaryString = atob(streamInfo.audio_data);
+                        const bytes = new Uint8Array(binaryString.length);
+                        
+                        for (let i = 0; i < binaryString.length; i++) {
+                            bytes[i] = binaryString.charCodeAt(i);
+                        }
+                        
+                        const audioBlob = new Blob([bytes], { type: streamInfo.content_type || 'audio/mpeg' });
+                        const audioUrl = URL.createObjectURL(audioBlob);
+                        
+                        currentAudio.src = audioUrl;
+                        currentAudio.play();
+                        
+                        console.log('🎵 Audio blob created and playback started');
+                    } else if (streamInfo.ready) {
+                        // Stream is ready but no audio data yet - show status
+                        showStatus('🎵 Audio stream ready - content reading implementation needed', 'info');
+                        updatePlayButton(trackId, false);
+                        console.log('🎵 Stream ready but no audio content available yet');
+                    } else {
+                        throw new Error('No audio data available in stream response');
+                    }
+                } else {
+                    throw new Error('Track not found in library');
+                }
+                
+            } catch (error) {
+                console.error('❌ Failed to play track:', error);
+                showStatus(`❌ Failed to play track: ${error.message}`, 'error');
+                updatePlayButton(trackId, false);
+            }
+        }
+        
+        
+        function updatePlayButton(trackId, playing) {
+            const playBtn = document.querySelector(`button[onclick="playTrack('${trackId}')"]`);
+            if (playBtn) {
+                playBtn.textContent = playing ? '⏸️' : '▶️';
+                playBtn.onclick = playing ? () => pauseTrack(trackId) : () => playTrack(trackId);
+            }
+        }
+        
+        function pauseTrack(trackId) {
+            if (currentAudio && currentTrackId === trackId) {
+                currentAudio.pause();
+                updatePlayButton(trackId, false);
+                showStatus('⏸️ Track paused', 'info');
+            }
         }
 
         // Initialize the app
