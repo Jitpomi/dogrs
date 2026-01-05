@@ -17,7 +17,7 @@ class MusicPlayer {
     this.isPlaying = false;
     this.isPaused = false;
 
-    this.duration = 0;
+    this.duration = 0; 
 
     // waveform
     this.waveformCanvases = new Map(); // trackId -> { canvas, ctx, cssW, cssH, dpr }

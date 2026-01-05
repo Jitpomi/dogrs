@@ -1,0 +1,118 @@
+[package]
+name = "dog-queue"
+version = "0.1.0"
+edition = "2021"
+authors = ["DogRS Team"]
+description = "Production-grade job queue with multi-tenant semantics, lease-based processing, and reference payloads"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dogrs/dog-queue"
+homepage = "https://dogrs.dev"
+documentation = "https://docs.rs/dog-queue"
+keywords = ["queue", "jobs", "async", "multi-tenant", "background"]
+categories = ["asynchronous", "concurrency", "database"]
+readme = "README.md"
+
+[workspace]
+
+[package.metadata]
+
+[package.metadata.ferrisup]
+component_type = "library"
+
+# Core dependencies for revolutionary architecture
+[dependencies]
+async-trait = "0.1.89"
+chrono = { version = "0.4.38", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "1.0.69"
+tokio = { version = "1.41.1", features = ["full"] }
+uuid = { version = "1.11.0", features = ["v4", "serde"] }
+tracing = "0.1.41"
+parking_lot = "0.12.3"
+rand = "0.8.5"
+futures = "0.3.31"
+futures-core = "0.3.31"
+tokio-stream = { version = "0.1.5", features = ["sync"] }
+serde_json = { version = "1.0.145", optional = true }
+opentelemetry = { version = "0.26.0", optional = true }
+tracing-subscriber = { version = "0.3.18", optional = true, features = ["env-filter", "json"] }
+dashmap = { version = "6.1.0", optional = true }
+once_cell = "1.20.2"
+pin-project = "1.1.7"
+
+# Zero-copy and performance optimizations
+bytes = { version = "1.8.0", optional = true }
+smallvec = { version = "1.13.2", optional = true }
+tinyvec = { version = "1.8.0", features = ["alloc"], optional = true }
+
+# Workflow and scheduling
+cron = { version = "0.12.1", optional = true }
+
+# Storage backends (optional)
+redis = { version = "0.27.5", optional = true, features = ["tokio-comp", "connection-manager"] }
+tokio-postgres = { version = "0.7.12", optional = true, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
+sqlx = { version = "0.8.2", optional = true, features = ["runtime-tokio-rustls", "postgres", "sqlite", "chrono", "uuid", "json"] }
+rmp-serde = { version = "1.1", optional = true }
+bincode = { version = "1.3", optional = true }
+
+# Observability (optional)
+prometheus = { version = "0.13.4", optional = true }
+tracing-opentelemetry = { version = "0.28.0", optional = true }
+
+# Web UI (optional)
+axum = { version = "0.7.9", optional = true }
+tower = { version = "0.5.1", optional = true }
+tower-http = { version = "0.6.2", optional = true, features = ["cors", "fs"] }
+# Legacy compatibility
+serde_json_legacy = { package = "serde_json", version = "1.0.145", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.41.1", features = ["full"] }
+tokio-test = "0.4.4"
+tracing-test = "0.2.5"
+criterion = { version = "0.5.1", features = ["html_reports"] }
+proptest = "1.5.0"
+test-log = "0.2.16"
+
+# Feature flags for modular functionality
+[features]
+default = ["memory", "json"]
+
+# Core features
+memory = []
+json = ["dep:serde_json"]
+legacy = ["dep:serde_json_legacy"]
+
+# Storage backends
+redis = ["dep:redis"]
+postgres = ["dep:tokio-postgres"]
+sqlite = ["dep:sqlx"]
+sqlx-postgres = ["dep:sqlx"]
+
+# Scheduling
+cron-scheduling = ["dep:cron"]
+
+# Observability
+tracing-basic = ["dep:tracing-subscriber"]
+tracing-opentelemetry = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
+metrics = ["dep:prometheus"]
+
+# Web UI
+ui = ["dep:axum", "dep:tower", "dep:tower-http", "dep:serde_json_legacy"]
+
+# Performance optimizations
+zero-copy = ["dep:bytes", "dep:smallvec"]
+adaptive = ["dep:dashmap"]
+
+# Full feature set
+full = [
+    "redis", "postgres", "sqlite", "cron-scheduling",
+    "tracing-opentelemetry", "metrics", "ui",
+    "zero-copy", "adaptive"
+]
+
+
+
+[lib]
+name = "dog_queue"
+path = "src/lib.rs"
