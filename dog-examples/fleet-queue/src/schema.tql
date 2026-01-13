@@ -1,0 +1,198 @@
+define
+  # ----------------------------
+  # Core Attributes
+  # ----------------------------
+  attribute id, value string;
+  attribute timestamp, value datetime;
+  attribute status, value string;
+  attribute priority, value long;
+  
+  # Vehicle Attributes
+  attribute vehicle-id, value string;
+  attribute vehicle-type, value string;
+  attribute capacity, value double;
+  attribute fuel-level, value double;
+  attribute maintenance-score, value double;
+  attribute maintenance-status, value string;
+  
+  # Driver/Employee Attributes
+  attribute driver-id, value string;
+  attribute driver-name, value string;
+  attribute role, value string;
+  attribute current-lat, value double;
+  attribute current-lng, value double;
+  attribute daily-hours, value double;
+  attribute performance-rating, value double;
+  attribute certifications, value string;
+  
+  # Delivery Attributes
+  attribute delivery-id, value string;
+  attribute pickup-address, value string;
+  attribute delivery-address, value string;
+  attribute customer-name, value string;
+  attribute delivery-time, value datetime;
+  attribute weight, value double;
+  attribute route-id, value string;
+  attribute customer-priority, value string;
+  attribute dest-lat, value double;
+  attribute dest-lng, value double;
+  
+  # Queue Attributes (Dog-Queue Specific)
+  attribute job-type, value string;
+  attribute queue-position, value long;
+  attribute retry-count, value long;
+  attribute scheduled-at, value datetime;
+  
+  # Operation Attributes
+  attribute operation-id, value string;
+  attribute assignment-id, value string;
+  
+  # Rules Attributes
+  attribute rule-name, value string;
+  attribute rule-value, value string;
+  attribute rule-category, value string;
+  attribute effective-from, value datetime;
+  attribute effective-until, value datetime;
+  
+  # ----------------------------
+  # Fleet Entities (Frontend Display)
+  # ----------------------------
+  
+  entity vehicle,
+    owns vehicle-id @key,
+    owns vehicle-type,
+    owns capacity,
+    owns fuel-level,
+    owns maintenance-score,
+    owns maintenance-status,
+    owns status,
+    plays assignment:assigned-vehicle;
+    
+  entity driver,
+    owns driver-id @key,
+    owns driver-name,
+    owns status,
+    plays assignment:assigned-driver;
+    
+  entity delivery,
+    owns delivery-id @key,
+    owns pickup-address,
+    owns delivery-address,
+    owns customer-name,
+    owns delivery-time,
+    owns weight,
+    owns priority,
+    owns status,
+    owns timestamp,
+    owns route-id,
+    owns customer-priority,
+    owns dest-lat,
+    owns dest-lng,
+    plays assignment:assigned-delivery,
+    plays queue-processing:queued-delivery;
+  
+  # ----------------------------
+  # Dog-Queue Entities (Background Processing)
+  # ----------------------------
+  
+  entity operation,
+    owns id @key,
+    owns operation-id,
+    owns assignment-id,
+    owns vehicle-id,
+    owns job-type,
+    owns status,
+    owns timestamp,
+    plays queue-processing:processing-queue;
+    
+  entity employee,
+    owns id @key,
+    owns role,
+    owns current-lat,
+    owns current-lng,
+    owns daily-hours,
+    owns performance-rating,
+    owns certifications,
+    owns status,
+    owns timestamp,
+    plays queue-processing:queue-processor;
+    
+  entity rule,
+    owns rule-name @key,
+    owns rule-value,
+    owns rule-category,
+    owns effective-from,
+    owns effective-until,
+    owns status,
+    owns timestamp;
+  
+  # ----------------------------
+  # Relations
+  # ----------------------------
+  
+  # Fleet Operations (What Users See)
+  relation assignment,
+    relates assigned-delivery,
+    relates assigned-vehicle,
+    relates assigned-driver,
+    owns timestamp,
+    owns status;
+  
+  # Queue Operations (Dog-Queue Processing)
+  relation queue-processing,
+    relates processing-queue,
+    relates queued-delivery,
+    relates queue-processor,
+    owns queue-position,
+    owns retry-count,
+    owns scheduled-at,
+    owns timestamp;
+  
+  # ----------------------------
+  # Business Rules
+  # ----------------------------
+  
+  rule high-priority-delivery-first:
+    when {
+      $d1 isa delivery, has priority $p1;
+      $d2 isa delivery, has priority $p2;
+      $q isa operation;
+      ($q, $d1) isa queue-processing, has queue-position $pos1;
+      ($q, $d2) isa queue-processing, has queue-position $pos2;
+      $p1 > $p2; $pos1 > $pos2;
+    } then {
+      ($q, $d1) isa queue-processing, has queue-position 1;
+    };
+    
+  rule capacity-check:
+    when {
+      $v isa vehicle, has capacity $cap;
+      $d isa delivery, has weight $w;
+      ($d, $v) isa assignment;
+      $w > $cap;
+    } then {
+      ($d, $v) isa assignment, has status "overweight";
+    };
+    
+  rule active-assignment:
+    when {
+      $d isa delivery;
+      $v isa vehicle;
+      $dr isa driver;
+      ($d, $v, $dr) isa assignment, has status "active";
+    } then {
+      $d has status "in-transit";
+      $v has status "busy";
+      $dr has status "busy";
+    };
+    
+  rule retry-failed-processing:
+    when {
+      $d isa delivery;
+      $q isa operation;
+      ($q, $d) isa queue-processing, has retry-count $count;
+      $count < 3;
+      $d has status "failed";
+    } then {
+      $d has status "queued";
+    };
