@@ -70,11 +70,26 @@ impl Job for JobName {
     const MAX_RETRIES: u32 = 3;
     
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
-        // Get configurable parameters using TypeDB rules
-        let threshold = get_config_value(&ctx, "job.threshold", "100").await.parse().unwrap_or(100);
+        let tenant_ctx = TenantContext::new("fleet_tenant".to_string());
+        let params = FleetParams::default();
         
-        // Implementation with dynamic configuration
-        Ok(format!("Job completed with threshold: {}", threshold))
+        let operations_service = ctx.app.app.service("operations")
+            .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
+
+        // Simple job record - TypeDB functions handle all business logic
+        let job_record = serde_json::json!({
+            "field": self.field,
+            "priority": self.priority,
+            "created_at": self.created_at,
+            "job_timestamp": chrono::Utc::now().to_rfc3339()
+        });
+
+        operations_service
+            .create(tenant_ctx, job_record, params)
+            .await
+            .map_err(|e| JobError::Retryable(format!("Failed to create job record: {}", e)))?;
+
+        Ok(format!("Job completed for: {}", self.field))
     }
 }
 ```
