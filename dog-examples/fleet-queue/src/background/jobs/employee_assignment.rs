@@ -37,14 +37,14 @@ async fn get_config_value(ctx: &FleetContext, key: &str, default: &str) -> Strin
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DriverAssignmentJob {
+pub struct EmployeeAssignmentJob {
     pub route_id: String,
     pub pickup_location: (f64, f64),
     pub delivery_priority: String,
     pub required_certifications: Vec<String>,
 }
 
-impl DriverAssignmentJob {
+impl EmployeeAssignmentJob {
     pub fn new(route_id: String, pickup_location: (f64, f64), delivery_priority: String, required_certifications: Vec<String>) -> Self {
         Self { 
             route_id, 
@@ -61,11 +61,11 @@ pub struct FleetContext {
 }
 
 #[async_trait]
-impl Job for DriverAssignmentJob {
+impl Job for EmployeeAssignmentJob {
     type Context = FleetContext;
     type Result = String;
     
-    const JOB_TYPE: &'static str = "driver_assignment";
+    const JOB_TYPE: &'static str = "employee_assignment";
     const PRIORITY: JobPriority = JobPriority::High;
     const MAX_RETRIES: u32 = 3;
 
@@ -82,29 +82,29 @@ impl Job for DriverAssignmentJob {
         let operations_service = ctx.app.app.service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
 
-        // Get all available drivers
-        let drivers_query = serde_json::json!({
-            "match": "$driver isa employee, has role 'driver', has status 'available';",
-            "get": "$driver;"
+        // Get all available employees with driver role
+        let employees_query = serde_json::json!({
+            "match": "$employee isa employee, has employee-role 'driver', has status 'available';",
+            "select": "$employee;"
         });
         
-        let available_drivers = employees_service
-            .custom(tenant_ctx.clone(), "read", Some(drivers_query), params.clone())
+        let available_employees = employees_service
+            .custom(tenant_ctx.clone(), "read", Some(employees_query), params.clone())
             .await
-            .map_err(|e| JobError::Retryable(format!("Failed to get available drivers: {}", e)))?;
+            .map_err(|e| JobError::Retryable(format!("Failed to get available employees: {}", e)))?;
 
-        let mut scored_drivers = Vec::new();
+        let mut scored_employees = Vec::new();
 
-        // Score each driver based on multiple criteria
-        if let Some(drivers_array) = available_drivers.as_array() {
-            for driver in drivers_array {
-                let driver_id = driver.get("driver-id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let current_lat = driver.get("current-lat").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let current_lng = driver.get("current-lng").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let hours_worked = driver.get("daily-hours").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let performance_rating = driver.get("performance-rating").and_then(|v| v.as_f64()).unwrap_or(3.0);
+        // Score each employee based on multiple criteria
+        if let Some(employees_array) = available_employees.as_array() {
+            for employee in employees_array {
+                let employee_id = employee.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let current_lat = employee.get("current-lat").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let current_lng = employee.get("current-lng").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let hours_worked = employee.get("daily-hours").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let performance_rating = employee.get("performance-rating").and_then(|v| v.as_f64()).unwrap_or(3.0);
                 let empty_vec = vec![];
-                let certifications = driver.get("certifications").and_then(|v| v.as_array()).unwrap_or(&empty_vec);
+                let certifications = employee.get("certifications").and_then(|v| v.as_array()).unwrap_or(&empty_vec);
 
                 // Calculate proximity score using TomTom
                 let distance_result = tomtom_service
@@ -115,21 +115,21 @@ impl Job for DriverAssignmentJob {
                         "to_lng": self.pickup_location.1
                     })), params.clone())
                     .await
-                    .map_err(|e| JobError::Retryable(format!("Failed to calculate distance for driver {}: {}", driver_id, e)))?;
+                    .map_err(|e| JobError::Retryable(format!("Failed to calculate distance for employee {}: {}", employee_id, e)))?;
 
-                let distance_meters = distance_result.get("distance_meters").and_then(|v| v.as_i64()).unwrap_or(get_config_value(&ctx, "driver.scoring.max_distance_fallback", "999999").await.parse().unwrap_or(999999)) as f64;
-                let travel_time = distance_result.get("duration_seconds").and_then(|v| v.as_i64()).unwrap_or(get_config_value(&ctx, "driver.scoring.max_travel_time_fallback", "3600").await.parse().unwrap_or(3600)) as f64;
+                let distance_meters = distance_result.get("distance_meters").and_then(|v| v.as_i64()).unwrap_or(get_config_value(&ctx, "employee.scoring.max_distance_fallback", "999999").await.parse().unwrap_or(999999)) as f64;
+                let travel_time = distance_result.get("duration_seconds").and_then(|v| v.as_i64()).unwrap_or(get_config_value(&ctx, "employee.scoring.max_travel_time_fallback", "3600").await.parse().unwrap_or(3600)) as f64;
 
                 // Get configurable scoring weights - try TypeDB rules first, then app state
-                let proximity_weight: f64 = get_config_value(&ctx, "driver.scoring.proximity_weight", "0.3").await.parse().unwrap_or(0.3);
-                let availability_weight: f64 = get_config_value(&ctx, "driver.scoring.availability_weight", "0.3").await.parse().unwrap_or(0.3);
-                let performance_weight: f64 = get_config_value(&ctx, "driver.scoring.performance_weight", "0.2").await.parse().unwrap_or(0.2);
-                let certification_weight: f64 = get_config_value(&ctx, "driver.scoring.certification_weight", "0.2").await.parse().unwrap_or(0.2);
-                let max_daily_hours: f64 = get_config_value(&ctx, "driver.scoring.max_daily_hours", "11.0").await.parse().unwrap_or(11.0);
-                let max_performance_rating: f64 = get_config_value(&ctx, "driver.scoring.max_performance_rating", "5.0").await.parse().unwrap_or(5.0);
+                let proximity_weight: f64 = get_config_value(&ctx, "employee.scoring.proximity_weight", "0.3").await.parse().unwrap_or(0.3);
+                let availability_weight: f64 = get_config_value(&ctx, "employee.scoring.availability_weight", "0.3").await.parse().unwrap_or(0.3);
+                let performance_weight: f64 = get_config_value(&ctx, "employee.scoring.performance_weight", "0.2").await.parse().unwrap_or(0.2);
+                let certification_weight: f64 = get_config_value(&ctx, "employee.scoring.certification_weight", "0.2").await.parse().unwrap_or(0.2);
+                let max_daily_hours: f64 = get_config_value(&ctx, "employee.scoring.max_daily_hours", "11.0").await.parse().unwrap_or(11.0);
+                let max_performance_rating: f64 = get_config_value(&ctx, "employee.scoring.max_performance_rating", "5.0").await.parse().unwrap_or(5.0);
 
                 // Calculate composite score with configurable weights
-                let distance_divisor = get_config_value(&ctx, "driver.scoring.distance_divisor", "1000.0").await.parse().unwrap_or(1000.0);
+                let distance_divisor = get_config_value(&ctx, "employee.scoring.distance_divisor", "1000.0").await.parse().unwrap_or(1000.0);
                 let proximity_score = 1.0 / (1.0 + distance_meters / distance_divisor); // Closer = higher score
                 let availability_score = (max_daily_hours - hours_worked) / max_daily_hours; // Less hours worked = higher score
                 let performance_score = performance_rating / max_performance_rating; // Normalize to 0-1
@@ -143,18 +143,18 @@ impl Job for DriverAssignmentJob {
                 let total_score = (proximity_score * proximity_weight) + (availability_score * availability_weight) + 
                                 (performance_score * performance_weight) + (certification_score * certification_weight);
 
-                scored_drivers.push((driver_id.to_string(), total_score, travel_time));
+                scored_employees.push((employee_id.to_string(), total_score, travel_time));
             }
         }
 
         // Sort by score (highest first)
-        scored_drivers.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        scored_employees.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        if let Some((best_driver_id, score, eta)) = scored_drivers.first() {
-            // Assign the route to the best driver
+        if let Some((best_employee_id, score, eta)) = scored_employees.first() {
+            // Assign the route to the best employee
             let assignment_data = serde_json::json!({
                 "route_id": self.route_id,
-                "driver_id": best_driver_id,
+                "employee_id": best_employee_id,
                 "assignment_score": score,
                 "estimated_pickup_time": eta,
                 "assignment_timestamp": chrono::Utc::now().to_rfc3339(),
@@ -166,10 +166,10 @@ impl Job for DriverAssignmentJob {
                 .await
                 .map_err(|e| JobError::Retryable(format!("Failed to create assignment: {}", e)))?;
 
-            Ok(format!("Assigned route {} to driver {} with score {:.2}", 
-                      self.route_id, best_driver_id, score))
+            Ok(format!("Assigned route {} to employee {} with score {:.2}", 
+                      self.route_id, best_employee_id, score))
         } else {
-            Err(JobError::Retryable("No suitable drivers found for assignment".to_string()))
+            Err(JobError::Retryable("No suitable employees found for assignment".to_string()))
         }
     }
 }

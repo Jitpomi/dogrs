@@ -42,7 +42,7 @@ impl JobsAdapter {
                     "timestamp": chrono::Utc::now().to_rfc3339()
                 }))
             }
-            "driver_assignment" | "route_rebalancing" | "sla_monitoring" | 
+            "employee_assignment" | "route_rebalancing" | "sla_monitoring" | 
             "maintenance_scheduling" | "compliance_monitoring" => {
                 // These job types are registered but don't have specific enqueue methods yet
                 // They can be enqueued directly via the queue adapter when needed

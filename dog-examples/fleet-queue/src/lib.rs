@@ -26,7 +26,6 @@ pub async fn build() -> anyhow::Result<AxumApp<Value, FleetParams>> {
     let svcs = services::configure(ax.app.as_ref(), Arc::clone(&state))?;
 
     let mut ax = ax
-        .use_service("/drivers", svcs.drivers)
         .use_service("/vehicles", svcs.vehicles)
         .use_service("/deliveries", svcs.deliveries)
         .use_service("/operations", svcs.operations)

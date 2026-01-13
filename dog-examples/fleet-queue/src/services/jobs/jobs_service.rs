@@ -1,4 +1,4 @@
-use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::tenant::TenantContext;

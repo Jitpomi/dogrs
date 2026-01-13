@@ -167,15 +167,15 @@ impl BackgroundSystem {
 
 ### Additional Job Types (Implemented but not registered in BackgroundSystem)
 
-### 2. DriverAssignmentJob
-- **Purpose**: Intelligent driver assignment based on scoring algorithm
+### 2. EmployeeAssignmentJob
+- **Purpose**: Intelligent employee assignment based on scoring algorithm
 - **Triggers**: Manual enqueue via REST API or service calls
 - **Configuration**: Dynamic scoring weights via TypeDB rules
-  - `driver.scoring.proximity_weight`
-  - `driver.scoring.availability_weight`
-  - `driver.scoring.performance_weight`
-  - `driver.scoring.certification_weight`
-- **Status**: ⚠️ Implemented but not registered in BackgroundSystem
+  - `employee.scoring.proximity_weight`
+  - `employee.scoring.availability_weight`
+  - `employee.scoring.performance_weight`
+  - `employee.scoring.certification_weight`
+- **Status**: ✅ Implemented and registered in BackgroundSystem
 
 ### 3. RouteRebalancingJob
 - **Purpose**: Dynamic route optimization based on traffic and delays
@@ -262,7 +262,7 @@ POST /rules
 ```
 
 ### 3. Configuration Categories
-- **Driver Scoring**: `driver.scoring.*`
+- **Employee Scoring**: `employee.scoring.*`
 - **SLA Thresholds**: `sla.{tier}.*`
 - **Route Rebalancing**: `rebalancing.*`
 - **Maintenance**: `maintenance.*`

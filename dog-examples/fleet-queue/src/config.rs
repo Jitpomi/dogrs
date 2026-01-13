@@ -71,28 +71,28 @@ fn configure_external_apis(dog_app: &DogApp<Value, FleetParams>) -> Result<()> {
 
 /// Configure all business rule parameters
 fn configure_business_rules(dog_app: &DogApp<Value, FleetParams>) {
-    configure_driver_scoring(dog_app);
+    configure_employee_scoring(dog_app);
     configure_sla_thresholds(dog_app);
     configure_route_rebalancing(dog_app);
     configure_maintenance(dog_app);
     configure_tracking(dog_app);
 }
 
-/// Configure driver assignment scoring algorithm
-fn configure_driver_scoring(dog_app: &DogApp<Value, FleetParams>) {
-    let proximity_weight = env::var("DRIVER_SCORING_PROXIMITY_WEIGHT").unwrap_or_else(|_| "0.3".to_string());
-    let availability_weight = env::var("DRIVER_SCORING_AVAILABILITY_WEIGHT").unwrap_or_else(|_| "0.3".to_string());
-    let performance_weight = env::var("DRIVER_SCORING_PERFORMANCE_WEIGHT").unwrap_or_else(|_| "0.2".to_string());
-    let certification_weight = env::var("DRIVER_SCORING_CERTIFICATION_WEIGHT").unwrap_or_else(|_| "0.2".to_string());
-    let max_daily_hours = env::var("DRIVER_SCORING_MAX_DAILY_HOURS").unwrap_or_else(|_| "11.0".to_string());
-    let max_performance_rating = env::var("DRIVER_SCORING_MAX_PERFORMANCE_RATING").unwrap_or_else(|_| "5.0".to_string());
+/// Configure employee assignment scoring algorithm
+fn configure_employee_scoring(dog_app: &DogApp<Value, FleetParams>) {
+    let proximity_weight = env::var("EMPLOYEE_SCORING_PROXIMITY_WEIGHT").unwrap_or_else(|_| "0.3".to_string());
+    let availability_weight = env::var("EMPLOYEE_SCORING_AVAILABILITY_WEIGHT").unwrap_or_else(|_| "0.3".to_string());
+    let performance_weight = env::var("EMPLOYEE_SCORING_PERFORMANCE_WEIGHT").unwrap_or_else(|_| "0.2".to_string());
+    let certification_weight = env::var("EMPLOYEE_SCORING_CERTIFICATION_WEIGHT").unwrap_or_else(|_| "0.2".to_string());
+    let max_daily_hours = env::var("EMPLOYEE_SCORING_MAX_DAILY_HOURS").unwrap_or_else(|_| "11.0".to_string());
+    let max_performance_rating = env::var("EMPLOYEE_SCORING_MAX_PERFORMANCE_RATING").unwrap_or_else(|_| "5.0".to_string());
     
-    dog_app.set("driver.scoring.proximity_weight", proximity_weight);
-    dog_app.set("driver.scoring.availability_weight", availability_weight);
-    dog_app.set("driver.scoring.performance_weight", performance_weight);
-    dog_app.set("driver.scoring.certification_weight", certification_weight);
-    dog_app.set("driver.scoring.max_daily_hours", max_daily_hours);
-    dog_app.set("driver.scoring.max_performance_rating", max_performance_rating);
+    dog_app.set("employee.scoring.proximity_weight", proximity_weight);
+    dog_app.set("employee.scoring.availability_weight", availability_weight);
+    dog_app.set("employee.scoring.performance_weight", performance_weight);
+    dog_app.set("employee.scoring.certification_weight", certification_weight);
+    dog_app.set("employee.scoring.max_daily_hours", max_daily_hours);
+    dog_app.set("employee.scoring.max_performance_rating", max_performance_rating);
 }
 
 /// Configure SLA monitoring thresholds per customer tier

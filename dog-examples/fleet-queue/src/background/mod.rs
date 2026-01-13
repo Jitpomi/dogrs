@@ -12,7 +12,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use dog_axum::AxumApp;
-use crate::background::jobs::{GPSTrackingJob, GPSFleetContext};
 use crate::services::FleetParams;
 
 pub use jobs::*;
@@ -51,7 +50,7 @@ impl BackgroundSystem {
         
         // Register all implemented job types
         adapter.register_job::<GPSTrackingJob>().await?;
-        adapter.register_job::<DriverAssignmentJob>().await?;
+        adapter.register_job::<EmployeeAssignmentJob>().await?;
         adapter.register_job::<RouteRebalancingJob>().await?;
         adapter.register_job::<SLAMonitoringJob>().await?;
         adapter.register_job::<MaintenanceSchedulingJob>().await?;
@@ -75,7 +74,7 @@ impl BackgroundSystem {
         // Start workers for all implemented job types
         let queues = vec![
             "gps_tracking".to_string(),
-            "driver_assignment".to_string(),
+            "employee_assignment".to_string(),
             "route_rebalancing".to_string(),
             "sla_monitoring".to_string(),
             "maintenance_scheduling".to_string(),
@@ -159,7 +158,7 @@ impl BackgroundSystem {
             "backend": "memory",
             "registered_jobs": [
                 "gps_tracking",
-                "driver_assignment", 
+                "employee_assignment", 
                 "route_rebalancing",
                 "sla_monitoring",
                 "maintenance_scheduling",

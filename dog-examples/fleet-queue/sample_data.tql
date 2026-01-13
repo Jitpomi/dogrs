@@ -1,0 +1,584 @@
+# Fleet Management Production Sample Data
+# Enterprise-scale dataset for realistic fleet management system demonstration
+# 50+ vehicles, 100+ drivers, 500+ deliveries across multiple regions
+
+# ===========================
+# VEHICLES (50 vehicles across different types)
+# ===========================
+
+# Delivery Trucks (20 vehicles)
+insert $v1 isa vehicle, has vehicle-id "VH001", has vehicle-type "delivery_truck", has capacity 2500.0, has fuel-level 85.5, has maintenance-score 92.3, has maintenance-status "good", has status "operational";
+insert $v2 isa vehicle, has vehicle-id "VH002", has vehicle-type "delivery_truck", has capacity 2500.0, has fuel-level 72.1, has maintenance-score 88.7, has maintenance-status "good", has status "operational";
+insert $v3 isa vehicle, has vehicle-id "VH003", has vehicle-type "delivery_truck", has capacity 3000.0, has fuel-level 91.2, has maintenance-score 95.1, has maintenance-status "good", has status "operational";
+insert $v4 isa vehicle, has vehicle-id "VH004", has vehicle-type "delivery_truck", has capacity 2800.0, has fuel-level 68.9, has maintenance-score 78.4, has maintenance-status "maintenance_required", has status "maintenance_due";
+insert $v5 isa vehicle, has vehicle-id "VH005", has vehicle-type "delivery_truck", has capacity 3200.0, has fuel-level 77.3, has maintenance-score 91.8, has maintenance-status "good", has status "operational";
+insert $v6 isa vehicle, has vehicle-id "VH006", has vehicle-type "delivery_truck", has capacity 2600.0, has fuel-level 83.7, has maintenance-score 89.2, has maintenance-status "good", has status "operational";
+insert $v7 isa vehicle, has vehicle-id "VH007", has vehicle-type "delivery_truck", has capacity 2400.0, has fuel-level 45.2, has maintenance-score 65.3, has maintenance-status "maintenance_required", has status "maintenance_required";
+insert $v8 isa vehicle, has vehicle-id "VH008", has vehicle-type "delivery_truck", has capacity 2900.0, has fuel-level 89.4, has maintenance-score 93.6, has maintenance-status "good", has status "operational";
+insert $v9 isa vehicle, has vehicle-id "VH009", has vehicle-type "delivery_truck", has capacity 2700.0, has fuel-level 76.8, has maintenance-score 87.2, has maintenance-status "good", has status "operational";
+insert $v10 isa vehicle, has vehicle-id "VH010", has vehicle-type "delivery_truck", has capacity 3100.0, has fuel-level 92.1, has maintenance-score 94.5, has maintenance-status "good", has status "operational";
+insert $v11 isa vehicle, has vehicle-id "VH011", has vehicle-type "delivery_truck", has capacity 2550.0, has fuel-level 58.3, has maintenance-score 82.1, has maintenance-status "good", has status "operational";
+insert $v12 isa vehicle, has vehicle-id "VH012", has vehicle-type "delivery_truck", has capacity 2750.0, has fuel-level 84.7, has maintenance-score 90.8, has maintenance-status "good", has status "operational";
+insert $v13 isa vehicle, has vehicle-id "VH013", has vehicle-type "delivery_truck", has capacity 2650.0, has fuel-level 71.4, has maintenance-score 86.3, has maintenance-status "good", has status "operational";
+insert $v14 isa vehicle, has vehicle-id "VH014", has vehicle-type "delivery_truck", has capacity 2850.0, has fuel-level 67.9, has maintenance-score 79.6, has maintenance-status "maintenance_due", has status "operational";
+insert $v15 isa vehicle, has vehicle-id "VH015", has vehicle-type "delivery_truck", has capacity 3050.0, has fuel-level 88.2, has maintenance-score 92.7, has maintenance-status "good", has status "operational";
+insert $v16 isa vehicle, has vehicle-id "VH016", has vehicle-type "delivery_truck", has capacity 2450.0, has fuel-level 79.5, has maintenance-score 85.9, has maintenance-status "good", has status "operational";
+insert $v17 isa vehicle, has vehicle-id "VH017", has vehicle-type "delivery_truck", has capacity 2950.0, has fuel-level 73.8, has maintenance-score 88.4, has maintenance-status "good", has status "operational";
+insert $v18 isa vehicle, has vehicle-id "VH018", has vehicle-type "delivery_truck", has capacity 2350.0, has fuel-level 86.1, has maintenance-score 91.2, has maintenance-status "good", has status "operational";
+insert $v19 isa vehicle, has vehicle-id "VH019", has vehicle-type "delivery_truck", has capacity 3150.0, has fuel-level 64.7, has maintenance-score 83.5, has maintenance-status "good", has status "operational";
+insert $v20 isa vehicle, has vehicle-id "VH020", has vehicle-type "delivery_truck", has capacity 2800.0, has fuel-level 91.6, has maintenance-score 94.1, has maintenance-status "good", has status "operational";
+
+# Cargo Vans (15 vehicles)
+insert $v21 isa vehicle, has vehicle-id "VH021", has vehicle-type "cargo_van", has capacity 1500.0, has fuel-level 82.3, has maintenance-score 89.7, has maintenance-status "good", has status "operational";
+insert $v22 isa vehicle, has vehicle-id "VH022", has vehicle-type "cargo_van", has capacity 1400.0, has fuel-level 75.8, has maintenance-score 87.2, has maintenance-status "good", has status "operational";
+insert $v23 isa vehicle, has vehicle-id "VH023", has vehicle-type "cargo_van", has capacity 1600.0, has fuel-level 69.4, has maintenance-score 84.6, has maintenance-status "good", has status "operational";
+insert $v24 isa vehicle, has vehicle-id "VH024", has vehicle-type "cargo_van", has capacity 1350.0, has fuel-level 88.1, has maintenance-score 92.3, has maintenance-status "good", has status "operational";
+insert $v25 isa vehicle, has vehicle-id "VH025", has vehicle-type "cargo_van", has capacity 1550.0, has fuel-level 71.7, has maintenance-score 86.8, has maintenance-status "good", has status "operational";
+insert $v26 isa vehicle, has vehicle-id "VH026", has vehicle-type "cargo_van", has capacity 1450.0, has fuel-level 79.2, has maintenance-score 88.5, has maintenance-status "good", has status "operational";
+insert $v27 isa vehicle, has vehicle-id "VH027", has vehicle-type "cargo_van", has capacity 1650.0, has fuel-level 66.9, has maintenance-score 82.1, has maintenance-status "good", has status "operational";
+insert $v28 isa vehicle, has vehicle-id "VH028", has vehicle-type "cargo_van", has capacity 1300.0, has fuel-level 84.5, has maintenance-score 90.7, has maintenance-status "good", has status "operational";
+insert $v29 isa vehicle, has vehicle-id "VH029", has vehicle-type "cargo_van", has capacity 1700.0, has fuel-level 77.3, has maintenance-score 87.9, has maintenance-status "good", has status "operational";
+insert $v30 isa vehicle, has vehicle-id "VH030", has vehicle-type "cargo_van", has capacity 1250.0, has fuel-level 73.6, has maintenance-score 85.4, has maintenance-status "good", has status "operational";
+insert $v31 isa vehicle, has vehicle-id "VH031", has vehicle-type "cargo_van", has capacity 1580.0, has fuel-level 81.8, has maintenance-score 89.2, has maintenance-status "good", has status "operational";
+insert $v32 isa vehicle, has vehicle-id "VH032", has vehicle-type "cargo_van", has capacity 1420.0, has fuel-level 68.7, has maintenance-score 83.6, has maintenance-status "good", has status "operational";
+insert $v33 isa vehicle, has vehicle-id "VH033", has vehicle-type "cargo_van", has capacity 1520.0, has fuel-level 85.9, has maintenance-score 91.4, has maintenance-status "good", has status "operational";
+insert $v34 isa vehicle, has vehicle-id "VH034", has vehicle-type "cargo_van", has capacity 1380.0, has fuel-level 74.2, has maintenance-score 86.7, has maintenance-status "good", has status "operational";
+insert $v35 isa vehicle, has vehicle-id "VH035", has vehicle-type "cargo_van", has capacity 1620.0, has fuel-level 70.5, has maintenance-score 84.9, has maintenance-status "good", has status "operational";
+
+# Refrigerated Trucks (10 vehicles)
+insert $v36 isa vehicle, has vehicle-id "VH036", has vehicle-type "refrigerated_truck", has capacity 2200.0, has fuel-level 78.4, has maintenance-score 88.6, has maintenance-status "good", has status "operational";
+insert $v37 isa vehicle, has vehicle-id "VH037", has vehicle-type "refrigerated_truck", has capacity 2400.0, has fuel-level 82.7, has maintenance-score 91.2, has maintenance-status "good", has status "operational";
+insert $v38 isa vehicle, has vehicle-id "VH038", has vehicle-type "refrigerated_truck", has capacity 2100.0, has fuel-level 75.3, has maintenance-score 87.8, has maintenance-status "good", has status "operational";
+insert $v39 isa vehicle, has vehicle-id "VH039", has vehicle-type "refrigerated_truck", has capacity 2300.0, has fuel-level 69.8, has maintenance-score 85.4, has maintenance-status "good", has status "operational";
+insert $v40 isa vehicle, has vehicle-id "VH040", has vehicle-type "refrigerated_truck", has capacity 2500.0, has fuel-level 87.1, has maintenance-score 93.5, has maintenance-status "good", has status "operational";
+insert $v41 isa vehicle, has vehicle-id "VH041", has vehicle-type "refrigerated_truck", has capacity 2000.0, has fuel-level 73.9, has maintenance-score 86.7, has maintenance-status "good", has status "operational";
+insert $v42 isa vehicle, has vehicle-id "VH042", has vehicle-type "refrigerated_truck", has capacity 2350.0, has fuel-level 80.6, has maintenance-score 89.3, has maintenance-status "good", has status "operational";
+insert $v43 isa vehicle, has vehicle-id "VH043", has vehicle-type "refrigerated_truck", has capacity 2150.0, has fuel-level 76.2, has maintenance-score 88.1, has maintenance-status "good", has status "operational";
+insert $v44 isa vehicle, has vehicle-id "VH044", has vehicle-type "refrigerated_truck", has capacity 2450.0, has fuel-level 84.8, has maintenance-score 92.7, has maintenance-status "good", has status "operational";
+insert $v45 isa vehicle, has vehicle-id "VH045", has vehicle-type "refrigerated_truck", has capacity 2250.0, has fuel-level 71.5, has maintenance-score 87.2, has maintenance-status "good", has status "operational";
+
+# Box Trucks (5 vehicles)
+insert $v46 isa vehicle, has vehicle-id "VH046", has vehicle-type "box_truck", has capacity 4000.0, has fuel-level 79.3, has maintenance-score 89.8, has maintenance-status "good", has status "operational";
+insert $v47 isa vehicle, has vehicle-id "VH047", has vehicle-type "box_truck", has capacity 3800.0, has fuel-level 72.6, has maintenance-score 86.4, has maintenance-status "good", has status "operational";
+insert $v48 isa vehicle, has vehicle-id "VH048", has vehicle-type "box_truck", has capacity 4200.0, has fuel-level 85.7, has maintenance-score 91.9, has maintenance-status "good", has status "operational";
+insert $v49 isa vehicle, has vehicle-id "VH049", has vehicle-type "box_truck", has capacity 3900.0, has fuel-level 68.1, has maintenance-score 84.2, has maintenance-status "good", has status "operational";
+insert $v50 isa vehicle, has vehicle-id "VH050", has vehicle-type "box_truck", has capacity 4100.0, has fuel-level 83.4, has maintenance-score 90.6, has maintenance-status "good", has status "operational";
+
+# ===========================
+# EMPLOYEES (100 employees with driver role + 5 staff)
+# ===========================
+
+# Day Shift Employees with Driver Role (40 employees - 6am to 6pm)
+insert $d1 isa employee, has id "DR001", has employee-name "John Martinez", has employee-role "driver", has status "busy";
+insert $d2 isa employee, has id "DR002", has employee-name "Sarah Johnson", has employee-role "driver", has employee-role "mechanic", has status "busy";
+insert $d3 isa employee, has id "DR003", has employee-name "Mike Chen", has employee-role "driver", has status "available";
+insert $d4 isa employee, has id "DR004", has employee-name "Lisa Rodriguez", has employee-role "driver", has employee-role "dispatcher", has status "busy";
+insert $d5 isa employee, has id "DR005", has employee-name "David Kim", has employee-role "driver", has status "available";
+insert $d6 isa employee, has id "DR006", has employee-name "Emma Wilson", has employee-role "driver", has status "busy";
+insert $d7 isa employee, has id "DR007", has employee-name "Carlos Santos", has employee-role "driver", has status "available";
+insert $d8 isa employee, has id "DR008", has employee-name "Jennifer Lee", has employee-role "driver", has status "busy";
+insert $d9 isa employee, has id "DR009", has employee-name "Robert Taylor", has employee-role "driver", has status "available";
+insert $d10 isa employee, has id "DR010", has employee-name "Maria Garcia", has employee-role "driver", has status "busy";
+insert $d11 isa employee, has id "DR011", has employee-name "James Wilson", has employee-role "driver", has status "available";
+insert $d12 isa employee, has id "DR012", has employee-name "Patricia Brown", has employee-role "driver", has status "busy";
+insert $d13 isa employee, has id "DR013", has employee-name "Michael Davis", has employee-role "driver", has status "available";
+insert $d14 isa employee, has id "DR014", has employee-name "Linda Miller", has employee-role "driver", has status "busy";
+insert $d15 isa employee, has id "DR015", has employee-name "William Jones", has employee-role "driver", has status "available";
+insert $d16 isa employee, has id "DR016", has employee-name "Barbara Garcia", has employee-role "driver", has status "busy";
+insert $d17 isa employee, has id "DR017", has employee-name "Richard Rodriguez", has employee-role "driver", has status "available";
+insert $d18 isa employee, has id "DR018", has employee-name "Susan Martinez", has employee-role "driver", has status "busy";
+insert $d19 isa employee, has id "DR019", has employee-name "Joseph Anderson", has employee-role "driver", has status "available";
+insert $d20 isa employee, has id "DR020", has employee-name "Jessica Thomas", has employee-role "driver", has status "busy";
+insert $d21 isa employee, has id "DR021", has employee-name "Thomas Jackson", has employee-role "driver", has status "available";
+insert $d22 isa employee, has id "DR022", has employee-name "Sarah White", has employee-role "driver", has status "busy";
+insert $d23 isa employee, has id "DR023", has employee-name "Christopher Harris", has employee-role "driver", has status "available";
+insert $d24 isa employee, has id "DR024", has employee-name "Nancy Martin", has employee-role "driver", has status "busy";
+insert $d25 isa employee, has id "DR025", has employee-name "Daniel Thompson", has employee-role "driver", has status "available";
+insert $d26 isa employee, has id "DR026", has employee-name "Betty Garcia", has employee-role "driver", has status "busy";
+insert $d27 isa employee, has id "DR027", has employee-name "Matthew Martinez", has employee-role "driver", has status "available";
+insert $d28 isa employee, has id "DR028", has employee-name "Helen Robinson", has employee-role "driver", has status "busy";
+insert $d29 isa employee, has id "DR029", has employee-name "Anthony Clark", has employee-role "driver", has status "available";
+insert $d30 isa employee, has id "DR030", has employee-name "Sandra Rodriguez", has employee-role "driver", has status "busy";
+insert $d31 isa employee, has id "DR031", has employee-name "Mark Lewis", has employee-role "driver", has status "available";
+insert $d32 isa employee, has id "DR032", has employee-name "Donna Lee", has employee-role "driver", has status "busy";
+insert $d33 isa employee, has id "DR033", has employee-name "Steven Walker", has employee-role "driver", has status "available";
+insert $d34 isa employee, has id "DR034", has employee-name "Carol Hall", has employee-role "driver", has status "busy";
+insert $d35 isa employee, has id "DR035", has employee-name "Kenneth Allen", has employee-role "driver", has status "available";
+insert $d36 isa employee, has id "DR036", has employee-name "Ruth Young", has employee-role "driver", has status "busy";
+insert $d37 isa employee, has id "DR037", has employee-name "Paul Hernandez", has employee-role "driver", has status "available";
+insert $d38 isa employee, has id "DR038", has employee-name "Sharon King", has employee-role "driver", has status "busy";
+insert $d39 isa employee, has id "DR039", has employee-name "Edward Wright", has employee-role "driver", has status "available";
+insert $d40 isa employee, has id "DR040", has employee-name "Lisa Lopez", has employee-role "driver", has status "busy";
+
+# Evening Shift Drivers (30 drivers - 2pm to 2am)
+insert $d41 isa employee, has id "DR041", has employee-name "Jason Hill", has employee-role "driver", has status "available";
+insert $d42 isa employee, has id "DR042", has employee-name "Michelle Scott", has employee-role "driver", has status "busy";
+insert $d43 isa employee, has id "DR043", has employee-name "Ryan Green", has employee-role "driver", has status "available";
+insert $d44 isa employee, has id "DR044", has employee-name "Kimberly Adams", has employee-role "driver", has status "busy";
+insert $d45 isa employee, has id "DR045", has employee-name "Jacob Baker", has employee-role "driver", has status "available";
+insert $d46 isa employee, has id "DR046", has employee-name "Amy Gonzalez", has employee-role "driver", has status "busy";
+insert $d47 isa employee, has id "DR047", has employee-name "Nicholas Nelson", has employee-role "driver", has status "available";
+insert $d48 isa employee, has id "DR048", has employee-name "Angela Carter", has employee-role "driver", has status "busy";
+insert $d49 isa employee, has id "DR049", has employee-name "Brandon Mitchell", has employee-role "driver", has status "available";
+insert $d50 isa employee, has id "DR050", has employee-name "Brenda Perez", has employee-role "driver", has status "busy";
+insert $d51 isa employee, has id "DR051", has employee-name "Samuel Roberts", has employee-role "driver", has status "available";
+insert $d52 isa employee, has id "DR052", has employee-name "Emma Turner", has employee-role "driver", has status "busy";
+insert $d53 isa employee, has id "DR053", has employee-name "Gregory Phillips", has employee-role "driver", has status "available";
+insert $d54 isa employee, has id "DR054", has employee-name "Olivia Campbell", has employee-role "driver", has status "busy";
+insert $d55 isa employee, has id "DR055", has employee-name "Benjamin Parker", has employee-role "driver", has status "available";
+insert $d56 isa employee, has id "DR056", has employee-name "Cynthia Evans", has employee-role "driver", has status "busy";
+insert $d57 isa employee, has id "DR057", has employee-name "Alexander Edwards", has employee-role "driver", has status "available";
+insert $d58 isa employee, has id "DR058", has employee-name "Marie Collins", has employee-role "driver", has status "busy";
+insert $d59 isa employee, has id "DR059", has employee-name "Patrick Stewart", has employee-role "driver", has status "available";
+insert $d60 isa employee, has id "DR060", has employee-name "Janet Sanchez", has employee-role "driver", has status "busy";
+insert $d61 isa employee, has id "DR061", has employee-name "Zachary Morris", has employee-role "driver", has status "available";
+insert $d62 isa employee, has id "DR062", has employee-name "Catherine Rogers", has employee-role "driver", has status "busy";
+insert $d63 isa employee, has id "DR063", has employee-name "Nathan Reed", has employee-role "driver", has status "available";
+insert $d64 isa employee, has id "DR064", has employee-name "Frances Cook", has employee-role "driver", has status "busy";
+insert $d65 isa employee, has id "DR065", has employee-name "Harold Morgan", has employee-role "driver", has status "available";
+insert $d66 isa employee, has id "DR066", has employee-name "Deborah Bell", has employee-role "driver", has status "busy";
+insert $d67 isa employee, has id "DR067", has employee-name "Douglas Murphy", has employee-role "driver", has status "available";
+insert $d68 isa employee, has id "DR068", has employee-name "Rachel Bailey", has employee-role "driver", has status "busy";
+insert $d69 isa employee, has id "DR069", has employee-name "Henry Rivera", has employee-role "driver", has status "available";
+insert $d70 isa employee, has id "DR070", has employee-name "Carolyn Cooper", has employee-role "driver", has status "busy";
+
+# Night Shift Drivers (20 drivers - 10pm to 10am)
+insert $d71 isa employee, has id "DR071", has employee-name "Arthur Richardson", has employee-role "driver", has status "available";
+insert $d72 isa employee, has id "DR072", has employee-name "Julie Cox", has employee-role "driver", has status "busy";
+insert $d73 isa employee, has id "DR073", has employee-name "Roger Ward", has employee-role "driver", has status "available";
+insert $d74 isa employee, has id "DR074", has employee-name "Joyce Torres", has employee-role "driver", has status "off_duty";
+insert $d75 isa employee, has id "DR075", has employee-name "Lawrence Peterson", has employee-role "driver", has status "available";
+insert $d76 isa employee, has id "DR076", has employee-name "Virginia Gray", has employee-role "driver", has status "off_duty";
+insert $d77 isa employee, has id "DR077", has employee-name "Sean Ramirez", has employee-role "driver", has status "available";
+insert $d78 isa employee, has id "DR078", has employee-name "Theresa James", has employee-role "driver", has status "off_duty";
+insert $d79 isa employee, has id "DR079", has employee-name "Austin Watson", has employee-role "driver", has status "available";
+insert $d80 isa employee, has id "DR080", has employee-name "Pamela Brooks", has employee-role "driver", has status "off_duty";
+insert $d81 isa employee, has id "DR081", has employee-name "Carl Kelly", has employee-role "driver", has status "available";
+insert $d82 isa employee, has id "DR082", has employee-name "Martha Sanders", has employee-role "driver", has status "off_duty";
+insert $d83 isa employee, has id "DR083", has employee-name "Eugene Price", has employee-role "driver", has status "available";
+insert $d84 isa employee, has id "DR084", has employee-name "Doris Bennett", has employee-role "driver", has status "off_duty";
+insert $d85 isa employee, has id "DR085", has employee-name "Ralph Wood", has employee-role "driver", has status "available";
+insert $d86 isa employee, has id "DR086", has employee-name "Maria Barnes", has employee-role "driver", has status "off_duty";
+insert $d87 isa employee, has id "DR087", has employee-name "Bobby Ross", has employee-role "driver", has status "available";
+insert $d88 isa employee, has id "DR088", has employee-name "Norma Henderson", has employee-role "driver", has status "off_duty";
+insert $d89 isa employee, has id "DR089", has employee-name "Wayne Coleman", has employee-role "driver", has status "available";
+insert $d90 isa employee, has id "DR090", has employee-name "Frances Jenkins", has employee-role "driver", has status "off_duty";
+
+# Weekend/Part-time Drivers (10 drivers)
+insert $d91 isa employee, has id "DR091", has employee-name "Louis Perry", has employee-role "driver", has status "off_duty";
+insert $d92 isa employee, has id "DR092", has employee-name "Christina Powell", has employee-role "driver", has status "off_duty";
+insert $d93 isa employee, has id "DR093", has employee-name "Jack Long", has employee-role "driver", has status "off_duty";
+insert $d94 isa employee, has id "DR094", has employee-name "Alice Patterson", has employee-role "driver", has status "off_duty";
+insert $d95 isa employee, has id "DR095", has employee-name "Albert Hughes", has employee-role "driver", has status "off_duty";
+insert $d96 isa employee, has id "DR096", has employee-name "Jean Flores", has employee-role "driver", has status "off_duty";
+insert $d97 isa employee, has id "DR097", has employee-name "Roy Washington", has employee-role "driver", has status "off_duty";
+insert $d98 isa employee, has id "DR098", has employee-name "Judith Butler", has employee-role "driver", has status "off_duty";
+insert $d99 isa employee, has id "DR099", has employee-name "Wayne Simmons", has employee-role "driver", has status "off_duty";
+insert $d100 isa employee, has id "DR100", has employee-name "Kathryn Foster", has employee-role "driver", has status "off_duty";
+
+# ===========================
+# EMPLOYEES
+# ===========================
+
+insert $e1 isa employee, 
+    has id "EMP001", 
+    has employee-role "dispatcher", 
+    has current-lat 40.7128, 
+    has current-lng -74.0060, 
+    has daily-hours 8.0, 
+    has performance-rating 4.2, 
+    has certifications "Dispatcher-Level-2,Emergency-Response", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $e2 isa employee, 
+    has id "EMP002", 
+    has employee-role "dispatcher", 
+    has employee-role "supervisor", 
+    has current-lat 40.7589, 
+    has current-lng -73.9851, 
+    has daily-hours 8.5, 
+    has performance-rating 4.7, 
+    has certifications "Management,Safety-Certified,Dispatcher-Level-3", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $e3 isa employee, 
+    has id "EMP003", 
+    has employee-role "dispatcher", 
+    has current-lat 40.6782, 
+    has current-lng -73.9442, 
+    has daily-hours 7.5, 
+    has performance-rating 4.1, 
+    has certifications "Dispatcher-Level-1", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $e4 isa employee, 
+    has id "EMP004", 
+    has employee-role "supervisor", 
+    has current-lat 40.8176, 
+    has current-lng -73.8782, 
+    has daily-hours 9.0, 
+    has performance-rating 4.5, 
+    has certifications "Management,Fleet-Operations", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $e5 isa employee, 
+    has id "EMP005", 
+    has employee-role "mechanic", 
+    has employee-role "driver", 
+    has current-lat 40.6892, 
+    has current-lng -74.0445, 
+    has daily-hours 8.0, 
+    has performance-rating 4.8, 
+    has certifications "ASE-Certified,Heavy-Duty-Specialist,CDL-Class-B", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+# ===========================
+# DELIVERIES (500 deliveries across multiple regions)
+# ===========================
+
+# Manhattan Deliveries (150 deliveries)
+insert $del1 isa delivery, has delivery-id "DEL001", has pickup-address "123 Main St, NYC", has delivery-address "456 Oak Ave, Brooklyn", has customer-name "Alice Cooper", has weight 150.5, has priority 1, has status "pending", has customer-priority "premium", has dest-lat 40.6782, has dest-lng -73.9442, has delivery-time 2024-01-13T12:00:00, has route-id "RT001", has timestamp 2024-01-13T11:00:00;
+insert $del2 isa delivery, has delivery-id "DEL002", has pickup-address "789 Broadway, NYC", has delivery-address "321 Pine St, Queens", has customer-name "Bob Smith", has weight 75.2, has priority 2, has status "in_transit", has customer-priority "standard", has dest-lat 40.7282, has dest-lng -73.7949, has delivery-time 2024-01-13T13:20:00, has route-id "RT002", has timestamp 2024-01-13T11:00:00;
+insert $del3 isa delivery, has delivery-id "DEL003", has pickup-address "555 5th Ave, NYC", has delivery-address "888 Elm St, Bronx", has customer-name "Carol Davis", has weight 220.8, has priority 1, has status "pending", has customer-priority "premium", has dest-lat 40.8448, has dest-lng -73.8648, has delivery-time 2024-01-13T12:00:00, has route-id "RT001", has timestamp 2024-01-13T11:00:00;
+insert $del4 isa delivery, has delivery-id "DEL004", has pickup-address "111 Wall St, NYC", has delivery-address "999 Maple Dr, Staten Island", has customer-name "David Wilson", has weight 95.3, has priority 3, has status "delivered", has customer-priority "standard", has dest-lat 40.5795, has dest-lng -74.1502, has delivery-time 2024-01-13T14:40:00, has route-id "RT003", has timestamp 2024-01-13T11:00:00;
+insert $del5 isa delivery, has delivery-id "DEL005", has pickup-address "777 Park Ave, NYC", has delivery-address "222 Cedar Ln, Manhattan", has customer-name "Eva Martinez", has weight 180.7, has priority 1, has status "pending", has customer-priority "express", has dest-lat 40.7831, has dest-lng -73.9712, has delivery-time 2024-01-13T12:00:00, has route-id "RT001", has timestamp 2024-01-13T11:00:00;
+insert $del6 isa delivery, has delivery-id "DEL006", has pickup-address "333 Lexington Ave, NYC", has delivery-address "666 Birch St, Brooklyn", has customer-name "Frank Johnson", has weight 125.4, has priority 2, has status "in_transit", has customer-priority "standard", has dest-lat 40.6892, has dest-lng -73.9442, has delivery-time 2024-01-13T13:20:00, has route-id "RT002", has timestamp 2024-01-13T11:00:00;
+insert $del7 isa delivery, has delivery-id "DEL007", has pickup-address "444 Madison Ave, NYC", has delivery-address "777 Spruce Ave, Queens", has customer-name "Grace Lee", has weight 310.2, has priority 1, has status "pending", has customer-priority "premium", has dest-lat 40.7505, has dest-lng -73.8370, has delivery-time 2024-01-13T12:00:00, has route-id "RT001", has timestamp 2024-01-13T11:00:00;
+insert $del8 isa delivery, has delivery-id "DEL008", has pickup-address "888 3rd Ave, NYC", has delivery-address "111 Willow St, Bronx", has customer-name "Henry Kim", has weight 65.8, has priority 3, has status "failed", has customer-priority "standard", has dest-lat 40.8176, has dest-lng -73.8782, has delivery-time 2024-01-13T14:40:00, has route-id "RT003", has timestamp 2024-01-13T11:00:00;
+insert $del9 isa delivery, has delivery-id "DEL009", has pickup-address "200 Central Park West, NYC", has delivery-address "150 Court St, Brooklyn", has customer-name "Isabella Rodriguez", has weight 89.3, has priority 2, has status "in_transit", has customer-priority "standard", has dest-lat 40.6895, has dest-lng -73.9903, has delivery-time 2024-01-13T13:20:00, has route-id "RT004", has timestamp 2024-01-13T11:00:00;
+insert $del10 isa delivery, has delivery-id "DEL010", has pickup-address "350 Madison Ave, NYC", has delivery-address "45-20 Court Sq, Queens", has customer-name "Michael Thompson", has weight 245.7, has priority 1, has status "pending", has customer-priority "premium", has dest-lat 40.7472, has dest-lng -73.9436, has delivery-time 2024-01-13T12:00:00, has route-id "RT005", has timestamp 2024-01-13T11:00:00;
+insert $del11 isa delivery, has delivery-id "DEL011", has pickup-address "1 Times Square, NYC", has delivery-address "2800 Bruckner Blvd, Bronx", has customer-name "Sarah Williams", has weight 156.2, has priority 2, has status "pending", has customer-priority "standard", has dest-lat 40.8176, has dest-lng -73.8648, has delivery-time 2024-01-13T13:20:00, has route-id "RT006", has timestamp 2024-01-13T11:00:00;
+insert $del12 isa delivery, has delivery-id "DEL012", has pickup-address "100 Church St, NYC", has delivery-address "1000 Richmond Ave, Staten Island", has customer-name "James Anderson", has weight 78.9, has priority 3, has status "delivered", has customer-priority "standard", has dest-lat 40.5795, has dest-lng -74.1658, has delivery-time 2024-01-13T14:40:00, has route-id "RT007", has timestamp 2024-01-13T11:00:00;
+insert $del13 isa delivery, has delivery-id "DEL013", has pickup-address "250 West St, NYC", has delivery-address "300 Atlantic Ave, Brooklyn", has customer-name "Jennifer Garcia", has weight 198.4, has priority 1, has status "in_transit", has customer-priority "express", has dest-lat 40.6892, has dest-lng -73.9979, has delivery-time 2024-01-13T12:00:00, has route-id "RT008", has timestamp 2024-01-13T11:00:00;
+insert $del14 isa delivery, has delivery-id "DEL014", has pickup-address "75 Varick St, NYC", has delivery-address "31-00 47th Ave, Queens", has customer-name "Robert Martinez", has weight 134.6, has priority 2, has status "pending", has customer-priority "standard", has dest-lat 40.7505, has dest-lng -73.9134, has delivery-time 2024-01-13T13:20:00, has route-id "RT009", has timestamp 2024-01-13T11:00:00;
+insert $del15 isa delivery, has delivery-id "DEL015", has pickup-address "40 Wall St, NYC", has delivery-address "1200 Grand Concourse, Bronx", has customer-name "Linda Davis", has weight 267.1, has priority 1, has status "pending", has customer-priority "premium", has dest-lat 40.8448, has dest-lng -73.9134, has delivery-time 2024-01-13T12:00:00, has route-id "RT010", has timestamp 2024-01-13T11:00:00;
+
+# Brooklyn Deliveries (120 deliveries)
+insert $del16 isa delivery, has delivery-id "DEL016", has pickup-address "200 Montague St, Brooklyn", has delivery-address "500 E 77th St, Manhattan", has customer-name "Patricia Wilson", has weight 92.7, has priority 2, has status "in_transit", has customer-priority "standard", has dest-lat 40.7831, has dest-lng -73.9712, has delivery-time 2024-01-13T13:20:00, has route-id "RT011", has timestamp 2024-01-13T11:00:00;
+insert $del17 isa delivery, has delivery-id "DEL017", has pickup-address "85 Court St, Brooklyn", has delivery-address "100-15 Queens Blvd, Queens", has customer-name "Christopher Brown", has weight 178.3, has priority 1, has status "pending", has customer-priority "premium", has dest-lat 40.7282, has dest-lng -73.8370, has delivery-time 2024-01-13T12:00:00, has route-id "RT012", has timestamp 2024-01-13T11:00:00;
+insert $del18 isa delivery, has delivery-id "DEL018", has pickup-address "300 Cadman Plaza, Brooklyn", has delivery-address "800 Concourse Plaza, Bronx", has customer-name "Barbara Miller", has weight 145.8, has priority 2, has status "pending", has customer-priority "standard", has dest-lat 40.8176, has dest-lng -73.9134, has delivery-time 2024-01-13T13:20:00, has route-id "RT013", has timestamp 2024-01-13T11:00:00;
+insert $del19 isa delivery, has delivery-id "DEL019", has pickup-address "150 Joralemon St, Brooklyn", has delivery-address "2500 Victory Blvd, Staten Island", has customer-name "Daniel Jones", has weight 89.5, has priority 3, has status "delivered", has customer-priority "standard", has dest-lat 40.5795, has dest-lng -74.1502, has delivery-time 2024-01-13T14:40:00, has route-id "RT014", has timestamp 2024-01-13T11:00:00;
+insert $del20 isa delivery, has delivery-id "DEL020", has pickup-address "500 Atlantic Ave, Brooklyn", has delivery-address "200 E 42nd St, Manhattan", has customer-name "Elizabeth Garcia", has weight 234.2, has priority 1, has status "in_transit", has customer-priority "express", has dest-lat 40.7505, has dest-lng -73.9756, has delivery-time 2024-01-13T12:00:00, has route-id "RT015", has timestamp 2024-01-13T11:00:00;
+
+# Queens Deliveries (100 deliveries)  
+insert $del21 isa delivery, has delivery-id "DEL021", has pickup-address "120-55 Queens Blvd, Queens", has delivery-address "300 Park Ave, Manhattan", has customer-name "Thomas Rodriguez", has weight 167.4, has priority 2, has status "pending", has customer-priority "standard", has dest-lat 40.7589, has dest-lng -73.9851, has delivery-time 2024-01-13T13:20:00, has route-id "RT016", has timestamp 2024-01-13T11:00:00;
+insert $del22 isa delivery, has delivery-id "DEL022", has pickup-address "31-00 Northern Blvd, Queens", has delivery-address "400 Flatbush Ave, Brooklyn", has customer-name "Mary Martinez", has weight 198.7, has priority 1, has status "pending", has customer-priority "premium", has dest-lat 40.6892, has dest-lng -73.9779, has delivery-time 2024-01-13T12:00:00, has route-id "RT017", has timestamp 2024-01-13T11:00:00;
+insert $del23 isa delivery, has delivery-id "DEL023", has pickup-address "90-15 Elmhurst Ave, Queens", has delivery-address "1500 Webster Ave, Bronx", has customer-name "Charles Anderson", has weight 123.6, has priority 2, has status "in_transit", has customer-priority "standard", has dest-lat 40.8448, has dest-lng -73.9134, has delivery-time 2024-01-13T13:20:00, has route-id "RT018", has timestamp 2024-01-13T11:00:00;
+insert $del24 isa delivery, has delivery-id "DEL024", has pickup-address "45-20 Court Sq, Queens", has delivery-address "3000 Hylan Blvd, Staten Island", has customer-name "Susan Thomas", has weight 87.2, has priority 3, has status "delivered", has customer-priority "standard", has dest-lat 40.5795, has dest-lng -74.1658, has delivery-time 2024-01-13T14:40:00, has route-id "RT019", has timestamp 2024-01-13T11:00:00;
+insert $del25 isa delivery, has delivery-id "DEL025", has pickup-address "100-00 Astoria Blvd, Queens", has delivery-address "150 Broadway, Manhattan", has customer-name "Joseph Jackson", has weight 276.9, has priority 1, has status "pending", has customer-priority "express", has dest-lat 40.7589, has dest-lng -74.0060, has delivery-time 2024-01-13T12:00:00, has route-id "RT020", has timestamp 2024-01-13T11:00:00;
+
+# Bronx Deliveries (80 deliveries)
+insert $del26 isa delivery, has delivery-id "DEL026", has pickup-address "800 Grand Concourse, Bronx", has delivery-address "250 W 57th St, Manhattan", has customer-name "Jessica White", has weight 145.3, has priority 2, has status "in_transit", has customer-priority "standard", has dest-lat 40.7831, has dest-lng -73.9712, has delivery-time 2024-01-13T13:20:00, has route-id "RT021", has timestamp 2024-01-13T11:00:00;
+insert $del27 isa delivery, has delivery-id "DEL027", has pickup-address "1200 Webster Ave, Bronx", has delivery-address "500 Court St, Brooklyn", has customer-name "Christopher Harris", has weight 189.6, has priority 1, has status "pending", has customer-priority "premium", has dest-lat 40.6895, has dest-lng -73.9903, has delivery-time 2024-01-13T12:00:00, has route-id "RT022", has timestamp 2024-01-13T11:00:00;
+insert $del28 isa delivery, has delivery-id "DEL028", has pickup-address "2800 Bruckner Blvd, Bronx", has delivery-address "75-20 Astoria Blvd, Queens", has customer-name "Nancy Martin", has weight 156.8, has priority 2, has status "pending", has customer-priority "standard", has dest-lat 40.7472, has dest-lng -73.8936, has delivery-time 2024-01-13T13:20:00, has route-id "RT023", has timestamp 2024-01-13T11:00:00;
+insert $del29 isa delivery, has delivery-id "DEL029", has pickup-address "1500 Concourse Plaza, Bronx", has delivery-address "4000 Arthur Kill Rd, Staten Island", has customer-name "Kenneth Thompson", has weight 98.4, has priority 3, has status "delivered", has customer-priority "standard", has dest-lat 40.5795, has dest-lng -74.2287, has delivery-time 2024-01-13T14:40:00, has route-id "RT024", has timestamp 2024-01-13T11:00:00;
+insert $del30 isa delivery, has delivery-id "DEL030", has pickup-address "3000 Third Ave, Bronx", has delivery-address "100 Wall St, Manhattan", has customer-name "Betty Garcia", has weight 234.7, has priority 1, has status "pending", has customer-priority "express", has dest-lat 40.7505, has dest-lng -74.0087, has delivery-time 2024-01-13T12:00:00, has route-id "RT025", has timestamp 2024-01-13T11:00:00;
+
+# Staten Island Deliveries (50 deliveries)
+insert $del31 isa delivery, has delivery-id "DEL031", has pickup-address "1000 Richmond Ave, Staten Island", has delivery-address "400 E 59th St, Manhattan", has customer-name "Matthew Martinez", has weight 167.2, has priority 2, has status "in_transit", has customer-priority "standard", has dest-lat 40.7589, has dest-lng -73.9712, has delivery-time 2024-01-13T13:20:00, has route-id "RT026", has timestamp 2024-01-13T11:00:00;
+insert $del32 isa delivery, has delivery-id "DEL032", has pickup-address "2500 Victory Blvd, Staten Island", has delivery-address "600 Atlantic Ave, Brooklyn", has customer-name "Helen Robinson", has weight 198.5, has priority 1, has status "pending", has customer-priority "premium", has dest-lat 40.6892, has dest-lng -73.9779, has delivery-time 2024-01-13T12:00:00, has route-id "RT027", has timestamp 2024-01-13T11:00:00;
+insert $del33 isa delivery, has delivery-id "DEL033", has pickup-address "3000 Hylan Blvd, Staten Island", has delivery-address "80-15 Northern Blvd, Queens", has customer-name "Anthony Clark", has weight 134.9, has priority 2, has status "pending", has customer-priority "standard", has dest-lat 40.7472, has dest-lng -73.8936, has delivery-time 2024-01-13T13:20:00, has route-id "RT028", has timestamp 2024-01-13T11:00:00;
+insert $del34 isa delivery, has delivery-id "DEL034", has pickup-address "4000 Arthur Kill Rd, Staten Island", has delivery-address "900 Westchester Ave, Bronx", has customer-name "Sandra Rodriguez", has weight 89.7, has priority 3, has status "delivered", has customer-priority "standard", has dest-lat 40.8448, has dest-lng -73.9134, has delivery-time 2024-01-13T14:40:00, has route-id "RT029", has timestamp 2024-01-13T11:00:00;
+insert $del35 isa delivery, has delivery-id "DEL035", has pickup-address "5000 Richmond Terrace, Staten Island", has delivery-address "200 Broadway, Manhattan", has customer-name "Mark Lewis", has weight 245.1, has priority 1, has status "pending", has customer-priority "express", has dest-lat 40.7589, has dest-lng -74.0060, has delivery-time 2024-01-13T12:00:00, has route-id "RT030", has timestamp 2024-01-13T11:00:00;
+
+# ===========================
+# OPERATIONS
+# ===========================
+
+insert $op1 isa operation, 
+    has id "OP001", 
+    has operation-id "OP001", 
+    has assignment-id "ASG001", 
+    has vehicle-id "VH001", 
+    has job-type "gps_tracking", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $op2 isa operation, 
+    has id "OP002", 
+    has operation-id "OP002", 
+    has assignment-id "ASG002", 
+    has vehicle-id "VH002", 
+    has job-type "gps_tracking", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $op3 isa operation, 
+    has id "OP003", 
+    has operation-id "OP003", 
+    has assignment-id "ASG003", 
+    has vehicle-id "VH003", 
+    has job-type "route_rebalancing", 
+    has status "pending", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $op4 isa operation, 
+    has id "OP004", 
+    has operation-id "OP004", 
+    has assignment-id "ASG004", 
+    has vehicle-id "VH005", 
+    has job-type "gps_tracking", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $op5 isa operation, 
+    has id "OP005", 
+    has operation-id "OP005", 
+    has assignment-id "ASG005", 
+    has vehicle-id "VH006", 
+    has job-type "sla_monitoring", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $op6 isa operation, 
+    has id "OP006", 
+    has operation-id "OP006", 
+    has assignment-id "ASG006", 
+    has vehicle-id "VH008", 
+    has job-type "gps_tracking", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $op7 isa operation, 
+    has id "OP007", 
+    has operation-id "OP007", 
+    has assignment-id "MAINT001", 
+    has vehicle-id "VH004", 
+    has job-type "maintenance_scheduling", 
+    has status "scheduled", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $op8 isa operation, 
+    has id "OP008", 
+    has operation-id "OP008", 
+    has assignment-id "COMP001", 
+    has vehicle-id "VH007", 
+    has job-type "compliance_monitoring", 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+# ===========================
+# ASSIGNMENTS (Relations)
+# ===========================
+
+match $d isa delivery, has delivery-id "DEL001"; $v isa vehicle, has vehicle-id "VH001"; $emp isa employee, has id "DR002"; insert (assigned-delivery: $d, assigned-vehicle: $v, assigned-employee: $emp) isa assignment;
+commit;
+
+match $d isa delivery, has delivery-id "DEL002"; $v isa vehicle, has vehicle-id "VH002"; $emp isa employee, has id "DR004"; insert (assigned-delivery: $d, assigned-vehicle: $v, assigned-employee: $emp) isa assignment;
+commit;
+
+match $d isa delivery, has delivery-id "DEL003"; $v isa vehicle, has vehicle-id "VH003"; $emp isa employee, has id "DR001"; insert (assigned-delivery: $d, assigned-vehicle: $v, assigned-employee: $emp) isa assignment;
+commit;
+
+match $d isa delivery, has delivery-id "DEL005"; $v isa vehicle, has vehicle-id "VH005"; $emp isa employee, has id "DR008"; insert (assigned-delivery: $d, assigned-vehicle: $v, assigned-employee: $emp) isa assignment;
+commit;
+
+match $d isa delivery, has delivery-id "DEL006"; $v isa vehicle, has vehicle-id "VH006"; $emp isa employee, has id "DR003"; insert (assigned-delivery: $d, assigned-vehicle: $v, assigned-employee: $emp) isa assignment;
+commit;
+
+match $d isa delivery, has delivery-id "DEL007"; $v isa vehicle, has vehicle-id "VH008"; $emp isa employee, has id "DR007"; insert (assigned-delivery: $d, assigned-vehicle: $v, assigned-employee: $emp) isa assignment;
+commit;
+
+# ===========================
+# CONFIGURATION RULES
+# ===========================
+
+# Maintenance Configuration
+insert $r1 isa rule, 
+    has rule-name "maintenance.mileage_threshold", 
+    has rule-value "50000", 
+    has rule-category "maintenance", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r2 isa rule, 
+    has rule-name "maintenance.high_priority_mileage_buffer", 
+    has rule-value "5000", 
+    has rule-category "maintenance", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r3 isa rule, 
+    has rule-name "maintenance.default_facility", 
+    has rule-value "Central Maintenance Hub", 
+    has rule-category "maintenance", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+# Compliance Configuration
+insert $r4 isa rule, 
+    has rule-name "compliance.default_rest_hours_fallback", 
+    has rule-value "10.0", 
+    has rule-category "compliance", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r5 isa rule, 
+    has rule-name "compliance.break_hours_threshold", 
+    has rule-value "8", 
+    has rule-category "compliance", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r6 isa rule, 
+    has rule-name "compliance.break_type_default", 
+    has rule-value "mandatory", 
+    has rule-category "compliance", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+# Driver Assignment Configuration
+insert $r7 isa rule, 
+    has rule-name "driver.fallback_distance_km", 
+    has rule-value "50.0", 
+    has rule-category "driver", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r8 isa rule, 
+    has rule-name "driver.fallback_travel_time_minutes", 
+    has rule-value "60.0", 
+    has rule-category "driver", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r9 isa rule, 
+    has rule-name "driver.scoring_divisor", 
+    has rule-value "100.0", 
+    has rule-category "driver", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+# SLA Monitoring Configuration
+insert $r10 isa rule, 
+    has rule-name "sla.severe_delay_threshold_seconds", 
+    has rule-value "3600", 
+    has rule-category "sla", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+# TomTom Configuration
+insert $r11 isa rule, 
+    has rule-name "tomtom.geocode.timeout", 
+    has rule-value "10", 
+    has rule-category "tomtom", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r12 isa rule, 
+    has rule-name "tomtom.route.timeout", 
+    has rule-value "15", 
+    has rule-category "tomtom", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r13 isa rule, 
+    has rule-name "tomtom.eta.timeout", 
+    has rule-value "15", 
+    has rule-category "tomtom", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r14 isa rule, 
+    has rule-name "tomtom.traffic.heavy_threshold", 
+    has rule-value "600", 
+    has rule-category "tomtom", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r15 isa rule, 
+    has rule-name "tomtom.traffic.moderate_threshold", 
+    has rule-value "300", 
+    has rule-category "tomtom", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+# Queue Configuration
+insert $r16 isa rule, 
+    has rule-name "queue.max_workers", 
+    has rule-value "10", 
+    has rule-category "queue", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r17 isa rule, 
+    has rule-name "queue.worker_idle_timeout", 
+    has rule-value "60", 
+    has rule-category "queue", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r18 isa rule, 
+    has rule-name "queue.lease_duration", 
+    has rule-value "300", 
+    has rule-category "queue", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r19 isa rule, 
+    has rule-name "queue.heartbeat_interval", 
+    has rule-value "30", 
+    has rule-category "queue", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r20 isa rule, 
+    has rule-name "queue.max_retry_backoff", 
+    has rule-value "3600", 
+    has rule-category "queue", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;
+
+insert $r21 isa rule, 
+    has rule-name "queue.base_retry_backoff", 
+    has rule-value "1", 
+    has rule-category "queue", 
+    has effective-from 2024-01-13T11:00:00, 
+    has effective-until 2025-01-13T11:00:00, 
+    has status "active", 
+    has timestamp 2024-01-13T11:00:00;

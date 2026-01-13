@@ -38,15 +38,15 @@ async fn get_config_value(ctx: &FleetContext, key: &str, default: &str) -> Strin
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComplianceMonitoringJob {
-    pub driver_id: String,
+    pub employee_id: String,
     pub monitoring_type: String,
     pub shift_start_time: String,
 }
 
 impl ComplianceMonitoringJob {
-    pub fn new(driver_id: String, monitoring_type: String, shift_start_time: String) -> Self {
+    pub fn new(employee_id: String, monitoring_type: String, shift_start_time: String) -> Self {
         Self { 
-            driver_id, 
+            employee_id, 
             monitoring_type, 
             shift_start_time 
         }
@@ -77,26 +77,25 @@ impl Job for ComplianceMonitoringJob {
         let operations_service = ctx.app.app.service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
 
-        // Get driver details and current status
-        let driver_query = serde_json::json!({
-            "match": format!("$driver isa employee, has driver-id '{}';", self.driver_id),
-            "get": "$driver;"
+        // Get employee details and current status
+        let employee_query = serde_json::json!({
+            "query": format!("match $employee isa employee, has id '{}'; select $employee;", self.employee_id)
         });
 
-        let driver_result = employees_service
-            .custom(tenant_ctx.clone(), "read", Some(driver_query), params.clone())
+        let employee_result = employees_service
+            .custom(tenant_ctx.clone(), "read", Some(employee_query), params.clone())
             .await
             .map_err(|e| JobError::Retryable(format!("Failed to get driver details: {}", e)))?;
 
-        if let Some(driver_array) = driver_result.as_array() {
-            if let Some(driver) = driver_array.first() {
-                let daily_drive_hours = driver.get("daily-drive-hours").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let consecutive_hours = driver.get("consecutive-hours").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        if let Some(employee_array) = employee_result.as_array() {
+            if let Some(employee) = employee_array.first() {
+                let daily_drive_hours = employee.get("daily-drive-hours").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let consecutive_hours = employee.get("consecutive-hours").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let default_rest_hours = get_config_value(&ctx, "compliance.default_rest_hours_fallback", "10.0").await.parse().unwrap_or(10.0);
-                let rest_hours = driver.get("rest-hours").and_then(|v| v.as_f64()).unwrap_or(default_rest_hours);
-                let last_break_time = driver.get("last-break-time").and_then(|v| v.as_str()).unwrap_or("");
-                let cdl_expiry = driver.get("cdl-expiry").and_then(|v| v.as_str()).unwrap_or("");
-                let medical_cert_expiry = driver.get("medical-cert-expiry").and_then(|v| v.as_str()).unwrap_or("");
+                let rest_hours = employee.get("rest-hours").and_then(|v| v.as_f64()).unwrap_or(default_rest_hours);
+                let last_break_time = employee.get("last-break-time").and_then(|v| v.as_str()).unwrap_or("");
+                let cdl_expiry = employee.get("cdl-expiry").and_then(|v| v.as_str()).unwrap_or("");
+                let medical_cert_expiry = employee.get("medical-cert-expiry").and_then(|v| v.as_str()).unwrap_or("");
 
                 let mut violations = Vec::new();
                 let mut actions_taken = Vec::new();
@@ -112,7 +111,7 @@ impl Job for ComplianceMonitoringJob {
                     
                     // Block driver from new assignments
                     let driver_update = serde_json::json!({
-                        "driver_id": self.driver_id,
+                        "employee_id": self.employee_id,
                         "status": "hours_exceeded",
                         "available": false,
                         "violation_type": "daily_driving_limit",
@@ -139,7 +138,7 @@ impl Job for ComplianceMonitoringJob {
                     let mandatory_rest_end = chrono::Utc::now() + chrono::Duration::hours(10);
                     
                     let rest_enforcement = serde_json::json!({
-                        "driver_id": self.driver_id,
+                        "employee_id": self.employee_id,
                         "rest_type": "mandatory_10_hour",
                         "rest_start": chrono::Utc::now().to_rfc3339(),
                         "rest_end": mandatory_rest_end.to_rfc3339(),
@@ -166,7 +165,7 @@ impl Job for ComplianceMonitoringJob {
                             violations.push("break_requirement_violation".to_string());
                             
                             let break_enforcement = serde_json::json!({
-                                "driver_id": self.driver_id,
+                                "employee_id": self.employee_id,
                                 "break_type": get_config_value(&ctx, "compliance.mandatory_break_type", "mandatory_30_minute").await,
                                 "break_required": true,
                                 "hours_since_last_break": hours_since_break,
@@ -193,7 +192,7 @@ impl Job for ComplianceMonitoringJob {
                             
                             // Immediately suspend driver
                             let suspension_data = serde_json::json!({
-                                "driver_id": self.driver_id,
+                                "employee_id": self.employee_id,
                                 "suspension_type": "cdl_expired",
                                 "suspension_start": chrono::Utc::now().to_rfc3339(),
                                 "compliance_rule": "CDL_validity_requirement",
@@ -209,7 +208,7 @@ impl Job for ComplianceMonitoringJob {
                         } else if days_until_expiry <= get_config_value(&ctx, "compliance.cdl_warning_days", "30").await.parse().unwrap_or(30) {
                             // Warning for upcoming expiry
                             let warning_data = serde_json::json!({
-                                "driver_id": self.driver_id,
+                                "employee_id": self.employee_id,
                                 "warning_type": "cdl_expiring_soon",
                                 "days_until_expiry": days_until_expiry,
                                 "expiry_date": cdl_expiry,
@@ -235,7 +234,7 @@ impl Job for ComplianceMonitoringJob {
                             violations.push("medical_cert_expired".to_string());
                             
                             let suspension_data = serde_json::json!({
-                                "driver_id": self.driver_id,
+                                "employee_id": self.employee_id,
                                 "suspension_type": "medical_cert_expired",
                                 "suspension_start": chrono::Utc::now().to_rfc3339(),
                                 "compliance_rule": "DOT_medical_certificate_requirement",
@@ -254,7 +253,7 @@ impl Job for ComplianceMonitoringJob {
 
                 // Generate compliance report
                 let compliance_report = serde_json::json!({
-                    "driver_id": self.driver_id,
+                    "employee_id": self.employee_id,
                     "monitoring_type": self.monitoring_type,
                     "shift_start_time": self.shift_start_time,
                     "daily_drive_hours": daily_drive_hours,
@@ -273,16 +272,16 @@ impl Job for ComplianceMonitoringJob {
                     .map_err(|e| JobError::Retryable(format!("Failed to create compliance report: {}", e)))?;
 
                 if violations.is_empty() {
-                    Ok(format!("Compliance monitoring completed for driver {}: No violations detected", self.driver_id))
+                    Ok(format!("Compliance monitoring completed for driver {}: No violations detected", self.employee_id))
                 } else {
                     Ok(format!("Compliance monitoring completed for driver {}: {} violations detected, {} actions taken", 
-                              self.driver_id, violations.len(), actions_taken.len()))
+                              self.employee_id, violations.len(), actions_taken.len()))
                 }
             } else {
-                Err(JobError::Permanent(format!("Driver {} not found", self.driver_id)))
+                Err(JobError::Permanent(format!("Driver {} not found", self.employee_id)))
             }
         } else {
-            Err(JobError::Permanent(format!("Invalid driver query result for {}", self.driver_id)))
+            Err(JobError::Permanent(format!("Invalid driver query result for {}", self.employee_id)))
         }
     }
 }

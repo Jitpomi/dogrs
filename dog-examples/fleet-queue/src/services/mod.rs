@@ -7,7 +7,6 @@ use std::sync::Arc;
 use dog_core::DogService;
 use crate::typedb::TypeDBState;
 
-pub mod drivers;
 pub mod vehicles;
 pub mod deliveries;
 pub mod operations;
@@ -17,7 +16,6 @@ pub mod jobs;
 pub mod rules;
 
 pub struct FleetServices {
-    pub drivers: Arc<dyn DogService<serde_json::Value, FleetParams>>,
     pub vehicles: Arc<dyn DogService<serde_json::Value, FleetParams>>,
     pub deliveries: Arc<dyn DogService<serde_json::Value, FleetParams>>,
     pub operations: Arc<dyn DogService<serde_json::Value, FleetParams>>,
@@ -31,10 +29,6 @@ pub fn configure(
     app: &dog_core::DogApp<serde_json::Value, FleetParams>,
     state: Arc<TypeDBState>,
 ) -> anyhow::Result<FleetServices> {
-
-    let drivers: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(drivers::DriversService::new(Arc::clone(&state)));
-    app.register_service("drivers", Arc::clone(&drivers));
-    drivers::drivers_shared::register_hooks(app)?;
 
     let vehicles: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(vehicles::VehiclesService::new(Arc::clone(&state)));
     app.register_service("vehicles", Arc::clone(&vehicles));
@@ -65,7 +59,6 @@ pub fn configure(
     rules::rules_shared::register_hooks(app)?;
 
     Ok(FleetServices {
-        drivers,
         vehicles,
         deliveries,
         operations,

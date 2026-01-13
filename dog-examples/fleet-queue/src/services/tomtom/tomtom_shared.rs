@@ -11,7 +11,7 @@ pub fn capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, FleetParams>) -> anyhow::Result<()> {
+pub fn register_hooks(_app: &dog_core::DogApp<serde_json::Value, FleetParams>) -> anyhow::Result<()> {
     // TomTom service doesn't use traditional hooks since it's queue-based
     // Hooks are registered on other services (deliveries, vehicles) that trigger TomTom operations
     Ok(())
