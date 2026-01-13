@@ -54,6 +54,7 @@ pub struct JobName {
     pub created_at: String,
 }
 
+// Each job defines its own FleetContext (identical structure)
 #[derive(Clone)]
 pub struct FleetContext {
     pub app: Arc<AxumApp<Value, FleetParams>>,
@@ -65,6 +66,8 @@ impl Job for JobName {
     type Result = String;
     
     const JOB_TYPE: &'static str = "job_name";
+    const PRIORITY: JobPriority = JobPriority::Normal;
+    const MAX_RETRIES: u32 = 3;
     
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
         // Get configurable parameters using TypeDB rules
@@ -86,7 +89,7 @@ use tokio::time::{interval, Duration};
 pub struct BackgroundSystem {
     adapter: Arc<QueueAdapter<MemoryBackend>>,
     worker_handles: Vec<WorkerHandle>,
-    context: GPSFleetContext,
+    context: GPSFleetContext, // Alias for gps_tracking::FleetContext
 }
 
 impl BackgroundSystem {
@@ -105,10 +108,19 @@ impl BackgroundSystem {
         
         let adapter = Arc::new(QueueAdapter::with_config(backend, config));
         
-        // Register implemented job types only
+        // Register all implemented job types
+        // Note: Each job has its own FleetContext, aliased in jobs/mod.rs:
+        // - GPSFleetContext = gps_tracking::FleetContext
+        // - EmployeeFleetContext = employee_assignment::FleetContext
+        // - etc. (all identical structure)
         adapter.register_job::<GPSTrackingJob>().await?;
+        adapter.register_job::<EmployeeAssignmentJob>().await?;
+        adapter.register_job::<RouteRebalancingJob>().await?;
+        adapter.register_job::<SLAMonitoringJob>().await?;
+        adapter.register_job::<MaintenanceSchedulingJob>().await?;
+        adapter.register_job::<ComplianceMonitoringJob>().await?;
         
-        let context = GPSFleetContext { app };
+        let context = GPSFleetContext { app }; // Uses gps_tracking::FleetContext via alias
         
         Ok(Self {
             adapter,
@@ -120,9 +132,14 @@ impl BackgroundSystem {
     pub async fn start(&mut self) -> Result<()> {
         let ctx = QueueCtx::new("fleet_tenant".to_string());
         
-        // Start workers for implemented job types only
+        // Start workers for all implemented job types
         let queues = vec![
             "gps_tracking".to_string(),
+            "employee_assignment".to_string(),
+            "route_rebalancing".to_string(),
+            "sla_monitoring".to_string(),
+            "maintenance_scheduling".to_string(),
+            "compliance_monitoring".to_string(),
         ];
         
         let worker_handle = self.adapter.start_workers(
@@ -156,16 +173,30 @@ impl BackgroundSystem {
 }
 ```
 
+## Context Architecture Pattern
+
+Each job defines its own `FleetContext` with identical structure. The `jobs/mod.rs` file aliases these for the BackgroundSystem:
+
+```rust
+// jobs/mod.rs - Context aliasing pattern
+pub use gps_tracking::{GPSTrackingJob, FleetContext as GPSFleetContext};
+pub use employee_assignment::{EmployeeAssignmentJob, FleetContext as EmployeeFleetContext};
+pub use route_rebalancing::{RouteRebalancingJob, FleetContext as RouteFleetContext};
+pub use maintenance_scheduling::{MaintenanceSchedulingJob, FleetContext as MaintenanceFleetContext};
+pub use sla_monitoring::{SLAMonitoringJob, FleetContext as SLAFleetContext};
+pub use compliance_monitoring::{ComplianceMonitoringJob, FleetContext as ComplianceFleetContext};
+```
+
+The BackgroundSystem uses `GPSFleetContext` (which is `gps_tracking::FleetContext`) but all contexts are structurally identical.
+
 ## Implemented Job Types
 
-### 1. GPSTrackingJob (Currently Implemented)
+### 1. GPSTrackingJob
 - **Purpose**: Periodic location tracking and status updates
 - **Frequency**: Every minute (60 seconds)
 - **Queue**: `gps_tracking`
 - **Context**: Fleet assignment monitoring
-- **Status**: ✅ Registered and active in BackgroundSystem
-
-### Additional Job Types (Implemented but not registered in BackgroundSystem)
+- **Status**: ✅ Implemented and registered in BackgroundSystem
 
 ### 2. EmployeeAssignmentJob
 - **Purpose**: Intelligent employee assignment based on scoring algorithm
@@ -184,7 +215,7 @@ impl BackgroundSystem {
   - `rebalancing.traffic_delay_trigger_minutes`
   - `rebalancing.premium_threshold_seconds`
   - `rebalancing.priority_threshold_seconds`
-- **Status**: ⚠️ Implemented but not registered in BackgroundSystem
+- **Status**: ✅ Implemented and registered in BackgroundSystem
 
 ### 4. SLAMonitoringJob
 - **Purpose**: Customer SLA compliance monitoring and breach prevention
@@ -193,7 +224,7 @@ impl BackgroundSystem {
   - `sla.premium.escalation_threshold_minutes`
   - `sla.priority.escalation_threshold_minutes`
   - `sla.standard.escalation_threshold_minutes`
-- **Status**: ⚠️ Implemented but not registered in BackgroundSystem
+- **Status**: ✅ Implemented and registered in BackgroundSystem
 
 ### 5. MaintenanceSchedulingJob
 - **Purpose**: Predictive vehicle maintenance scheduling
@@ -202,7 +233,7 @@ impl BackgroundSystem {
   - `maintenance.default_mileage_threshold`
   - `maintenance.window_start_hour`
   - `maintenance.window_end_hour`
-- **Status**: ⚠️ Implemented but not registered in BackgroundSystem
+- **Status**: ✅ Implemented and registered in BackgroundSystem
 
 ### 6. ComplianceMonitoringJob
 - **Purpose**: Regulatory compliance automation (DOT HOS, CDL, medical certs)
@@ -211,7 +242,7 @@ impl BackgroundSystem {
   - `compliance.daily_driving_limit_hours`
   - `compliance.consecutive_duty_limit_hours`
   - `compliance.cdl_warning_days`
-- **Status**: ⚠️ Implemented but not registered in BackgroundSystem
+- **Status**: ✅ Implemented and registered in BackgroundSystem
 
 ## Dynamic Configuration System
 
