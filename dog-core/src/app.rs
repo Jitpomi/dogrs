@@ -762,6 +762,44 @@ where
             None => Err(anyhow::anyhow!("remove() produced no result")),
         }
     }
+
+    /// Custom method that goes through the full dogrs pipeline (hooks, events, etc.)
+    pub async fn custom(&self, tenant: TenantContext, method: &'static str, data: Option<R>, params: P) -> Result<R> {
+        let method_kind = ServiceMethodKind::Custom(method);
+
+        let services = ServiceCaller::new(self.app.clone());
+        let config = self.app.config_snapshot();
+        let mut ctx = HookContext::new(tenant, method_kind.clone(), params, services, config);
+        ctx.data = data;
+
+        let method_name = method.to_string();
+
+        let ctx = self
+            .run_pipeline(
+                method_kind,
+                ctx,
+                Arc::new(move |svc, ctx| {
+                    let method_name = method_name.clone();
+                    Box::pin(async move {
+                        let result = svc
+                            .custom(&ctx.tenant, &method_name, ctx.data.take(), ctx.params.clone())
+                            .await?;
+
+                        ctx.result = Some(HookResult::One(result));
+                        Ok(())
+                    })
+                }),
+            )
+            .await?;
+
+        match ctx.result {
+            Some(HookResult::One(v)) => Ok(v),
+            Some(HookResult::Many(_)) => Err(anyhow::anyhow!(
+                "custom() produced HookResult::Many unexpectedly"
+            )),
+            None => Err(anyhow::anyhow!("custom() produced no result")),
+        }
+    }
 }
 
 

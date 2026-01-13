@@ -4,12 +4,15 @@ members = [
     "dog-axum",
     "dog-typedb",
     "dog-blob",
-    "dog-examples/music-blobs",
+    "dog-queue",
     "dog-schema",
     "dog-schema-macros",
     "dog-schema-validator",
+    "dog-examples/music-blobs",
     "dog-examples/blog-axum",
-    "dog-examples/social-typedb",
+    "dog-examples/social-typedb", 
+    "dog-examples/fleet-queue",
+    
 ]
 
 resolver = "2"

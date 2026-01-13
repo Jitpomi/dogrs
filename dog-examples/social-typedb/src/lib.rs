@@ -7,7 +7,7 @@ mod typedb;
 use std::sync::Arc;
 use serde_json::Value;
 use dog_axum::AxumApp;
-pub use services::{SocialParams};
+pub use services::SocialParams;
 
 pub async fn build() -> anyhow::Result<AxumApp<Value, SocialParams>> {
     let ax = app::social_app()?;

@@ -12,8 +12,6 @@ keywords = ["queue", "jobs", "async", "multi-tenant", "background"]
 categories = ["asynchronous", "concurrency", "database"]
 readme = "README.md"
 
-[workspace]
-
 [package.metadata]
 
 [package.metadata.ferrisup]

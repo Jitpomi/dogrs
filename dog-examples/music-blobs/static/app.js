@@ -675,19 +675,35 @@ class MusicPlayer {
   }
 
   cleanupAudio() {
+    // First teardown audio graph before manipulating audio element
+    this.teardownAudioGraph();
+    
     if (this.currentAudio) {
       try {
         this.currentAudio.pause();
-      } catch {}
-      this.currentAudio.src = "";
-      this.currentAudio.load();
+        this.currentAudio.currentTime = 0;
+      } catch (e) {
+        console.warn("Error pausing audio:", e);
+      }
+      
+      try {
+        this.currentAudio.src = "";
+        this.currentAudio.load();
+      } catch (e) {
+        console.warn("Error clearing audio src:", e);
+      }
+      
       this.currentAudio = null;
     }
+    
     if (this.currentObjectUrl) {
-      URL.revokeObjectURL(this.currentObjectUrl);
+      try {
+        URL.revokeObjectURL(this.currentObjectUrl);
+      } catch (e) {
+        console.warn("Error revoking object URL:", e);
+      }
       this.currentObjectUrl = null;
     }
-    this.teardownAudioGraph();
   }
 
   // -----------------------------
@@ -731,13 +747,19 @@ class MusicPlayer {
         this.sourceNode.disconnect();
         this.sourceNode = null;
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Error disconnecting source node:", e);
+    }
+    
     try {
       if (this.analyser) {
         this.analyser.disconnect();
         this.analyser = null;
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Error disconnecting analyser:", e);
+    }
+    
     this.dataArray = null;
   }
 
