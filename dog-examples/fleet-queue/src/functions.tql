@@ -39,7 +39,7 @@ match
     $hours < 11.0;
 return { $employee };
 
-fun best_employee_for_route($route_id: string) -> { employee }:
+fun best_employee_for_route() -> { employee }:
 match 
     $employee isa employee, has employee-role "driver", has status "available", has performance-rating $rating;
     $rating >= 4.0;
@@ -72,8 +72,8 @@ return { $delivery };
 
 fun vehicles_requiring_maintenance() -> { vehicle }:
 match 
-    $vehicle isa vehicle, has current-mileage $mileage, has maintenance-threshold $threshold;
-    $mileage >= $threshold;
+    $vehicle isa vehicle, has maintenance-score $score;
+    $score < 3.0;
 return { $vehicle };
 
 fun available_backup_vehicles() -> { vehicle }:
@@ -81,7 +81,7 @@ match
     $vehicle isa vehicle, has status "available", has maintenance-status "good";
 return { $vehicle };
 
-fun routes_for_vehicle($vehicle_id: string) -> { operation }:
+fun routes_for_vehicle() -> { operation }:
 match 
-    $route isa operation, has vehicle-id $vehicle_id, has status "active";
+    $route isa operation, has status "active";
 return { $route };
