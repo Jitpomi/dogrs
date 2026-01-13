@@ -39,26 +39,16 @@ impl Job for GPSTrackingJob {
         let operations_service = ctx.app.app.service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
         
-        let query = serde_json::json!({
-            "match": format!("$op isa operation, has operation-id '{}';", self.assignment_id),
-            "get": "$op;"
-        });
-        
-        operations_service
-            .custom(tenant_ctx.clone(), "read", Some(query), params.clone())
-            .await
-            .map_err(|e| JobError::Permanent(format!("Failed to get assignment: {}", e)))?;
-        
-        let update_data = serde_json::json!({
+        // Simple GPS tracking record - TypeDB functions handle all business logic
+        let gps_update = serde_json::json!({
             "assignment_id": self.assignment_id,
-            "gps_update_timestamp": chrono::Utc::now().to_rfc3339(),
-            "status": "tracking_updated"
+            "gps_update_timestamp": chrono::Utc::now().to_rfc3339()
         });
         
         operations_service
-            .create(tenant_ctx, update_data, params)
+            .create(tenant_ctx, gps_update, params)
             .await
-            .map_err(|e| JobError::Retryable(format!("Failed to update GPS timestamp: {}", e)))?;
+            .map_err(|e| JobError::Retryable(format!("Failed to create GPS update: {}", e)))?;
         
         Ok(format!("GPS tracking completed for assignment: {}", self.assignment_id))
     }

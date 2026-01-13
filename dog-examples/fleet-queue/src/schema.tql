@@ -4,22 +4,22 @@ define
   # ----------------------------
   attribute id, value string;
   attribute timestamp, value datetime;
-  attribute status, value string;
+  attribute status, value string @values("available", "busy", "offline", "maintenance", "hours_exceeded", "suspended", "active", "pending", "in_transit", "delivered", "failed", "operational", "scheduled");
   attribute priority, value integer;
   
   # Vehicle Attributes
   attribute vehicle-id, value string;
-  attribute vehicle-type, value string;
+  attribute vehicle-type, value string @values("van", "truck", "refrigerated", "box_truck");
   attribute capacity, value double;
   attribute fuel-level, value double;
   attribute maintenance-score, value double;
-  attribute maintenance-status, value string;
+  attribute maintenance-status, value string @values("good", "fair", "poor", "critical", "out_of_service");
   
   # Employee Attributes
   attribute employee-name, value string;
-  attribute employee-role, value string;
-  attribute shift-schedule, value string;
-  attribute license-class, value string;
+  attribute employee-role, value string @values("driver", "mechanic", "dispatcher", "supervisor");
+  attribute shift-schedule, value string @values("day", "evening", "night", "rotating");
+  attribute license-class, value string @values("CDL-A", "CDL-B", "CDL-C", "regular");
   attribute vehicle-assignment, value string;
   attribute current-lat, value double;
   attribute current-lng, value double;
@@ -35,7 +35,7 @@ define
   attribute delivery-time, value datetime;
   attribute weight, value double;
   attribute route-id, value string;
-  attribute customer-priority, value string;
+  attribute customer-priority, value string @values("standard", "premium", "express", "urgent");
   attribute dest-lat, value double;
   attribute dest-lng, value double;
   
@@ -150,4 +150,8 @@ define
     owns retry-count,
     owns scheduled-at,
     owns timestamp;
+
+
+
+
   

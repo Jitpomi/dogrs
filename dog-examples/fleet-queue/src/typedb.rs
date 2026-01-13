@@ -53,13 +53,27 @@ impl TypeDBState {
     }
 
     async fn load_schema_from_file(state: &TypeDBState) -> Result<()> {
-        let paths = [
+        let schema_paths = [
             "src/schema.tql",
             "dog-examples/fleet-queue/src/schema.tql",
             "./dog-examples/fleet-queue/src/schema.tql",
         ];
         
-        load_schema_from_file(&state.driver, &state.database, &paths).await?;
+        println!("Loading TypeDB schema from schema.tql file...");
+        load_schema_from_file(&state.driver, &state.database, &schema_paths).await?;
+        println!("TypeDB schema loaded successfully from schema.tql!");
+        
+        // Load TypeDB 3.0 functions for business logic
+        let functions_paths = [
+            "src/functions.tql",
+            "dog-examples/fleet-queue/src/functions.tql", 
+            "./dog-examples/fleet-queue/src/functions.tql",
+        ];
+        
+        println!("Loading TypeDB 3.0 functions from functions.tql file...");
+        load_schema_from_file(&state.driver, &state.database, &functions_paths).await?;
+        println!("TypeDB 3.0 functions loaded successfully!");
+        
         Ok(())
     }
 
