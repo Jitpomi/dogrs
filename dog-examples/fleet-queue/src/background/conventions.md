@@ -54,7 +54,8 @@ pub struct JobName {
     pub created_at: String,
 }
 
-// Each job defines its own FleetContext (identical structure)
+// Unified FleetContext defined in background/mod.rs (shared across all jobs)
+// Note: Jobs now use crate::background::FleetContext instead of defining their own
 #[derive(Clone)]
 pub struct FleetContext {
     pub app: Arc<AxumApp<Value, FleetParams>>,
@@ -62,7 +63,7 @@ pub struct FleetContext {
 
 #[async_trait]
 impl Job for JobName {
-    type Context = FleetContext;
+    type Context = crate::background::FleetContext;
     type Result = String;
     
     const JOB_TYPE: &'static str = "job_name";
@@ -84,8 +85,20 @@ impl Job for JobName {
             "job_timestamp": chrono::Utc::now().to_rfc3339()
         });
 
+        // Use proper TypeDB write method with unique IDs
+        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let unique_id = format!("JOB_{}_{}", self.field, chrono::Utc::now().timestamp_millis());
+        let job_query = format!(
+            "insert $job isa operation, has id \"{}\", has operation-id \"{}\", has job-type \"job_record\", has status \"operational\", has timestamp {};",
+            unique_id, unique_id, timestamp
+        );
+        
+        let job_data = serde_json::json!({
+            "query": job_query
+        });
+        
         operations_service
-            .create(tenant_ctx, job_record, params)
+            .custom(tenant_ctx, "write", Some(job_data), params)
             .await
             .map_err(|e| JobError::Retryable(format!("Failed to create job record: {}", e)))?;
 
@@ -104,7 +117,7 @@ use tokio::time::{interval, Duration};
 pub struct BackgroundSystem {
     adapter: Arc<QueueAdapter<MemoryBackend>>,
     worker_handles: Vec<WorkerHandle>,
-    context: GPSFleetContext, // Alias for gps_tracking::FleetContext
+    context: FleetContext, // Unified context for all jobs
 }
 
 impl BackgroundSystem {
@@ -124,10 +137,8 @@ impl BackgroundSystem {
         let adapter = Arc::new(QueueAdapter::with_config(backend, config));
         
         // Register all implemented job types
-        // Note: Each job has its own FleetContext, aliased in jobs/mod.rs:
-        // - GPSFleetContext = gps_tracking::FleetContext
-        // - EmployeeFleetContext = employee_assignment::FleetContext
-        // - etc. (all identical structure)
+        // Note: All jobs now use the unified crate::background::FleetContext
+        // This fixes the previous context type mismatch issue
         adapter.register_job::<GPSTrackingJob>().await?;
         adapter.register_job::<EmployeeAssignmentJob>().await?;
         adapter.register_job::<RouteRebalancingJob>().await?;
@@ -135,7 +146,7 @@ impl BackgroundSystem {
         adapter.register_job::<MaintenanceSchedulingJob>().await?;
         adapter.register_job::<ComplianceMonitoringJob>().await?;
         
-        let context = GPSFleetContext { app }; // Uses gps_tracking::FleetContext via alias
+        let context = FleetContext { app }; // Unified context for all jobs
         
         Ok(Self {
             adapter,
@@ -190,19 +201,65 @@ impl BackgroundSystem {
 
 ## Context Architecture Pattern
 
-Each job defines its own `FleetContext` with identical structure. The `jobs/mod.rs` file aliases these for the BackgroundSystem:
+All jobs now use a unified `FleetContext` defined in `background/mod.rs`. This eliminates the previous context type mismatch issue that prevented job execution.
 
 ```rust
-// jobs/mod.rs - Context aliasing pattern
-pub use gps_tracking::{GPSTrackingJob, FleetContext as GPSFleetContext};
-pub use employee_assignment::{EmployeeAssignmentJob, FleetContext as EmployeeFleetContext};
-pub use route_rebalancing::{RouteRebalancingJob, FleetContext as RouteFleetContext};
-pub use maintenance_scheduling::{MaintenanceSchedulingJob, FleetContext as MaintenanceFleetContext};
-pub use sla_monitoring::{SLAMonitoringJob, FleetContext as SLAFleetContext};
-pub use compliance_monitoring::{ComplianceMonitoringJob, FleetContext as ComplianceFleetContext};
+// background/mod.rs - Unified context definition
+#[derive(Clone)]
+pub struct FleetContext {
+    pub app: Arc<AxumApp<Value, FleetParams>>,
+}
+
+// jobs/mod.rs - No more context aliases needed
+pub use gps_tracking::GPSTrackingJob;
+pub use employee_assignment::EmployeeAssignmentJob;
+pub use route_rebalancing::RouteRebalancingJob;
+pub use maintenance_scheduling::MaintenanceSchedulingJob;
+pub use sla_monitoring::SLAMonitoringJob;
+pub use compliance_monitoring::ComplianceMonitoringJob;
 ```
 
-The BackgroundSystem uses `GPSFleetContext` (which is `gps_tracking::FleetContext`) but all contexts are structurally identical.
+**Critical Fix**: Jobs now use `type Context = crate::background::FleetContext;` instead of defining their own context types.
+
+## Dog-Queue Integration Fix
+
+### Queue Name Mismatch Resolution
+
+**Problem**: Jobs were being enqueued to the `"default"` queue but workers were listening to job-type-specific queues (e.g., `"gps_tracking"`), causing jobs to never execute.
+
+**Root Cause**: In `dog-queue/src/codec/mod.rs`, the `encode_job` function was hardcoded to use `"default"` as the queue name:
+
+```rust
+// BEFORE (broken)
+Ok(JobMessage {
+    job_type: J::JOB_TYPE.to_string(),
+    payload_bytes: payload,
+    codec: codec.codec_id().to_string(),
+    queue: "default".to_string(), // ❌ Hardcoded default queue
+    priority: J::PRIORITY,
+    max_retries: J::MAX_RETRIES,
+    run_at: chrono::Utc::now(),
+    idempotency_key: job.idempotency_key(),
+})
+```
+
+**Solution**: Changed the queue name to use the job type, ensuring jobs are enqueued to the correct queues:
+
+```rust
+// AFTER (fixed)
+Ok(JobMessage {
+    job_type: J::JOB_TYPE.to_string(),
+    payload_bytes: payload,
+    codec: codec.codec_id().to_string(),
+    queue: J::JOB_TYPE.to_string(), // ✅ Use job type as queue name
+    priority: J::PRIORITY,
+    max_retries: J::MAX_RETRIES,
+    run_at: chrono::Utc::now(),
+    idempotency_key: job.idempotency_key(),
+})
+```
+
+**Result**: Jobs now execute immediately after being enqueued, with workers properly processing jobs from their designated queues.
 
 ## Implemented Job Types
 
