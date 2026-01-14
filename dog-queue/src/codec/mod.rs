@@ -81,7 +81,7 @@ impl CodecRegistry {
             job_type: J::JOB_TYPE.to_string(),
             payload_bytes: payload,
             codec: codec.codec_id().to_string(),
-            queue: "default".to_string(), // TODO: Get from context or job
+            queue: J::JOB_TYPE.to_string(), // Use job type as queue name
             priority: J::PRIORITY,
             max_retries: J::MAX_RETRIES,
             run_at: chrono::Utc::now(), // Default to immediate execution

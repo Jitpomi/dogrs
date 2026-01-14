@@ -1,10 +1,7 @@
 use async_trait::async_trait;
 use dog_queue::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use dog_core::tenant::TenantContext;
-use dog_axum::AxumApp;
-use serde_json::Value;
 use crate::services::FleetParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,14 +15,9 @@ impl GPSTrackingJob {
     }
 }
 
-#[derive(Clone)]
-pub struct FleetContext {
-    pub app: Arc<AxumApp<Value, FleetParams>>,
-}
-
 #[async_trait]
 impl Job for GPSTrackingJob {
-    type Context = FleetContext;
+    type Context = crate::background::FleetContext;
     type Result = String;
     
     const JOB_TYPE: &'static str = "gps_tracking";
@@ -33,23 +25,37 @@ impl Job for GPSTrackingJob {
     const MAX_RETRIES: u32 = 3;
 
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
+        println!("🚀 GPS JOB EXECUTING for assignment: {}", self.assignment_id);
+        
         let tenant_ctx = TenantContext::new("fleet_tenant".to_string());
         let params = FleetParams::default();
         
         let operations_service = ctx.app.app.service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
         
-        // Simple GPS tracking record - TypeDB functions handle all business logic
+        // Create GPS tracking record using proper TypeDB write method with unique ID
+        let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let unique_id = format!("GPS_{}_{}", self.assignment_id, chrono::Utc::now().timestamp_millis());
+        let gps_query = format!(
+            "insert $gps isa operation, has id \"{}\", has operation-id \"{}\", has assignment-id \"{}\", has job-type \"gps_update\", has status \"operational\", has timestamp {};",
+            unique_id, unique_id, self.assignment_id, timestamp
+        );
+        
         let gps_update = serde_json::json!({
-            "assignment_id": self.assignment_id,
-            "gps_update_timestamp": chrono::Utc::now().to_rfc3339()
+            "query": gps_query
         });
         
-        operations_service
-            .create(tenant_ctx, gps_update, params)
-            .await
-            .map_err(|e| JobError::Retryable(format!("Failed to create GPS update: {}", e)))?;
+        println!("📝 GPS JOB: Writing to database for {}", self.assignment_id);
         
+        operations_service
+            .custom(tenant_ctx, "write", Some(gps_update), params)
+            .await
+            .map_err(|e| {
+                println!("❌ GPS JOB FAILED for {}: {}", self.assignment_id, e);
+                JobError::Retryable(format!("Failed to create GPS update: {}", e))
+            })?;
+        
+        println!("✅ GPS JOB COMPLETED for assignment: {}", self.assignment_id);
         Ok(format!("GPS tracking completed for assignment: {}", self.assignment_id))
     }
 }

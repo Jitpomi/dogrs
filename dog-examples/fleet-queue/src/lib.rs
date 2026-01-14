@@ -20,7 +20,9 @@ pub async fn build() -> anyhow::Result<AxumApp<Value, FleetParams>> {
     hooks::global_hooks(ax.app.as_ref());
     channels::configure(ax.app.as_ref())?;
     // Initialize background system and store in app state  
-    let background_system = Arc::new(background::BackgroundSystem::new(Arc::new(ax.clone())).await?);
+    let mut background_system = background::BackgroundSystem::new(Arc::new(ax.clone())).await?;
+    background_system.start().await?;
+    let background_system = Arc::new(background_system);
     ax.app.set("background_system", background_system.clone());
 
     let svcs = services::configure(ax.app.as_ref(), Arc::clone(&state))?;

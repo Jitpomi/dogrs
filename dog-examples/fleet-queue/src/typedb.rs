@@ -71,8 +71,13 @@ impl TypeDBState {
         ];
         
         println!("Loading TypeDB 3.0 functions from functions.tql file...");
-        load_schema_from_file(&state.driver, &state.database, &functions_paths).await?;
-        println!("TypeDB 3.0 functions loaded successfully!");
+        match load_schema_from_file(&state.driver, &state.database, &functions_paths).await {
+            Ok(_) => println!("TypeDB 3.0 functions loaded successfully!"),
+            Err(e) if e.to_string().contains("already exists") => {
+                println!("TypeDB 3.0 functions already exist, skipping...");
+            }
+            Err(e) => return Err(e),
+        }
         
         Ok(())
     }

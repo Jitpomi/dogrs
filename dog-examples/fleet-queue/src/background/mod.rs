@@ -16,11 +16,17 @@ use crate::services::FleetParams;
 
 pub use jobs::*;
 
+/// Unified context for all background jobs
+#[derive(Clone)]
+pub struct FleetContext {
+    pub app: Arc<AxumApp<Value, FleetParams>>,
+}
+
 /// Main background processing system using proper dog-queue patterns
 pub struct BackgroundSystem {
     adapter: Arc<QueueAdapter<MemoryBackend>>,
     worker_handles: Vec<WorkerHandle>,
-    context: GPSFleetContext,
+    context: FleetContext,
 }
 
 impl BackgroundSystem {
@@ -56,7 +62,7 @@ impl BackgroundSystem {
         adapter.register_job::<MaintenanceSchedulingJob>().await?;
         adapter.register_job::<ComplianceMonitoringJob>().await?;
         
-        let context = GPSFleetContext {
+        let context = FleetContext {
             app,
         };
         
@@ -81,6 +87,7 @@ impl BackgroundSystem {
             "compliance_monitoring".to_string(),
         ];
         
+        println!("🔧 Starting dog-queue workers for queues: {:?}", queues);
         let worker_handle = self.adapter.start_workers(
             ctx.clone(),
             self.context.clone(),
@@ -93,6 +100,7 @@ impl BackgroundSystem {
         self.start_cron_jobs().await;
         
         println!("🚀 Background processing system started with proper dog-queue integration");
+        println!("📊 Workers active: {}", self.worker_handles.len());
         Ok(())
     }
     
@@ -118,21 +126,38 @@ impl BackgroundSystem {
                         
                         // Query for active assignments
                         let query = serde_json::json!({
-                            "match": "$assignment isa operation, has status 'active';",
-                            "get": "$assignment;"
+                            "query": "match $assignment isa operation, has status \"active\", has operation-id $id; select $assignment, $id;"
                         });
                         
+                        println!("🔄 Cron job: Querying for active assignments...");
                         if let Ok(assignments_result) = operations_service.custom(tenant_ctx, "read", Some(query), params).await {
-                            if let Some(assignments_array) = assignments_result.as_array() {
-                                for assignment in assignments_array {
-                                    if let Some(assignment_id) = assignment.get("operation-id").and_then(|v| v.as_str()) {
-                                        let job = crate::background::jobs::GPSTrackingJob::new(assignment_id.to_string());
-                                        if let Err(e) = adapter.enqueue(ctx.clone(), job).await {
-                                            eprintln!("Failed to enqueue GPS tracking job for {}: {}", assignment_id, e);
+                            println!("✅ Cron job: Found assignments, processing...");
+                            if let Some(ok_result) = assignments_result.get("ok") {
+                                if let Some(answers) = ok_result.get("answers").and_then(|v| v.as_array()) {
+                                    println!("📊 Cron job: Processing {} assignments", answers.len());
+                                    for assignment in answers {
+                                        if let Some(data) = assignment.get("data") {
+                                            if let Some(id_attr) = data.get("id") {
+                                                if let Some(assignment_id) = id_attr.get("value").and_then(|v| v.as_str()) {
+                                                    println!("🎯 Cron job: Enqueuing GPS job for assignment {}", assignment_id);
+                                                    let job = crate::background::jobs::GPSTrackingJob::new(assignment_id.to_string());
+                                                    if let Err(e) = adapter.enqueue(ctx.clone(), job).await {
+                                                        eprintln!("❌ Failed to enqueue GPS tracking job for {}: {}", assignment_id, e);
+                                                    } else {
+                                                        println!("✅ GPS tracking job enqueued for {}", assignment_id);
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
+                                } else {
+                                    println!("⚠️  Cron job: No answers array found in result");
                                 }
+                            } else {
+                                println!("⚠️  Cron job: No 'ok' field in result");
                             }
+                        } else {
+                            println!("❌ Cron job: Failed to query assignments");
                         }
                     }
                 }
