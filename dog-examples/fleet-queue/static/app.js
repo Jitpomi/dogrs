@@ -852,7 +852,7 @@ class FleetCommandPro {
                                     Track Vehicle
                                 </button>
                                 <button onclick="fleetCommand.toggleVehicleDetails('${vehicleId}')" class="text-xs px-4 py-2 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded text-gray-700 transition-colors">
-                                    <span id="details-btn-${vehicleId}">Hide Details</span>
+                                    <span id="details-btn-${vehicleId}">Show Details</span>
                                 </button>
                             </div>
                         </div>
