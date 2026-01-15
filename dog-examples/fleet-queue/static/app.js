@@ -2506,6 +2506,778 @@ showNotification(message, type = 'info') {
         console.log('Updating system view...');
     }
     
+    // Navigation methods
+    showDashboard() {
+        console.log('Showing dashboard...');
+        // Hide any open panels
+        this.hideDriverAssignmentPanel();
+    }
+    
+    showDriverAssignment() {
+        console.log('Showing driver assignment panel...');
+        this.showDriverAssignmentPanel();
+    }
+    
+    showVehicleManagement() {
+        console.log('Showing vehicle management...');
+        this.hideDriverAssignmentPanel();
+    }
+    
+    showRouteOptimization() {
+        console.log('Showing route optimization...');
+        this.hideDriverAssignmentPanel();
+    }
+    
+    // Driver Assignment Panel
+    showDriverAssignmentPanel() {
+        // Create or show the driver assignment panel
+        let panel = document.getElementById('driver-assignment-panel');
+        if (!panel) {
+            panel = this.createDriverAssignmentPanel();
+            document.body.appendChild(panel);
+        }
+        panel.classList.remove('hidden');
+    }
+    
+    hideDriverAssignmentPanel() {
+        const panel = document.getElementById('driver-assignment-panel');
+        if (panel) {
+            panel.classList.add('hidden');
+        }
+    }
+    
+    createDriverAssignmentPanel() {
+        const panel = document.createElement('div');
+        panel.id = 'driver-assignment-panel';
+        panel.className = 'fixed top-4 bg-white rounded-lg shadow-xl border border-gray-200 z-50 w-80 max-h-[calc(100vh-2rem)] overflow-y-auto';
+        
+        panel.innerHTML = `
+            <div class="p-4 border-b border-gray-100">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-lg font-semibold text-slate-900">Driver Assignment</h2>
+                    <button onclick="fleetCommand.hideDriverAssignmentPanel()" class="text-slate-400 hover:text-slate-600 p-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="p-4">
+                <form id="assignment-form" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Route ID</label>
+                        <input type="text" id="route-id" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" placeholder="Enter route ID">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Vehicle Assignment</label>
+                        <select id="vehicle-assignment" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
+                            <option value="">Select a vehicle...</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Pickup Location</label>
+                        <div class="relative">
+                            <input type="text" id="pickup-address" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" placeholder="Enter pickup address">
+                            <div id="address-suggestions" class="absolute z-10 w-full bg-white border border-gray-300 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto hidden"></div>
+                            <input type="hidden" id="pickup-lat">
+                            <input type="hidden" id="pickup-lng">
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Delivery Priority</label>
+                        <select id="delivery-priority" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
+                            <option value="standard">Standard</option>
+                            <option value="high">High</option>
+                            <option value="urgent">Urgent</option>
+                            <option value="critical">Critical</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Required Certifications</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="flex items-center py-1">
+                                <input type="checkbox" value="CDL-A" class="certification-checkbox mr-2">
+                                <span class="text-sm">CDL-A</span>
+                            </label>
+                            <label class="flex items-center py-1">
+                                <input type="checkbox" value="CDL-B" class="certification-checkbox mr-2">
+                                <span class="text-sm">CDL-B</span>
+                            </label>
+                            <label class="flex items-center py-1">
+                                <input type="checkbox" value="Hazmat" class="certification-checkbox mr-2">
+                                <span class="text-sm">Hazmat</span>
+                            </label>
+                            <label class="flex items-center py-1">
+                                <input type="checkbox" value="Forklift" class="certification-checkbox mr-2">
+                                <span class="text-sm">Forklift</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Schedule Assignment</label>
+                        <input type="datetime-local" id="assignment-schedule" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
+                    </div>
+                    
+                    <div id="driver-assignment-container" class="hidden">
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Driver Assignment</label>
+                        <select id="driver-assignment" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
+                            <option value="">Select a driver...</option>
+                        </select>
+                    </div>
+                    
+                    <div class="flex gap-3 pt-4">
+                        <button type="submit" id="schedule-assignment-btn" class="flex-1 bg-gray-400 text-white px-4 py-2 text-sm rounded-lg cursor-not-allowed transition-colors" disabled>
+                            Schedule Assignment
+                        </button>
+                        <button type="button" onclick="fleetCommand.hideDriverAssignmentPanel()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                            Cancel
+                        </button>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="border-t border-gray-100 p-4">
+                <h3 class="text-sm font-medium text-slate-700 mb-3">Recent Assignments</h3>
+                <div id="recent-assignments" class="space-y-2 max-h-32 overflow-y-auto">
+                    <div class="text-sm text-slate-500">No recent assignments</div>
+                </div>
+            </div>
+        `;
+        
+        // Position panel next to navigation menu
+        const navPanel = document.querySelector('nav');
+        if (navPanel) {
+            const navRect = navPanel.getBoundingClientRect();
+            panel.style.left = `${navRect.right + 16}px`;
+        } else {
+            panel.style.left = '288px'; // fallback
+        }
+        
+        // Add form submit handler
+        const form = panel.querySelector('#assignment-form');
+        form.addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.submitDriverAssignment();
+        });
+        
+        // Setup address autocomplete
+        this.setupAddressAutocomplete();
+        
+        // Setup datetime constraints
+        this.setupDateTimeConstraints();
+        
+        // Load available vehicles and setup date-dependent driver loading
+        setTimeout(() => {
+            this.loadAvailableVehicles();
+            this.setupDateDependentDriverLoading();
+            this.setupFormValidation();
+        }, 500);
+        
+        return panel;
+    }
+    
+    async submitDriverAssignment() {
+        const routeId = document.getElementById('route-id').value;
+        const vehicleId = document.getElementById('vehicle-assignment').value;
+        const driverId = document.getElementById('driver-assignment').value;
+        const pickupLat = parseFloat(document.getElementById('pickup-lat').value);
+        const pickupLng = parseFloat(document.getElementById('pickup-lng').value);
+        const deliveryPriority = document.getElementById('delivery-priority').value;
+        const scheduleTime = document.getElementById('assignment-schedule').value;
+        
+        // Get selected certifications
+        const certificationCheckboxes = document.querySelectorAll('.certification-checkbox:checked');
+        const requiredCertifications = Array.from(certificationCheckboxes).map(cb => cb.value);
+        
+        if (!routeId || !vehicleId || !driverId || isNaN(pickupLat) || isNaN(pickupLng)) {
+            this.showNotification('Please fill in all required fields including route ID, vehicle, driver, and pickup address', 'error');
+            return;
+        }
+        
+        const assignmentData = {
+            route_id: routeId,
+            vehicle_id: vehicleId,
+            driver_id: driverId,
+            pickup_location: [pickupLat, pickupLng],
+            delivery_priority: deliveryPriority,
+            required_certifications: requiredCertifications,
+            scheduled_time: scheduleTime || null
+        };
+        
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/api/assignments`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(assignmentData)
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                this.showNotification('Assignment scheduled successfully', 'success');
+                this.clearAssignmentForm();
+                this.loadRecentAssignments();
+            } else {
+                throw new Error('Failed to schedule assignment');
+            }
+        } catch (error) {
+            console.error('Error scheduling assignment:', error);
+            this.showNotification('Failed to schedule assignment', 'error');
+        }
+    }
+    
+    clearAssignmentForm() {
+        document.getElementById('route-id').value = '';
+        document.getElementById('vehicle-assignment').value = '';
+        document.getElementById('driver-assignment').value = '';
+        document.getElementById('pickup-address').value = '';
+        document.getElementById('pickup-lat').value = '';
+        document.getElementById('pickup-lng').value = '';
+        document.getElementById('delivery-priority').value = 'standard';
+        document.getElementById('assignment-schedule').value = '';
+        document.querySelectorAll('.certification-checkbox').forEach(cb => cb.checked = false);
+        
+        // Hide driver dropdown when form is cleared
+        const driverContainer = document.getElementById('driver-assignment-container');
+        if (driverContainer) {
+            driverContainer.classList.add('hidden');
+        }
+    }
+    
+    async loadAvailableVehicles() {
+        try {
+            const vehicleSelect = document.getElementById('vehicle-assignment');
+            if (!vehicleSelect) {
+                console.error('Vehicle select element not found');
+                return;
+            }
+            
+            // Clear existing options except the first one
+            vehicleSelect.innerHTML = '<option value="">Select a vehicle...</option>';
+            
+            // Fetch available vehicles from database using correct API structure
+            const response = await fetch(`${this.apiBaseUrl}/vehicles`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'read'
+                },
+                body: JSON.stringify({
+                    query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has status $status, has maintenance-status "good", has fuel-level $fuel; $fuel >= 50.0; not { $assignment isa assignment (assigned-vehicle: $v, assigned-employee: $employee); }; select $v, $id, $type, $status; limit 10;'
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Failed to fetch available vehicles: ${response.status} ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            console.log('Loaded available vehicles from database:', result);
+            
+            const availableVehicles = result.ok?.answers || [];
+            
+            availableVehicles.forEach(answer => {
+                const vehicleData = answer.data;
+                if (vehicleData && vehicleData.id) {
+                    const option = document.createElement('option');
+                    option.value = vehicleData.id.value;
+                    option.textContent = `${vehicleData.id.value} - ${vehicleData.type?.value || 'Vehicle'} (${vehicleData.status?.value || 'available'})`;
+                    vehicleSelect.appendChild(option);
+                }
+            });
+            
+            console.log(`Loaded ${availableVehicles.length} available vehicles from database`);
+            
+        } catch (error) {
+            console.error('Error loading available vehicles:', error);
+            
+            // Show error in dropdown
+            const vehicleSelect = document.getElementById('vehicle-assignment');
+            if (vehicleSelect) {
+                vehicleSelect.innerHTML = '<option value="">Error loading vehicles - check backend</option>';
+            }
+            
+            this.showNotification('Failed to load available vehicles from database', 'error');
+        }
+    }
+    
+    setupDateDependentDriverLoading() {
+        const scheduleInput = document.getElementById('assignment-schedule');
+        const pickupAddressInput = document.getElementById('pickup-address');
+        const driverContainer = document.getElementById('driver-assignment-container');
+        const driverSelect = document.getElementById('driver-assignment');
+        
+        if (scheduleInput && pickupAddressInput && driverContainer && driverSelect) {
+            const loadDriversIfReady = () => {
+                const selectedDateTime = scheduleInput.value;
+                const pickupLat = parseFloat(document.getElementById('pickup-lat').value);
+                const pickupLng = parseFloat(document.getElementById('pickup-lng').value);
+                
+                if (selectedDateTime && !isNaN(pickupLat) && !isNaN(pickupLng)) {
+                    console.log('Date and location available, loading drivers for:', selectedDateTime, 'near', pickupLat, pickupLng);
+                    // Show the driver dropdown container
+                    driverContainer.classList.remove('hidden');
+                    this.loadAvailableDriversForDateAndLocation(selectedDateTime, pickupLat, pickupLng);
+                } else {
+                    // Hide driver dropdown if date or location not selected
+                    driverContainer.classList.add('hidden');
+                    driverSelect.innerHTML = '<option value="">Select a driver...</option>';
+                }
+            };
+            
+            scheduleInput.addEventListener('change', loadDriversIfReady);
+            
+            // Also listen for address selection (when coordinates are set)
+            const originalSelectAddress = this.selectAddress.bind(this);
+            this.selectAddress = (address, lat, lng) => {
+                originalSelectAddress(address, lat, lng);
+                // Trigger driver loading after address is selected
+                setTimeout(loadDriversIfReady, 100);
+            };
+        }
+    }
+    
+    async loadAvailableDriversForDateAndLocation(assignmentDateTime, pickupLat, pickupLng) {
+        try {
+            const driverSelect = document.getElementById('driver-assignment');
+            if (!driverSelect) {
+                console.error('Driver select element not found');
+                return;
+            }
+            
+            // Clear existing options
+            driverSelect.innerHTML = '<option value="">Loading drivers...</option>';
+            
+            // Convert datetime-local format to ISO format for query
+            const assignmentDate = new Date(assignmentDateTime);
+            const isoDateTime = assignmentDate.toISOString();
+            
+            // Create bounding box for proximity (±0.1 degrees ≈ 11km radius)
+            const deltaLat = 0.1;
+            const deltaLng = 0.1;
+            const minLat = pickupLat - deltaLat;
+            const maxLat = pickupLat + deltaLat;
+            const minLng = pickupLng - deltaLng;
+            const maxLng = pickupLng + deltaLng;
+            
+            // Convert assignment date to date format for availability check
+            const assignmentDateOnly = assignmentDate.toISOString().split('T')[0];
+            
+            // Fetch available drivers for the specific date and location from database
+            const response = await fetch(`${this.apiBaseUrl}/employees`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'read'
+                },
+                body: JSON.stringify({
+                    query: `match $e isa employee, has id $id, has employee-name $name, has employee-role "driver"; 
+                    { 
+                        $e has current-lat $lat, has current-lng $lng; 
+                        not { $assignment1 isa assignment (assigned-employee: $e, assigned-delivery: $delivery1), has timestamp $assignTime1; $assignTime1 == "${isoDateTime}"; }; 
+                    } or { 
+                        $assignment2 isa assignment (assigned-employee: $e, assigned-delivery: $delivery2), has timestamp $assignTime2; 
+                        $assignTime2 == "${isoDateTime}"; 
+                        $delivery2 has dest-lat $lat, has dest-lng $lng; 
+                    }; 
+                    $lat > ${minLat}; $lat < ${maxLat}; $lng > ${minLng}; $lng < ${maxLng}; 
+                    select $e, $id, $name, $lat, $lng; limit 10;`
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Failed to fetch available drivers: ${response.status} ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            console.log('Loaded available drivers for date and location:', result);
+            
+            const availableDrivers = result.ok?.answers || [];
+            
+            // Calculate distances and sort by proximity to pickup location
+            const driversWithDistance = availableDrivers.map(answer => {
+                const driverData = answer.data;
+                if (driverData && driverData.id && driverData.lat && driverData.lng) {
+                    const driverLat = parseFloat(driverData.lat.value);
+                    const driverLng = parseFloat(driverData.lng.value);
+                    const distance = this.calculateDistance(pickupLat, pickupLng, driverLat, driverLng);
+                    
+                    return {
+                        id: driverData.id.value,
+                        name: driverData.name?.value || driverData.id.value,
+                        lat: driverLat,
+                        lng: driverLng,
+                        distance: distance
+                    };
+                }
+                return null;
+            }).filter(driver => driver !== null);
+            
+            // Sort by distance (closest first)
+            driversWithDistance.sort((a, b) => a.distance - b.distance);
+            
+            // Clear loading message
+            driverSelect.innerHTML = '<option value="">Select a driver...</option>';
+            
+            driversWithDistance.forEach(driver => {
+                const option = document.createElement('option');
+                option.value = driver.id;
+                option.textContent = `${driver.name} (${driver.distance.toFixed(1)} miles away)`;
+                driverSelect.appendChild(option);
+            });
+            
+            if (driversWithDistance.length === 0) {
+                const noDriversOption = document.createElement('option');
+                noDriversOption.value = '';
+                noDriversOption.textContent = 'No drivers available';
+                noDriversOption.disabled = true;
+                driverSelect.appendChild(noDriversOption);
+            }
+            
+            console.log(`Loaded ${driversWithDistance.length} drivers sorted by proximity to pickup location`);
+            
+        } catch (error) {
+            console.error('Error loading available drivers for date and location:', error);
+            
+            // Show error in dropdown
+            const driverSelect = document.getElementById('driver-assignment');
+            if (driverSelect) {
+                driverSelect.innerHTML = '<option value="">Error loading drivers - check backend</option>';
+            }
+            
+            this.showNotification('Failed to load available drivers for selected date and location', 'error');
+        }
+    }
+    
+    calculateDistance(lat1, lng1, lat2, lng2) {
+        // Haversine formula to calculate distance between two points
+        const R = 3959; // Earth's radius in miles
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLng = (lng2 - lng1) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLng/2) * Math.sin(dLng/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+    }
+    
+    setupFormValidation() {
+        const validateForm = () => {
+            const routeId = document.getElementById('route-id').value.trim();
+            const vehicleId = document.getElementById('vehicle-assignment').value;
+            const pickupAddress = document.getElementById('pickup-address').value.trim();
+            const pickupLat = document.getElementById('pickup-lat').value;
+            const pickupLng = document.getElementById('pickup-lng').value;
+            const deliveryPriority = document.getElementById('delivery-priority').value;
+            const scheduleTime = document.getElementById('assignment-schedule').value;
+            const driverId = document.getElementById('driver-assignment').value;
+            
+            const submitBtn = document.getElementById('schedule-assignment-btn');
+            
+            // Check if all required fields are filled
+            const isValid = routeId && 
+                           vehicleId && 
+                           pickupAddress && 
+                           pickupLat && 
+                           pickupLng && 
+                           deliveryPriority && 
+                           scheduleTime && 
+                           driverId;
+            
+            if (isValid) {
+                // Enable button
+                submitBtn.disabled = false;
+                submitBtn.className = 'flex-1 bg-blue-500 text-white px-4 py-2 text-sm rounded-lg hover:bg-blue-600 transition-colors cursor-pointer';
+            } else {
+                // Disable button
+                submitBtn.disabled = true;
+                submitBtn.className = 'flex-1 bg-gray-400 text-white px-4 py-2 text-sm rounded-lg cursor-not-allowed transition-colors';
+            }
+        };
+        
+        // Add event listeners to all form fields
+        const fields = [
+            'route-id',
+            'vehicle-assignment', 
+            'pickup-address',
+            'delivery-priority',
+            'assignment-schedule',
+            'driver-assignment'
+        ];
+        
+        fields.forEach(fieldId => {
+            const field = document.getElementById(fieldId);
+            if (field) {
+                field.addEventListener('input', validateForm);
+                field.addEventListener('change', validateForm);
+            }
+        });
+        
+        // Also validate when address coordinates are set
+        const originalSelectAddress = this.selectAddress;
+        this.selectAddress = (address, lat, lng) => {
+            if (originalSelectAddress) {
+                originalSelectAddress.call(this, address, lat, lng);
+            }
+            setTimeout(validateForm, 100);
+        };
+        
+        // Initial validation
+        validateForm();
+    }
+    
+    async loadAvailableDrivers() {
+        try {
+            const driverSelect = document.getElementById('driver-assignment');
+            if (!driverSelect) {
+                console.error('Driver select element not found');
+                return;
+            }
+            
+            // Clear existing options except the first one
+            driverSelect.innerHTML = '<option value="">Select a driver...</option>';
+            
+            // Fetch available drivers from database using correct API structure
+            const response = await fetch(`${this.apiBaseUrl}/employees`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'read'
+                },
+                body: JSON.stringify({
+                    query: 'match $e isa employee, has id $id, has employee-name $name, has employee-role "driver", has status "available", has daily-hours $hours; $hours < 11.0; not { $assignment isa assignment (assigned-employee: $e, assigned-vehicle: $vehicle); }; select $e, $id, $name; limit 10;'
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Failed to fetch available drivers: ${response.status} ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            const availableDrivers = result.ok?.answers || [];
+            
+            availableDrivers.forEach(answer => {
+                const driverData = answer.data;
+                if (driverData && driverData.id) {
+                    const option = document.createElement('option');
+                    option.value = driverData.id.value;
+                    option.textContent = `${driverData.name?.value || driverData.id.value} (Driver)`;
+                    driverSelect.appendChild(option);
+                }
+            });
+            
+            console.log(`Loaded ${availableDrivers.length} available drivers`);
+            
+        } catch (error) {
+            console.error('Error loading available drivers:', error);
+            
+            // Show error in dropdown
+            const errorSelect = document.getElementById('driver-assignment');
+            if (errorSelect) {
+                errorSelect.innerHTML = '<option value="">Error loading drivers - check backend</option>';
+            }
+            
+            this.showNotification('Failed to load available drivers from database', 'error');
+        }
+    }
+    
+    setupAddressAutocomplete() {
+        // Wait a bit for the DOM to be ready
+        setTimeout(() => {
+            const addressInput = document.getElementById('pickup-address');
+            const suggestionsContainer = document.getElementById('address-suggestions');
+            let searchTimeout;
+            
+            console.log('Setting up autocomplete, addressInput:', addressInput, 'suggestionsContainer:', suggestionsContainer);
+            
+            if (!addressInput || !suggestionsContainer) {
+                console.error('Address input or suggestions container not found');
+                return;
+            }
+            
+            addressInput.addEventListener('input', (e) => {
+                const query = e.target.value.trim();
+                console.log('Input event triggered, query:', query);
+                
+                // Clear previous timeout
+                if (searchTimeout) {
+                    clearTimeout(searchTimeout);
+                }
+                
+                if (query.length < 3) {
+                    suggestionsContainer.classList.add('hidden');
+                    return;
+                }
+                
+                // Debounce search requests
+                searchTimeout = setTimeout(() => {
+                    this.searchAddresses(query);
+                }, 300);
+            });
+            
+            // Hide suggestions when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!addressInput.contains(e.target) && !suggestionsContainer.contains(e.target)) {
+                    suggestionsContainer.classList.add('hidden');
+                }
+            });
+        }, 100);
+    }
+    
+    async searchAddresses(query) {
+        const suggestionsContainer = document.getElementById('address-suggestions');
+        
+        try {
+            console.log('Searching for addresses:', query);
+            console.log('Using TomTom API key:', this.tomtomApiKey);
+            
+            // Use TomTom Search API for address autocomplete
+            const response = await fetch(`https://api.tomtom.com/search/2/search/${encodeURIComponent(query)}.json?key=${this.tomtomApiKey}&limit=5&typeahead=true`);
+            
+            console.log('TomTom API response status:', response.status);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('TomTom API error:', errorText);
+                throw new Error(`Failed to fetch address suggestions: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            console.log('TomTom API results:', data);
+            this.displayAddressSuggestions(data.results);
+            
+        } catch (error) {
+            console.error('Error fetching address suggestions:', error);
+            suggestionsContainer.innerHTML = '<div class="p-3 text-sm text-red-600 text-center">Error loading suggestions</div>';
+            suggestionsContainer.classList.remove('hidden');
+        }
+    }
+    
+    displayAddressSuggestions(results) {
+        const suggestionsContainer = document.getElementById('address-suggestions');
+        
+        if (results.length === 0) {
+            suggestionsContainer.innerHTML = '<div class="p-3 text-sm text-slate-500 text-center">No addresses found</div>';
+            suggestionsContainer.classList.remove('hidden');
+            return;
+        }
+        
+        const suggestionsHtml = results.map((result, index) => {
+            const address = result.address.freeformAddress;
+            const lat = result.position.lat;
+            const lng = result.position.lon;
+            
+            return `
+                <div class="p-3 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-b-0 transition-colors" 
+                     data-address="${encodeURIComponent(address)}" 
+                     data-lat="${lat}" 
+                     data-lng="${lng}"
+                     onclick="fleetCommand.selectAddressFromElement(this)">
+                    <div class="font-medium text-slate-900">${address}</div>
+                    <div class="text-xs text-slate-500 mt-1 flex items-center">
+                        <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        </svg>
+                        ${result.address.country}
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        suggestionsContainer.innerHTML = suggestionsHtml;
+        suggestionsContainer.classList.remove('hidden');
+    }
+    
+    selectAddress(address, lat, lng) {
+        document.getElementById('pickup-address').value = address;
+        document.getElementById('pickup-lat').value = lat;
+        document.getElementById('pickup-lng').value = lng;
+        document.getElementById('address-suggestions').classList.add('hidden');
+    }
+    
+    selectAddressFromElement(element) {
+        const address = decodeURIComponent(element.dataset.address);
+        const lat = parseFloat(element.dataset.lat);
+        const lng = parseFloat(element.dataset.lng);
+        this.selectAddress(address, lat, lng);
+    }
+    
+    setupDateTimeConstraints() {
+        setTimeout(() => {
+            const scheduleInput = document.getElementById('assignment-schedule');
+            if (scheduleInput) {
+                // Set minimum date/time to current date/time
+                const now = new Date();
+                // Format to YYYY-MM-DDTHH:MM format required by datetime-local
+                const year = now.getFullYear();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                const hours = String(now.getHours()).padStart(2, '0');
+                const minutes = String(now.getMinutes()).padStart(2, '0');
+                
+                const minDateTime = `${year}-${month}-${day}T${hours}:${minutes}`;
+                scheduleInput.setAttribute('min', minDateTime);
+                
+                console.log('Set minimum datetime to:', minDateTime);
+            } else {
+                console.error('Schedule input not found for datetime constraints');
+            }
+        }, 100);
+    }
+    
+    async loadRecentAssignments() {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/api/assignments/recent`);
+            if (response.ok) {
+                const assignments = await response.json();
+                this.displayRecentAssignments(assignments);
+            }
+        } catch (error) {
+            console.error('Error loading recent assignments:', error);
+        }
+    }
+    
+    displayRecentAssignments(assignments) {
+        const container = document.getElementById('recent-assignments');
+        if (!container) return;
+        
+        if (assignments.length === 0) {
+            container.innerHTML = '<div class="text-xs text-slate-500">No recent assignments</div>';
+            return;
+        }
+        
+        container.innerHTML = assignments.map(assignment => `
+            <div class="bg-slate-50 rounded p-2">
+                <div class="text-xs font-medium">${assignment.route_id}</div>
+                <div class="text-xs text-slate-600">${assignment.delivery_priority} priority</div>
+                <div class="text-xs text-slate-500">${new Date(assignment.created_at).toLocaleDateString()}</div>
+            </div>
+        `).join('');
+    }
+    
+    showNotification(message, type = 'info') {
+        const notification = document.createElement('div');
+        notification.className = `fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg text-white ${
+            type === 'success' ? 'bg-green-500' : 
+            type === 'error' ? 'bg-red-500' : 'bg-blue-500'
+        }`;
+        notification.textContent = message;
+        
+        document.body.appendChild(notification);
+        
+        setTimeout(() => {
+            notification.remove();
+        }, 3000);
+    }
+    
 }
 
 // Initialize FleetCommand Pro when DOM is ready
