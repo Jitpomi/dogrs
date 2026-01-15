@@ -89,6 +89,52 @@ impl TomTomAdapter {
         Err(anyhow::anyhow!("No geocoding results found"))
     }
 
+    /// Handle address search requests for autocomplete
+    pub async fn search_addresses(&self, data: Value) -> Result<Value> {
+        let query = data.get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
+
+        // Make direct TomTom Search API call for autocomplete
+        let url = format!(
+            "{}/search/2/search/{}.json?key={}&limit=5&typeahead=true",
+            self.base_url,
+            urlencoding::encode(query),
+            self.api_key
+        );
+
+        let timeout_secs = self.app.get("tomtom.search.timeout")
+            .unwrap_or_else(|| "10".to_string())
+            .parse()
+            .unwrap_or(10);
+            
+        let response = self.client
+            .get(&url)
+            .timeout(Duration::from_secs(timeout_secs))
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("TomTom search request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("TomTom API error: {}", response.status()));
+        }
+
+        let json_response: Value = response
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to parse TomTom response: {}", e))?;
+
+        // Return the results array directly for autocomplete
+        if let Some(results) = json_response["results"].as_array() {
+            return Ok(json!({
+                "results": results,
+                "status": "success"
+            }));
+        }
+
+        Err(anyhow::anyhow!("No search results found"))
+    }
+
     /// Handle route calculation requests
     pub async fn calculate_route(&self, data: Value) -> Result<Value> {
         let from_lat = data.get("from_lat")

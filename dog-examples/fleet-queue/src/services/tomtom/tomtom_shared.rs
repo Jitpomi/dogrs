@@ -4,6 +4,7 @@ use crate::services::types::FleetParams;
 pub fn capabilities() -> ServiceCapabilities {
     ServiceCapabilities::from_methods(vec![
         ServiceMethodKind::Custom("geocode"),
+        ServiceMethodKind::Custom("search"),
         ServiceMethodKind::Custom("route"),
         ServiceMethodKind::Custom("eta"),
         ServiceMethodKind::Custom("traffic"),

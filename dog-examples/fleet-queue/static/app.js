@@ -2588,6 +2588,16 @@ showNotification(message, type = 'info') {
                     </div>
                     
                     <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Delivery Destination</label>
+                        <div class="relative">
+                            <input type="text" id="delivery-address" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" placeholder="Enter delivery address">
+                            <div id="delivery-suggestions" class="absolute z-10 w-full bg-white border border-gray-300 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto hidden"></div>
+                            <input type="hidden" id="delivery-lat">
+                            <input type="hidden" id="delivery-lng">
+                        </div>
+                    </div>
+                    
+                    <div>
                         <label class="block text-sm font-medium text-slate-700 mb-2">Delivery Priority</label>
                         <select id="delivery-priority" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
                             <option value="standard">Standard</option>
@@ -2700,11 +2710,18 @@ showNotification(message, type = 'info') {
             return;
         }
         
+        const deliveryLat = parseFloat(document.getElementById('delivery-lat').value);
+        const deliveryLng = parseFloat(document.getElementById('delivery-lng').value);
+        const deliveryAddress = document.getElementById('delivery-address').value;
+        
         const assignmentData = {
             route_id: routeId,
             vehicle_id: vehicleId,
             driver_id: driverId,
             pickup_location: [pickupLat, pickupLng],
+            pickup_address: document.getElementById('pickup-address').value,
+            delivery_location: [deliveryLat, deliveryLng],
+            delivery_address: deliveryAddress,
             delivery_priority: deliveryPriority,
             required_certifications: requiredCertifications,
             scheduled_time: scheduleTime || null
@@ -2740,6 +2757,9 @@ showNotification(message, type = 'info') {
         document.getElementById('pickup-address').value = '';
         document.getElementById('pickup-lat').value = '';
         document.getElementById('pickup-lng').value = '';
+        document.getElementById('delivery-address').value = '';
+        document.getElementById('delivery-lat').value = '';
+        document.getElementById('delivery-lng').value = '';
         document.getElementById('delivery-priority').value = 'standard';
         document.getElementById('assignment-schedule').value = '';
         document.querySelectorAll('.certification-checkbox').forEach(cb => cb.checked = false);
@@ -2819,14 +2839,16 @@ showNotification(message, type = 'info') {
                 const selectedDateTime = scheduleInput.value;
                 const pickupLat = parseFloat(document.getElementById('pickup-lat').value);
                 const pickupLng = parseFloat(document.getElementById('pickup-lng').value);
+                const deliveryLat = parseFloat(document.getElementById('delivery-lat').value);
+                const deliveryLng = parseFloat(document.getElementById('delivery-lng').value);
                 
-                if (selectedDateTime && !isNaN(pickupLat) && !isNaN(pickupLng)) {
-                    console.log('Date and location available, loading drivers for:', selectedDateTime, 'near', pickupLat, pickupLng);
+                if (selectedDateTime && !isNaN(pickupLat) && !isNaN(pickupLng) && !isNaN(deliveryLat) && !isNaN(deliveryLng)) {
+                    console.log('Date, pickup and delivery locations available, loading drivers for:', selectedDateTime);
                     // Show the driver dropdown container
                     driverContainer.classList.remove('hidden');
-                    this.loadAvailableDriversForDateAndLocation(selectedDateTime, pickupLat, pickupLng);
+                    this.loadAvailableDriversForDateAndLocation(selectedDateTime, pickupLat, pickupLng, deliveryLat, deliveryLng);
                 } else {
-                    // Hide driver dropdown if date or location not selected
+                    // Hide driver dropdown if date or locations not selected
                     driverContainer.classList.add('hidden');
                     driverSelect.innerHTML = '<option value="">Select a driver...</option>';
                 }
@@ -2836,15 +2858,15 @@ showNotification(message, type = 'info') {
             
             // Also listen for address selection (when coordinates are set)
             const originalSelectAddress = this.selectAddress.bind(this);
-            this.selectAddress = (address, lat, lng) => {
-                originalSelectAddress(address, lat, lng);
+            this.selectAddress = (address, lat, lng, inputId) => {
+                originalSelectAddress(address, lat, lng, inputId);
                 // Trigger driver loading after address is selected
                 setTimeout(loadDriversIfReady, 100);
             };
         }
     }
     
-    async loadAvailableDriversForDateAndLocation(assignmentDateTime, pickupLat, pickupLng) {
+    async loadAvailableDriversForDateAndLocation(assignmentDateTime, pickupLat, pickupLng, deliveryLat, deliveryLng) {
         try {
             const driverSelect = document.getElementById('driver-assignment');
             if (!driverSelect) {
@@ -2862,13 +2884,20 @@ showNotification(message, type = 'info') {
             // Create bounding box for proximity (±0.1 degrees ≈ 11km radius)
             const deltaLat = 0.1;
             const deltaLng = 0.1;
-            const minLat = pickupLat - deltaLat;
-            const maxLat = pickupLat + deltaLat;
-            const minLng = pickupLng - deltaLng;
-            const maxLng = pickupLng + deltaLng;
             
-            // Convert assignment date to date format for availability check
-            const assignmentDateOnly = assignmentDate.toISOString().split('T')[0];
+            // Calculate bounding box that encompasses both pickup and delivery locations
+            const allLats = [pickupLat, deliveryLat];
+            const allLngs = [pickupLng, deliveryLng];
+            const minLatBase = Math.min(...allLats);
+            const maxLatBase = Math.max(...allLats);
+            const minLngBase = Math.min(...allLngs);
+            const maxLngBase = Math.max(...allLngs);
+            
+            // Expand bounding box by delta around the route area
+            const minLat = minLatBase - deltaLat;
+            const maxLat = maxLatBase + deltaLat;
+            const minLng = minLngBase - deltaLng;
+            const maxLng = maxLngBase + deltaLng;
             
             // Fetch available drivers for the specific date and location from database
             const response = await fetch(`${this.apiBaseUrl}/employees`, {
@@ -2878,7 +2907,12 @@ showNotification(message, type = 'info') {
                     'x-service-method': 'read'
                 },
                 body: JSON.stringify({
-                    query: `match $e isa employee, has id $id, has employee-name $name, has employee-role "driver"; 
+                    query: `match $e isa employee, has id $id, has employee-name $name, has employee-role "driver", has daily-hours $hours, has performance-rating $rating, has certifications $certs;
+                    
+                    // Regulatory compliance checks
+                    $hours < 10.5;
+                    
+                    // Location prediction: current position OR delivery destination at pickup time
                     { 
                         $e has current-lat $lat, has current-lng $lng; 
                         not { $assignment1 isa assignment (assigned-employee: $e, assigned-delivery: $delivery1), has timestamp $assignTime1; $assignTime1 == "${isoDateTime}"; }; 
@@ -2886,9 +2920,14 @@ showNotification(message, type = 'info') {
                         $assignment2 isa assignment (assigned-employee: $e, assigned-delivery: $delivery2), has timestamp $assignTime2; 
                         $assignTime2 == "${isoDateTime}"; 
                         $delivery2 has dest-lat $lat, has dest-lng $lng; 
-                    }; 
-                    $lat > ${minLat}; $lat < ${maxLat}; $lng > ${minLng}; $lng < ${maxLng}; 
-                    select $e, $id, $name, $lat, $lng; limit 10;`
+                    };
+                    
+                    // Proximity filtering: only drivers within route area
+                    $lat > ${minLat}; $lat < ${maxLat}; 
+                    $lng > ${minLng}; $lng < ${maxLng};
+                    
+                    select $e, $id, $name, $lat, $lng, $hours, $rating, $certs; 
+                    limit 15;`
                 })
             });
             
@@ -2901,39 +2940,98 @@ showNotification(message, type = 'info') {
             
             const availableDrivers = result.ok?.answers || [];
             
-            // Calculate distances and sort by proximity to pickup location
-            const driversWithDistance = availableDrivers.map(answer => {
+            // Calculate comprehensive fleet assignment scores with TomTom routing
+            const driversWithScores = await Promise.all(availableDrivers.map(async (answer) => {
                 const driverData = answer.data;
                 if (driverData && driverData.id && driverData.lat && driverData.lng) {
                     const driverLat = parseFloat(driverData.lat.value);
                     const driverLng = parseFloat(driverData.lng.value);
-                    const distance = this.calculateDistance(pickupLat, pickupLng, driverLat, driverLng);
+                    const dailyHours = parseFloat(driverData.hours?.value || 0);
+                    const performanceRating = parseFloat(driverData.rating?.value || 3.0);
+                    const driverCertifications = driverData.certs?.value || '';
+                    
+                    // Get required certifications from form
+                    const requiredCerts = Array.from(document.querySelectorAll('.certification-checkbox:checked')).map(cb => cb.value);
+                    const certificationMatch = this.calculateCertificationMatch(driverCertifications, requiredCerts);
+                    
+                    // Get actual vehicle data for this driver
+                    const vehicleData = await this.getDriverVehicleData(driverData.id.value);
+                    const fuelLevel = vehicleData.fuelLevel || 75;
+                    const vehicleCapacity = vehicleData.capacity || 1000;
+                    const vehicleId = vehicleData.vehicleId || 'VH' + driverData.id.value.slice(-3);
+                    const vehicleType = vehicleData.vehicleType || 'truck';
+                    
+                    // Store coordinates for TomTom routing API calls
+                    const routeCoordinates = {
+                        driver: [driverLng, driverLat],
+                        pickup: [pickupLng, pickupLat], 
+                        delivery: [deliveryLng, deliveryLat]
+                    };
+                    
+                    // Use TomTom routing for precise calculations
+                    const routeData = await this.calculateTomTomRoute(routeCoordinates);
+                    const pickupDistance = routeData.totalDistance || this.calculateDistance(pickupLat, pickupLng, driverLat, driverLng);
+                    const deliveryDistance = this.calculateDistance(pickupLat, pickupLng, deliveryLat, deliveryLng);
+                    const totalRouteDistance = routeData.totalDistance || (pickupDistance + deliveryDistance);
+                    const estimatedTime = routeData.totalTime || ((pickupDistance + deliveryDistance) * 2);
+                    
+                    // Get traffic information for better routing decisions
+                    const trafficData = await this.getTomTomTraffic(routeCoordinates);
+                    const trafficDelay = trafficData.trafficDelay || 0;
+                    
+                    // Multi-objective scoring system with certification matching
+                    const distanceScore = Math.max(0, 100 - (pickupDistance * 10)); // Closer = higher score
+                    const hoursScore = Math.max(0, (11 - dailyHours) * 10); // More available hours = higher score
+                    const performanceScore = performanceRating * 20; // Performance rating 1-5 -> 20-100
+                    const fuelScore = Math.min(100, fuelLevel * 2); // Fuel level 0-100 -> 0-100
+                    const capacityScore = Math.min(100, vehicleCapacity / 10); // Capacity bonus
+                    const certificationScore = certificationMatch * 100; // Certification match 0-1 -> 0-100
+                    const timeScore = Math.max(0, 100 - (estimatedTime * 2)); // Faster routes = higher score
+                    
+                    // Enhanced weighted composite score (distance 30%, hours 20%, performance 15%, time 15%, certs 10%, fuel 5%, capacity 5%)
+                    const compositeScore = (distanceScore * 0.3) + (hoursScore * 0.2) + (performanceScore * 0.15) + (timeScore * 0.15) + (certificationScore * 0.1) + (fuelScore * 0.05) + (capacityScore * 0.05);
                     
                     return {
                         id: driverData.id.value,
                         name: driverData.name?.value || driverData.id.value,
+                        vehicleId: 'VH' + driverData.id.value.slice(-3), // Generate vehicle ID
+                        vehicleType: 'truck', // Default vehicle type
                         lat: driverLat,
                         lng: driverLng,
-                        distance: distance
+                        pickupDistance: pickupDistance,
+                        deliveryDistance: deliveryDistance,
+                        totalRouteDistance: totalRouteDistance,
+                        dailyHours: dailyHours,
+                        performanceRating: performanceRating,
+                        fuelLevel: fuelLevel,
+                        capacity: vehicleCapacity,
+                        compositeScore: compositeScore,
+                        distanceScore: distanceScore,
+                        hoursScore: hoursScore,
+                        performanceScore: performanceScore,
+                        routeCoordinates: routeCoordinates,
+                        estimatedTime: estimatedTime,
+                        vehicleId: vehicleId,
+                        vehicleType: vehicleType
                     };
                 }
                 return null;
-            }).filter(driver => driver !== null);
+            })).then(results => results.filter(driver => driver !== null));
             
-            // Sort by distance (closest first)
-            driversWithDistance.sort((a, b) => a.distance - b.distance);
+            // Sort by composite score (best overall match first)
+            driversWithScores.sort((a, b) => b.compositeScore - a.compositeScore);
             
             // Clear loading message
             driverSelect.innerHTML = '<option value="">Select a driver...</option>';
             
-            driversWithDistance.forEach(driver => {
+            driversWithScores.forEach(driver => {
                 const option = document.createElement('option');
                 option.value = driver.id;
-                option.textContent = `${driver.name} (${driver.distance.toFixed(1)} miles away)`;
+                option.textContent = `${driver.name} (Score: ${driver.compositeScore.toFixed(0)}, ${driver.estimatedTime.toFixed(0)}min, ${driver.dailyHours.toFixed(1)}h, ${driver.vehicleType})`;
                 driverSelect.appendChild(option);
             });
             
-            if (driversWithDistance.length === 0) {
+            if (driversWithScores.length === 0) {
                 const noDriversOption = document.createElement('option');
                 noDriversOption.value = '';
                 noDriversOption.textContent = 'No drivers available';
@@ -2941,7 +3039,6 @@ showNotification(message, type = 'info') {
                 driverSelect.appendChild(noDriversOption);
             }
             
-            console.log(`Loaded ${driversWithDistance.length} drivers sorted by proximity to pickup location`);
             
         } catch (error) {
             console.error('Error loading available drivers for date and location:', error);
@@ -2968,6 +3065,158 @@ showNotification(message, type = 'info') {
         return R * c;
     }
     
+    calculateCertificationMatch(driverCertifications, requiredCertifications) {
+        // Calculate how well driver certifications match required certifications
+        if (requiredCertifications.length === 0) {
+            return 1.0; // Perfect match if no certifications required
+        }
+        
+        const driverCertsList = driverCertifications.split(',').map(cert => cert.trim().toUpperCase());
+        const requiredCertsList = requiredCertifications.map(cert => cert.toUpperCase());
+        
+        const matchedCerts = requiredCertsList.filter(reqCert => 
+            driverCertsList.some(driverCert => driverCert.includes(reqCert))
+        );
+        
+        return matchedCerts.length / requiredCertsList.length; // Return percentage match
+    }
+    
+    async getDriverVehicleData(driverId) {
+        // Fetch actual vehicle data for the driver
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/vehicles`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'read'
+                },
+                body: JSON.stringify({
+                    query: `match $v isa vehicle, has vehicle-id $vehicleId, has fuel-level $fuel, has capacity $capacity, has vehicle-type $vType; $assignment isa assignment (assigned-vehicle: $v, assigned-employee: $e); $e has id "${driverId}"; select $v, $vehicleId, $fuel, $capacity, $vType; limit 1;`
+                })
+            });
+            
+            if (!response.ok) {
+                console.warn(`Failed to fetch vehicle data for driver ${driverId}`);
+                return {};
+            }
+            
+            const result = await response.json();
+            const vehicleAnswers = result.ok?.answers || [];
+            
+            if (vehicleAnswers.length > 0) {
+                const vehicleData = vehicleAnswers[0].data;
+                return {
+                    vehicleId: vehicleData.vehicleId?.value || null,
+                    fuelLevel: parseFloat(vehicleData.fuel?.value || 75),
+                    capacity: parseFloat(vehicleData.capacity?.value || 1000),
+                    vehicleType: vehicleData.vType?.value || 'truck'
+                };
+            }
+            
+            return {}; // Return empty object if no vehicle found
+        } catch (error) {
+            console.warn(`Error fetching vehicle data for driver ${driverId}:`, error);
+            return {};
+        }
+    }
+    
+    async calculateTomTomRoute(coordinates) {
+        // Use the existing TomTom backend service instead of direct API calls
+        // coordinates: { driver: [lng, lat], pickup: [lng, lat], delivery: [lng, lat] }
+        try {
+            // Call the backend TomTom service for route calculation
+            const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'route'
+                },
+                body: JSON.stringify({
+                    from_lat: coordinates.driver[1],
+                    from_lng: coordinates.driver[0],
+                    to_lat: coordinates.pickup[1],
+                    to_lng: coordinates.pickup[0],
+                    vehicle_id: 'temp_vehicle',
+                    delivery_id: 'temp_delivery'
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`TomTom backend service failed: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.ok && data.ok.status === 'success') {
+                const routeData = data.ok;
+                return {
+                    totalDistance: routeData.distance_meters / 1609.34, // Convert to miles
+                    totalTime: routeData.duration_seconds / 60, // Convert to minutes
+                    trafficDelay: 0, // Would need traffic endpoint for this
+                    fuelConsumption: 0
+                };
+            } else {
+                throw new Error('Invalid response from TomTom service');
+            }
+        } catch (error) {
+            console.warn('TomTom backend service failed, using Haversine fallback:', error);
+            // Fallback to Haversine calculation
+            const driverToPickup = this.calculateDistance(coordinates.driver[1], coordinates.driver[0], coordinates.pickup[1], coordinates.pickup[0]);
+            const pickupToDelivery = this.calculateDistance(coordinates.pickup[1], coordinates.pickup[0], coordinates.delivery[1], coordinates.delivery[0]);
+            
+            return {
+                totalDistance: driverToPickup + pickupToDelivery,
+                totalTime: (driverToPickup + pickupToDelivery) * 2, // Rough estimate: 30 mph average
+                trafficDelay: 0,
+                fuelConsumption: 0
+            };
+        }
+    }
+    
+    async getTomTomTraffic(coordinates) {
+        // Use the existing TomTom backend service for traffic information
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'traffic'
+                },
+                body: JSON.stringify({
+                    from_lat: coordinates.driver[1],
+                    from_lng: coordinates.driver[0],
+                    to_lat: coordinates.pickup[1],
+                    to_lng: coordinates.pickup[0],
+                    vehicle_id: 'temp_vehicle'
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`TomTom traffic service failed: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.ok && data.ok.status === 'success') {
+                const trafficData = data.ok;
+                return {
+                    trafficDelay: trafficData.traffic_delay_seconds / 60, // Convert to minutes
+                    congestionLevel: trafficData.congestion_level,
+                    travelTime: trafficData.travel_time_seconds / 60
+                };
+            } else {
+                throw new Error('Invalid response from TomTom traffic service');
+            }
+        } catch (error) {
+            console.warn('TomTom traffic service failed:', error);
+            return {
+                trafficDelay: 0,
+                congestionLevel: 'unknown',
+                travelTime: 0
+            };
+        }
+    }
+    
     setupFormValidation() {
         const validateForm = () => {
             const routeId = document.getElementById('route-id').value.trim();
@@ -2975,6 +3224,9 @@ showNotification(message, type = 'info') {
             const pickupAddress = document.getElementById('pickup-address').value.trim();
             const pickupLat = document.getElementById('pickup-lat').value;
             const pickupLng = document.getElementById('pickup-lng').value;
+            const deliveryAddress = document.getElementById('delivery-address').value.trim();
+            const deliveryLat = document.getElementById('delivery-lat').value;
+            const deliveryLng = document.getElementById('delivery-lng').value;
             const deliveryPriority = document.getElementById('delivery-priority').value;
             const scheduleTime = document.getElementById('assignment-schedule').value;
             const driverId = document.getElementById('driver-assignment').value;
@@ -2987,6 +3239,9 @@ showNotification(message, type = 'info') {
                            pickupAddress && 
                            pickupLat && 
                            pickupLng && 
+                           deliveryAddress &&
+                           deliveryLat &&
+                           deliveryLng &&
                            deliveryPriority && 
                            scheduleTime && 
                            driverId;
@@ -3007,6 +3262,7 @@ showNotification(message, type = 'info') {
             'route-id',
             'vehicle-assignment', 
             'pickup-address',
+            'delivery-address',
             'delivery-priority',
             'assignment-schedule',
             'driver-assignment'
@@ -3022,9 +3278,9 @@ showNotification(message, type = 'info') {
         
         // Also validate when address coordinates are set
         const originalSelectAddress = this.selectAddress;
-        this.selectAddress = (address, lat, lng) => {
+        this.selectAddress = (address, lat, lng, inputId) => {
             if (originalSelectAddress) {
-                originalSelectAddress.call(this, address, lat, lng);
+                originalSelectAddress.call(this, address, lat, lng, inputId);
             }
             setTimeout(validateForm, 100);
         };
@@ -3073,8 +3329,6 @@ showNotification(message, type = 'info') {
                 }
             });
             
-            console.log(`Loaded ${availableDrivers.length} available drivers`);
-            
         } catch (error) {
             console.error('Error loading available drivers:', error);
             
@@ -3091,20 +3345,28 @@ showNotification(message, type = 'info') {
     setupAddressAutocomplete() {
         // Wait a bit for the DOM to be ready
         setTimeout(() => {
-            const addressInput = document.getElementById('pickup-address');
-            const suggestionsContainer = document.getElementById('address-suggestions');
-            let searchTimeout;
-            
-            console.log('Setting up autocomplete, addressInput:', addressInput, 'suggestionsContainer:', suggestionsContainer);
-            
-            if (!addressInput || !suggestionsContainer) {
-                console.error('Address input or suggestions container not found');
-                return;
-            }
+            this.setupSingleAddressAutocomplete('pickup-address', 'address-suggestions');
+            this.setupSingleAddressAutocomplete('delivery-address', 'delivery-suggestions');
+        }, 500);
+    }
+    
+    setupSingleAddressAutocomplete(inputId, suggestionsId) {
+        const addressInput = document.getElementById(inputId);
+        const suggestionsContainer = document.getElementById(suggestionsId);
+        let searchTimeout;
+        
+        if (!addressInput || !suggestionsContainer) {
+            console.error(`Address input ${inputId} or suggestions container ${suggestionsId} not found`);
+            return;
+        }
             
             addressInput.addEventListener('input', (e) => {
+                // Skip autocomplete if this is a programmatic update
+                if (e.target._programmaticUpdate) {
+                    return;
+                }
+                
                 const query = e.target.value.trim();
-                console.log('Input event triggered, query:', query);
                 
                 // Clear previous timeout
                 if (searchTimeout) {
@@ -3116,9 +3378,9 @@ showNotification(message, type = 'info') {
                     return;
                 }
                 
-                // Debounce search requests
+                // Debounce the search
                 searchTimeout = setTimeout(() => {
-                    this.searchAddresses(query);
+                    this.searchAddresses(query, suggestionsId, inputId);
                 }, 300);
             });
             
@@ -3128,20 +3390,25 @@ showNotification(message, type = 'info') {
                     suggestionsContainer.classList.add('hidden');
                 }
             });
-        }, 100);
     }
     
-    async searchAddresses(query) {
-        const suggestionsContainer = document.getElementById('address-suggestions');
+    async searchAddresses(query, suggestionsId, inputId) {
+        const suggestionsContainer = document.getElementById(suggestionsId);
         
         try {
-            console.log('Searching for addresses:', query);
-            console.log('Using TomTom API key:', this.tomtomApiKey);
             
-            // Use TomTom Search API for address autocomplete
-            const response = await fetch(`https://api.tomtom.com/search/2/search/${encodeURIComponent(query)}.json?key=${this.tomtomApiKey}&limit=5&typeahead=true`);
-            
-            console.log('TomTom API response status:', response.status);
+            // Use TomTom backend service for address autocomplete
+            const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'search'
+                },
+                body: JSON.stringify({
+                    query: query
+                })
+            });
+           
             
             if (!response.ok) {
                 const errorText = await response.text();
@@ -3150,21 +3417,27 @@ showNotification(message, type = 'info') {
             }
             
             const data = await response.json();
-            console.log('TomTom API results:', data);
-            this.displayAddressSuggestions(data.results);
+            console.log('TomTom backend results:', data);
+            
+            // Handle TomTom backend service response format for search
+            if (data.status === 'success' && data.results) {
+                this.displayAddressSuggestions(data.results, suggestionsId, inputId);
+            } else {
+                throw new Error('No search results found');
+            }
             
         } catch (error) {
             console.error('Error fetching address suggestions:', error);
-            suggestionsContainer.innerHTML = '<div class="p-3 text-sm text-red-600 text-center">Error loading suggestions</div>';
+            suggestionsContainer.innerHTML = '<div class="px-4 py-3 text-sm text-red-600 text-center">Error loading suggestions</div>';
             suggestionsContainer.classList.remove('hidden');
         }
     }
     
-    displayAddressSuggestions(results) {
-        const suggestionsContainer = document.getElementById('address-suggestions');
+    displayAddressSuggestions(results, suggestionsId, inputId) {
+        const suggestionsContainer = document.getElementById(suggestionsId);
         
         if (results.length === 0) {
-            suggestionsContainer.innerHTML = '<div class="p-3 text-sm text-slate-500 text-center">No addresses found</div>';
+            suggestionsContainer.innerHTML = '<div class="px-4 py-3 text-sm text-gray-500 text-center">No addresses found</div>';
             suggestionsContainer.classList.remove('hidden');
             return;
         }
@@ -3175,39 +3448,63 @@ showNotification(message, type = 'info') {
             const lng = result.position.lon;
             
             return `
-                <div class="p-3 hover:bg-blue-50 cursor-pointer text-sm border-b border-gray-100 last:border-b-0 transition-colors" 
+                <div class="px-4 py-3 hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-b-0 transition-all duration-200 hover:shadow-sm" 
                      data-address="${encodeURIComponent(address)}" 
                      data-lat="${lat}" 
                      data-lng="${lng}"
-                     onclick="fleetCommand.selectAddressFromElement(this)">
-                    <div class="font-medium text-slate-900">${address}</div>
-                    <div class="text-xs text-slate-500 mt-1 flex items-center">
-                        <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
-                        </svg>
-                        ${result.address.country}
-                    </div>
+                     onclick="fleetCommand.selectAddress('${address.replace(/'/g, "\\'")}', ${lat}, ${lng}, '${inputId}')">
+                    <div class="text-sm font-medium text-gray-800 leading-relaxed">${address}</div>
                 </div>
             `;
         }).join('');
         
         suggestionsContainer.innerHTML = suggestionsHtml;
         suggestionsContainer.classList.remove('hidden');
+        
+        // Ensure proper z-index and positioning with enhanced styling
+        suggestionsContainer.style.zIndex = '1000';
+        suggestionsContainer.style.position = 'absolute';
+        suggestionsContainer.style.top = '100%';
+        suggestionsContainer.style.left = '0';
+        suggestionsContainer.style.right = '0';
+        suggestionsContainer.style.marginTop = '4px';
+        suggestionsContainer.style.borderRadius = '8px';
+        suggestionsContainer.style.boxShadow = '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)';
+        suggestionsContainer.style.border = '1px solid #e5e7eb';
+        suggestionsContainer.style.backgroundColor = '#ffffff';
     }
     
-    selectAddress(address, lat, lng) {
-        document.getElementById('pickup-address').value = address;
-        document.getElementById('pickup-lat').value = lat;
-        document.getElementById('pickup-lng').value = lng;
-        document.getElementById('address-suggestions').classList.add('hidden');
-    }
-    
-    selectAddressFromElement(element) {
-        const address = decodeURIComponent(element.dataset.address);
-        const lat = parseFloat(element.dataset.lat);
-        const lng = parseFloat(element.dataset.lng);
-        this.selectAddress(address, lat, lng);
+    selectAddress(address, lat, lng, inputId = 'pickup-address') {
+       
+        const isDelivery = inputId === 'delivery-address';
+        const addressInput = document.getElementById(inputId);
+        const latInput = document.getElementById(isDelivery ? 'delivery-lat' : 'pickup-lat');
+        const lngInput = document.getElementById(isDelivery ? 'delivery-lng' : 'pickup-lng');
+        const suggestionsContainer = document.getElementById(isDelivery ? 'delivery-suggestions' : 'address-suggestions');
+        
+        if (addressInput && latInput && lngInput && suggestionsContainer) {
+            // Set flag to prevent autocomplete from running
+            addressInput._programmaticUpdate = true;
+            
+            // Force the values and trigger change events
+            addressInput.value = address;
+            latInput.value = lat;
+            lngInput.value = lng;
+            
+            // Hide suggestions immediately
+            suggestionsContainer.classList.add('hidden');
+            
+            // Trigger change events to ensure form validation updates
+            addressInput.dispatchEvent(new Event('change', { bubbles: true }));
+            
+            // Clear the flag after a short delay
+            setTimeout(() => {
+                delete addressInput._programmaticUpdate;
+            }, 100);
+            
+        } else {
+            console.error('❌ Missing elements for address selection');
+        }
     }
     
     setupDateTimeConstraints() {
