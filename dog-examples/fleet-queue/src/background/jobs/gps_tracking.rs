@@ -27,7 +27,7 @@ impl Job for GPSTrackingJob {
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
         println!("🚀 GPS JOB EXECUTING for assignment: {}", self.assignment_id);
         
-        let tenant_ctx = TenantContext::new("fleet_tenant".to_string());
+        let tenant_ctx = TenantContext::new(ctx.tenant_id.clone());
         let params = FleetParams::default();
         
         let operations_service = ctx.app.app.service("operations")

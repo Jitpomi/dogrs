@@ -1,0 +1,15 @@
+{
+  "name": "fleet-queue-ui",
+  "version": "1.0.0",
+  "description": "Fleet Management System UI",
+  "scripts": {
+    "build-css": "tailwindcss -i ./static/input.css -o ./static/output.css --watch",
+    "build-css-prod": "tailwindcss -i ./static/input.css -o ./static/output.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/aspect-ratio": "^0.4.2",
+    "@tailwindcss/forms": "^0.5.7",
+    "@tailwindcss/typography": "^0.5.10",
+    "tailwindcss": "^3.4.19"
+  }
+}

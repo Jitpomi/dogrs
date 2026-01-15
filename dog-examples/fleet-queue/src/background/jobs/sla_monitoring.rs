@@ -1,10 +1,7 @@
 use async_trait::async_trait;
 use dog_queue::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use dog_core::tenant::TenantContext;
-use dog_axum::AxumApp;
-use serde_json::Value;
 use crate::services::FleetParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,14 +23,10 @@ impl SLAMonitoringJob {
     }
 }
 
-#[derive(Clone)]
-pub struct FleetContext {
-    pub app: Arc<AxumApp<Value, FleetParams>>,
-}
 
 #[async_trait]
 impl Job for SLAMonitoringJob {
-    type Context = FleetContext;
+    type Context = crate::background::FleetContext;
     type Result = String;
     
     const JOB_TYPE: &'static str = "sla_monitoring";
@@ -41,7 +34,7 @@ impl Job for SLAMonitoringJob {
     const MAX_RETRIES: u32 = 3;
 
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
-        let tenant_ctx = TenantContext::new("fleet_tenant".to_string());
+        let tenant_ctx = TenantContext::new(ctx.tenant_id.clone());
         let params = FleetParams::default();
         
         let operations_service = ctx.app.app.service("operations")

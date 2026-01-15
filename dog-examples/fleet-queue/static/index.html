@@ -3,187 +3,99 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fleet Queue Management</title>
+    <title>FleetCommand Enterprise - Fleet Management Platform</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=1736359080">
+    <link rel="stylesheet" href="output.css">
     <link rel="stylesheet" type="text/css" href="https://api.tomtom.com/maps-sdk-for-web/cdn/6.x/6.25.0/maps/maps.css">
     <script src="https://api.tomtom.com/maps-sdk-for-web/cdn/6.x/6.25.0/maps/maps-web.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-<body>
-    <div class="app">
-        <!-- Map Container (Full Screen) -->
-        <div class="map-container">
-            <!-- Mobile Menu Toggle -->
-            <button class="mobile-menu-toggle" id="mobileMenuToggle">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                    <path d="M3 12H21M3 6H21M3 18H21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+<body class="bg-slate-50 text-slate-900 overflow-hidden">
+    <!-- Full Screen Map with Floating Overlays -->
+    <div class="relative h-screen w-full">
+        <!-- Full Screen Map -->
+        <div id="mapView" class="absolute inset-0 w-full h-full">
+            <!-- TomTom Map -->
+        </div>
+
+        <!-- Navigation Panel -->
+        <nav class="fixed top-4 left-4 bg-white rounded-lg shadow-lg border border-gray-200 z-50 w-64">
+            <!-- Header -->
+            <div class="p-4">
+                <div class="flex items-center gap-3">
+                    <div style="width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 6px; background: #3b82f6;">
+                        <svg class="text-white w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="text-base font-semibold text-slate-900">FleetCommand</h1>
+                        <div class="flex items-center gap-1 mt-1">
+                            <div class="w-2 h-2 bg-green-500 rounded-full"></div>
+                            <span class="text-xs text-slate-600">System Operational</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+
+        <!-- Map Controls -->
+        <div class="fixed top-4 right-4 space-y-2 z-40 hidden md:flex md:flex-col">
+            <button id="zoomIn" class="w-12 h-12 bg-white rounded-lg shadow-lg border border-gray-200 flex items-center justify-center hover:bg-gray-50 transition-all duration-200 p-3" data-tooltip="Zoom In" aria-label="Zoom in on map">
+                <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
                 </svg>
             </button>
-            
-            <div class="map-view" id="mapView">
-                <!-- TomTom Map will be rendered here -->
-            </div>
+            <button id="zoomOut" class="w-12 h-12 bg-white rounded-lg shadow-lg border border-gray-200 flex items-center justify-center hover:bg-gray-50 transition-all duration-200 p-3" data-tooltip="Zoom Out" aria-label="Zoom out on map">
+                <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/>
+                </svg>
+            </button>
+            <button id="centerMap" class="w-12 h-12 bg-white rounded-lg shadow-lg border border-gray-200 flex items-center justify-center hover:bg-gray-50 transition-all duration-200 p-3" data-tooltip="Center on Fleet" aria-label="Center map on fleet">
+                <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+            </button>
+        </div>
 
-            <!-- Bottom Order Info -->
-            <div class="order-info">
-                <div class="order-header">
-                    <span class="order-number">Order #17205</span>
-                    <span class="order-status">● On delivery</span>
+        <!-- Activity Monitor -->
+        <div class="fixed bottom-4 left-4 w-64 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+            <div class="p-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-base font-semibold text-slate-900">System Activity</h3>
+                    <div class="flex items-center gap-1">
+                        <div class="w-2 h-2 bg-green-500 rounded-full"></div>
+                        <span class="text-xs text-slate-600">Real-time</span>
+                    </div>
                 </div>
-                <div class="order-details">
-                    <div class="order-detail">
-                        <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=32&h=32&fit=crop&crop=face" alt="Devon Lindsay" class="detail-avatar">
-                        <div class="detail-info">
-                            <div class="detail-label">Courier</div>
-                            <div class="detail-value">Devon Lindsay</div>
-                        </div>
-                    </div>
-                    <div class="order-detail">
-                        <div class="detail-info">
-                            <div class="detail-label">From</div>
-                            <div class="detail-value">Istanbul</div>
-                        </div>
-                    </div>
-                    <div class="order-detail">
-                        <div class="detail-info">
-                            <div class="detail-label">To</div>
-                            <div class="detail-value">Utah</div>
-                        </div>
-                    </div>
-                    <div class="order-detail">
-                        <div class="detail-info">
-                            <div class="detail-label">Time in transit</div>
-                            <div class="detail-value">18h 30m</div>
-                        </div>
-                    </div>
-                    <div class="order-detail">
-                        <div class="detail-info">
-                            <div class="detail-label">Delivery Date</div>
-                            <div class="detail-value">23 Aug</div>
-                        </div>
-                    </div>
+            </div>
+            <div class="px-4 pb-4">
+                <div class="space-y-2 max-h-32 overflow-y-auto" id="liveActivity">
+                    <!-- Populated by JavaScript -->
                 </div>
             </div>
         </div>
-
-        <!-- Collapsible Sidebar (Overlay) -->
-        <div class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <div class="logo">
-                    <div class="logo-icon">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                            <path d="M3 9L12 2L21 9V20C21 20.5304 20.7893 21.0391 20.4142 21.4142C20.0391 21.7893 19.5304 22 19 22H5C4.46957 22 3.96086 21.7893 3.58579 21.4142C3.21071 21.0391 3 20.5304 3 20V9Z" stroke="currentColor" stroke-width="2"/>
-                        </svg>
-                    </div>
-                </div>
-                <h1 class="app-title">Fleet Queue</h1>
-                <button class="search-btn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                        <path d="M21 21L16.514 16.506L21 21ZM19 10.5C19 15.194 15.194 19 10.5 19C5.806 19 2 15.194 2 10.5C2 5.806 5.806 2 10.5 2C15.194 2 19 5.806 19 10.5Z" stroke="currentColor" stroke-width="2"/>
-                    </svg>
-                </button>
-            </div>
-
-            <div class="status-tabs">
-                <button class="status-tab active">On the way</button>
-                <button class="status-tab">Received</button>
-            </div>
-
-            <div class="fleet-list">
-                <div class="fleet-item">
-                    <div class="fleet-route">
-                        <span class="from">Berlin</span>
-                        <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none">
-                            <path d="M5 12H19M19 12L12 5M19 12L12 19" stroke="currentColor" stroke-width="2"/>
-                        </svg>
-                        <span class="to">Warsaw</span>
-                    </div>
-                    <div class="fleet-id">Order #17209</div>
-                    <div class="fleet-status on-delivery">● On delivery</div>
-                </div>
-
-                <div class="fleet-item">
-                    <div class="fleet-route">
-                        <span class="from">Stockholm</span>
-                        <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none">
-                            <path d="M5 12H19M19 12L12 5M19 12L12 19" stroke="currentColor" stroke-width="2"/>
-                        </svg>
-                        <span class="to">Madrid</span>
-                    </div>
-                    <div class="fleet-id">Order #17207</div>
-                    <div class="fleet-status on-delivery">● On delivery</div>
-                </div>
-
-                <div class="fleet-item active">
-                    <div class="fleet-route">
-                        <span class="from">Vienna</span>
-                        <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none">
-                            <path d="M5 12H19M19 12L12 5M19 12L12 19" stroke="currentColor" stroke-width="2"/>
-                        </svg>
-                        <span class="to">Istanbul</span>
-                    </div>
-                    <div class="fleet-id">Order #17205</div>
-                    <div class="fleet-status on-delivery">● On delivery</div>
-                    
-                    <div class="fleet-details">
-                        <div class="location-info">
-                            <div class="location-dot"></div>
-                            <div class="location-text">
-                                <div class="location-label">From</div>
-                                <div class="location-address">1230 Wien (Vienna), Industriestraße 12, Vienna Logistics Hub</div>
-                            </div>
-                        </div>
-                        
-                        <div class="location-info">
-                            <div class="location-dot destination"></div>
-                            <div class="location-text">
-                                <div class="location-label">Delivery Address</div>
-                                <div class="location-address">34956 Tuzla / Istanbul, Atatürk Street 58</div>
-                            </div>
-                        </div>
-                        
-                        <div class="courier-info">
-                            <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=40&h=40&fit=crop&crop=face" alt="Devon Lindsay" class="courier-avatar">
-                            <div class="courier-details">
-                                <div class="courier-name">Devon Lindsay</div>
-                                <div class="courier-role">Courier</div>
-                            </div>
-                            <div class="contact-buttons">
-                                <button class="contact-btn">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                                        <path d="M22 16.92V19.92C22.0011 20.1985 21.9441 20.4742 21.8325 20.7293C21.7209 20.9845 21.5573 21.2136 21.3521 21.4019C21.1468 21.5901 20.9046 21.7335 20.6407 21.8227C20.3769 21.9119 20.0974 21.9451 19.82 21.92C16.7428 21.5856 13.787 20.5341 11.19 18.85C8.77382 17.3147 6.72533 15.2662 5.18999 12.85C3.49997 10.2412 2.44824 7.27099 2.11999 4.18C2.095 3.90347 2.12787 3.62476 2.21649 3.36162C2.30512 3.09849 2.44756 2.85669 2.63476 2.65162C2.82196 2.44655 3.0498 2.28271 3.30379 2.17052C3.55777 2.05833 3.83233 2.00026 4.10999 2H7.10999C7.59531 1.99522 8.06579 2.16708 8.43376 2.48353C8.80173 2.79999 9.04207 3.23945 9.10999 3.72C9.23662 4.68007 9.47144 5.62273 9.80999 6.53C9.94454 6.88792 9.97366 7.27691 9.8939 7.65088C9.81415 8.02485 9.62886 8.36811 9.35999 8.64L8.08999 9.91C9.51355 12.4135 11.5865 14.4864 14.09 15.91L15.36 14.64C15.6319 14.3711 15.9751 14.1858 16.3491 14.1061C16.7231 14.0263 17.1121 14.0555 17.47 14.19C18.3773 14.5286 19.3199 14.7634 20.28 14.89C20.7658 14.9585 21.2094 15.2032 21.5265 15.5775C21.8437 15.9518 22.0122 16.4296 22 16.92Z" stroke="currentColor" stroke-width="2"/>
-                                    </svg>
-                                </button>
-                                <button class="contact-btn">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                                        <path d="M21 15C21 15.5304 20.7893 16.0391 20.4142 16.4142C20.0391 16.7893 19.5304 17 19 17H7L3 21V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H19C19.5304 3 20.0391 3.21071 20.4142 3.58579C20.7893 3.96086 21 4.46957 21 5V15Z" stroke="currentColor" stroke-width="2"/>
-                                    </svg>
-                                </button>
-                            </div>
-                        </div>
-                        
-                        <button class="view-details-btn">View details</button>
-                    </div>
-                </div>
-
-                <div class="fleet-item">
-                    <div class="fleet-route">
-                        <span class="from">Prague</span>
-                        <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none">
-                            <path d="M5 12H19M19 12L12 5M19 12L12 19" stroke="currentColor" stroke-width="2"/>
-                        </svg>
-                        <span class="to">Singapore</span>
-                    </div>
-                    <div class="fleet-id">Order #17204</div>
-                    <div class="fleet-status packed">● Packed</div>
-                </div>
-            </div>
 
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <!-- Notification System -->
+    <div id="notifications" class="fixed top-4 right-4 z-50 space-y-2"></div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg p-4 shadow-lg">
+            <div class="flex items-center space-x-3">
+                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
+                <span class="text-base font-medium text-gray-900">Processing...</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=20260114-6"></script>
 </body>
 </html>

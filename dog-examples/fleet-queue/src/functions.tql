@@ -85,3 +85,20 @@ fun routes_for_vehicle() -> { operation }:
 match 
     $route isa operation, has status "active";
 return { $route };
+
+fun vehicles_without_drivers() -> { vehicle }:
+match 
+    $vehicle isa vehicle;
+    not { 
+        $assignment isa assignment (assigned-vehicle: $vehicle, assigned-employee: $employee);
+    };
+return { $vehicle };
+
+fun operational_vehicles_with_drivers() -> { vehicle }:
+match 
+    $vehicle isa vehicle, has status $status;
+    $assignment isa assignment (assigned-vehicle: $vehicle, assigned-employee: $employee);
+    $employee has status "available";
+    { $status == "operational"; } or { $status == "busy"; };
+return { $vehicle };
+

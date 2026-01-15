@@ -9,11 +9,15 @@ define
   
   # Vehicle Attributes
   attribute vehicle-id, value string;
-  attribute vehicle-type, value string @values("van", "truck", "refrigerated", "box_truck");
+  attribute vehicle-type, value string @values("truck", "van", "refrigerated", "box_truck");
   attribute capacity, value double;
   attribute fuel-level, value double;
   attribute maintenance-score, value double;
   attribute maintenance-status, value string @values("good", "fair", "poor", "critical", "out_of_service");
+  attribute vehicle-icon, value string;
+  attribute status-color, value string;
+  attribute gps-latitude, value double;
+  attribute gps-longitude, value double;
   
   # Employee Attributes
   attribute employee-name, value string;
@@ -67,6 +71,10 @@ define
     owns fuel-level,
     owns maintenance-score,
     owns maintenance-status,
+    owns vehicle-icon,
+    owns status-color,
+    owns gps-latitude,
+    owns gps-longitude,
     owns status,
     plays assignment:assigned-vehicle;
     
@@ -140,6 +148,11 @@ define
     relates assigned-employee,
     owns timestamp,
     owns status;
+    
+  # Safety constraint attribute - inferred by rules
+  attribute operational-safety-status, value string @values("safe", "unsafe");
+  
+  vehicle owns operational-safety-status;
   
   # Queue Operations (Dog-Queue Processing)
   relation queue-processing,
