@@ -2905,7 +2905,15 @@ showNotification(message, type = 'info') {
             const minLng = minLngBase - deltaLng;
             const maxLng = maxLngBase + deltaLng;
             
-            // Fetch available drivers for the specific date and location from database
+            // Driver Selection Query: Find up to 15 legally compliant drivers who will be near the pickup location at the pickup time—using their current position if idle or their delivery destination if busy.
+            // 
+            // Query Logic:
+            // 1. Filter by jurisdiction-specific hours compliance (compliant_employees function)
+            // 2. Predict driver location at pickup time using disjunction:
+            //    - Case A: Driver idle → use current position (current-lat, current-lng)
+            //    - Case B: Driver busy → use delivery destination (dest-lat, dest-lng)
+            // 3. Apply geographic bounding box filter for proximity
+            // 4. Return candidate drivers for JavaScript scoring (distance, performance, fatigue, etc.)
             const response = await fetch(`${this.apiBaseUrl}/employees`, {
                 method: 'POST',
                 headers: {
@@ -3238,21 +3246,31 @@ showNotification(message, type = 'info') {
             const driverId = document.getElementById('driver-assignment').value;
             
             const submitBtn = document.getElementById('schedule-assignment-btn');
+            const driverContainer = document.getElementById('driver-assignment-container');
             
-            // Check if all required fields are filled
-            const isValid = routeId && 
-                           vehicleId && 
-                           pickupAddress && 
-                           pickupLat && 
-                           pickupLng && 
-                           deliveryAddress &&
-                           deliveryLat &&
-                           deliveryLng &&
-                           deliveryPriority && 
-                           scheduleTime && 
-                           driverId;
+            // Check if all required fields except driver are filled
+            const allFieldsExceptDriverFilled = routeId && 
+                                               vehicleId && 
+                                               pickupAddress && 
+                                               pickupLat && 
+                                               pickupLng && 
+                                               deliveryAddress &&
+                                               deliveryLat &&
+                                               deliveryLng &&
+                                               deliveryPriority && 
+                                               scheduleTime;
             
-            if (isValid) {
+            // Show/hide driver field based on other fields
+            if (allFieldsExceptDriverFilled) {
+                driverContainer.classList.remove('hidden');
+            } else {
+                driverContainer.classList.add('hidden');
+            }
+            
+            // Check if all required fields including driver are filled
+            const allFieldsFilled = allFieldsExceptDriverFilled && driverId;
+            
+            if (allFieldsFilled) {
                 // Enable button
                 submitBtn.disabled = false;
                 submitBtn.className = 'flex-1 bg-blue-500 text-white px-4 py-2 text-sm rounded-lg hover:bg-blue-600 transition-colors cursor-pointer';
