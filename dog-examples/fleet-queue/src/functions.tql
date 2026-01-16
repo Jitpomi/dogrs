@@ -27,17 +27,25 @@ match
     };
 return { $employee };
 
-fun hours_exceeded_employees() -> { employee }:
-match 
-    $employee isa employee, has daily-hours $hours;
-    $hours >= 11.0;
-return { $employee };
+fun hours_exceeded_employees($maxHours: double) -> { employee }:
+    match 
+        $employee isa employee, has daily-hours $hours;
+        $hours >= $maxHours;
+    return { $employee };
 
-fun compliant_employees() -> { employee }:
-match 
-    $employee isa employee, has daily-hours $hours;
-    $hours < 11.0;
-return { $employee };
+fun compliant_employees($maxHours: double) -> { employee }:
+    match 
+        $employee isa employee, has daily-hours $hours;
+        $hours < $maxHours;
+    return { $employee };
+
+fun available_drivers_in_area($maxHours: double, $minLat: double, $maxLat: double, $minLng: double, $maxLng: double) -> { employee }:
+    match 
+        $employee isa employee, has employee-role "driver", has daily-hours $hours, has current-lat $lat, has current-lng $lng;
+        $hours < $maxHours;
+        $lat > $minLat; $lat < $maxLat;
+        $lng > $minLng; $lng < $maxLng;
+    return { $employee };
 
 fun best_employee_for_route() -> { employee }:
 match 

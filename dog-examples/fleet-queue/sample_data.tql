@@ -306,6 +306,64 @@ insert $r5 isa rule,
     has timestamp 2024-01-14T10:00:00;
 
 # ===========================
+# JURISDICTION-SPECIFIC HOS RULES
+# ===========================
+
+insert $r6 isa rule, 
+    has rule-name "max_daily_hours.US", 
+    has rule-value "11.0", 
+    has rule-category "US", 
+    has effective-from 2024-01-14T00:00:00, 
+    has effective-until 2025-01-14T00:00:00, 
+    has status "active", 
+    has timestamp 2024-01-14T10:00:00;
+
+insert $r7 isa rule, 
+    has rule-name "max_daily_hours.EU", 
+    has rule-value "9.0", 
+    has rule-category "EU", 
+    has effective-from 2024-01-14T00:00:00, 
+    has effective-until 2025-01-14T00:00:00, 
+    has status "active", 
+    has timestamp 2024-01-14T10:00:00;
+
+insert $r8 isa rule, 
+    has rule-name "max_daily_hours.CA", 
+    has rule-value "13.0", 
+    has rule-category "CA", 
+    has effective-from 2024-01-14T00:00:00, 
+    has effective-until 2025-01-14T00:00:00, 
+    has status "active", 
+    has timestamp 2024-01-14T10:00:00;
+
+insert $r9 isa rule, 
+    has rule-name "max_daily_hours.AU", 
+    has rule-value "12.0", 
+    has rule-category "AU", 
+    has effective-from 2024-01-14T00:00:00, 
+    has effective-until 2025-01-14T00:00:00, 
+    has status "active", 
+    has timestamp 2024-01-14T10:00:00;
+
+insert $r10 isa rule, 
+    has rule-name "max_daily_hours.CL", 
+    has rule-value "10.0", 
+    has rule-category "CL", 
+    has effective-from 2024-01-14T00:00:00, 
+    has effective-until 2025-01-14T00:00:00, 
+    has status "active", 
+    has timestamp 2024-01-14T10:00:00;
+
+insert $r11 isa rule, 
+    has rule-name "max_daily_hours.INTL", 
+    has rule-value "10.0", 
+    has rule-category "INTL", 
+    has effective-from 2024-01-14T00:00:00, 
+    has effective-until 2025-01-14T00:00:00, 
+    has status "active", 
+    has timestamp 2024-01-14T10:00:00;
+
+# ===========================
 # ASSIGNMENTS (Fleet Safety Compliance)
 # ===========================
 

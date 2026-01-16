@@ -60,6 +60,7 @@ define
   attribute effective-from, value datetime;
   attribute effective-until, value datetime;
   
+  
   # ----------------------------
   # Fleet Entities (Frontend Display)
   # ----------------------------
@@ -136,6 +137,7 @@ define
     owns effective-until,
     owns status,
     owns timestamp;
+    
   
   # ----------------------------
   # Relations

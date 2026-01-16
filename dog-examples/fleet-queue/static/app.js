@@ -2881,6 +2881,12 @@ showNotification(message, type = 'info') {
             const assignmentDate = new Date(assignmentDateTime);
             const isoDateTime = assignmentDate.toISOString();
             
+            // Detect jurisdiction based on coordinates
+            const jurisdiction = this.detectJurisdiction(pickupLat, pickupLng, deliveryLat, deliveryLng);
+            
+            // Get jurisdiction-specific hours limit from rules service
+            const maxHours = await this.getJurisdictionHoursLimit(jurisdiction);
+            
             // Create bounding box for proximity (±0.1 degrees ≈ 11km radius)
             const deltaLat = 0.1;
             const deltaLng = 0.1;
@@ -2907,27 +2913,7 @@ showNotification(message, type = 'info') {
                     'x-service-method': 'read'
                 },
                 body: JSON.stringify({
-                    query: `match $e isa employee, has id $id, has employee-name $name, has employee-role "driver", has daily-hours $hours, has performance-rating $rating, has certifications $certs;
-                    
-                    // Regulatory compliance checks
-                    $hours < 10.5;
-                    
-                    // Location prediction: current position OR delivery destination at pickup time
-                    { 
-                        $e has current-lat $lat, has current-lng $lng; 
-                        not { $assignment1 isa assignment (assigned-employee: $e, assigned-delivery: $delivery1), has timestamp $assignTime1; $assignTime1 == "${isoDateTime}"; }; 
-                    } or { 
-                        $assignment2 isa assignment (assigned-employee: $e, assigned-delivery: $delivery2), has timestamp $assignTime2; 
-                        $assignTime2 == "${isoDateTime}"; 
-                        $delivery2 has dest-lat $lat, has dest-lng $lng; 
-                    };
-                    
-                    // Proximity filtering: only drivers within route area
-                    $lat > ${minLat}; $lat < ${maxLat}; 
-                    $lng > ${minLng}; $lng < ${maxLng};
-                    
-                    select $e, $id, $name, $lat, $lng, $hours, $rating, $certs; 
-                    limit 15;`
+                    query: `match let $compliant in compliant_employees(${maxHours}); $compliant has id $id, has employee-name $name, has employee-role "driver", has daily-hours $hours, has performance-rating $rating, has certifications $certs; { $compliant has current-lat $lat, has current-lng $lng; not { $assignment1 isa assignment (assigned-employee: $compliant, assigned-delivery: $delivery1), has timestamp $assignTime1; $assignTime1 == "${isoDateTime}"; }; } or { $assignment2 isa assignment (assigned-employee: $compliant, assigned-delivery: $delivery2), has timestamp $assignTime2; $assignTime2 == "${isoDateTime}"; $delivery2 has dest-lat $lat, has dest-lng $lng; }; $lat > ${minLat}; $lat < ${maxLat}; $lng > ${minLng}; $lng < ${maxLng}; select $compliant, $id, $name, $lat, $lng, $hours, $rating, $certs; limit 15;`
                 })
             });
             
@@ -2975,7 +2961,8 @@ showNotification(message, type = 'info') {
                     const totalRouteDistance = routeData.totalDistance || (pickupDistance + deliveryDistance);
                     const estimatedTime = routeData.totalTime || ((pickupDistance + deliveryDistance) * 2);
                     
-                    // Get traffic information for better routing decisions
+                    // Get traffic information for better routing decisions (with delay to prevent rate limiting)
+                    await new Promise(resolve => setTimeout(resolve, Math.random() * 100)); // Random delay 0-100ms
                     const trafficData = await this.getTomTomTraffic(routeCoordinates);
                     const trafficDelay = trafficData.trafficDelay || 0;
                     
@@ -3147,11 +3134,10 @@ showNotification(message, type = 'info') {
             
             const data = await response.json();
             
-            if (data.ok && data.ok.status === 'success') {
-                const routeData = data.ok;
+            if (data.status === 'success') {
                 return {
-                    totalDistance: routeData.distance_meters / 1609.34, // Convert to miles
-                    totalTime: routeData.duration_seconds / 60, // Convert to minutes
+                    totalDistance: data.distance_meters / 1609.34, // Convert to miles
+                    totalTime: data.duration_seconds / 60, // Convert to minutes
                     trafficDelay: 0, // Would need traffic endpoint for this
                     fuelConsumption: 0
                 };
@@ -3176,36 +3162,56 @@ showNotification(message, type = 'info') {
     async getTomTomTraffic(coordinates) {
         // Use the existing TomTom backend service for traffic information
         try {
+            // Validate coordinates before making API call
+            if (!coordinates || !coordinates.driver || !coordinates.pickup ||
+                typeof coordinates.driver[1] !== 'number' || typeof coordinates.driver[0] !== 'number' ||
+                typeof coordinates.pickup[1] !== 'number' || typeof coordinates.pickup[0] !== 'number' ||
+                isNaN(coordinates.driver[1]) || isNaN(coordinates.driver[0]) ||
+                isNaN(coordinates.pickup[1]) || isNaN(coordinates.pickup[0])) {
+                console.warn('Invalid coordinates for TomTom traffic service:', coordinates);
+                return {
+                    trafficDelay: 0,
+                    congestionLevel: 'unknown',
+                    travelTime: 0
+                };
+            }
+
+            const requestBody = {
+                from_lat: Number(coordinates.driver[1]),
+                from_lng: Number(coordinates.driver[0]),
+                to_lat: Number(coordinates.pickup[1]),
+                to_lng: Number(coordinates.pickup[0]),
+                vehicle_id: 'temp_vehicle'
+            };
+
+            console.log('TomTom traffic request:', requestBody);
+
             const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'x-service-method': 'traffic'
                 },
-                body: JSON.stringify({
-                    from_lat: coordinates.driver[1],
-                    from_lng: coordinates.driver[0],
-                    to_lat: coordinates.pickup[1],
-                    to_lng: coordinates.pickup[0],
-                    vehicle_id: 'temp_vehicle'
-                })
+                body: JSON.stringify(requestBody)
             });
             
             if (!response.ok) {
-                throw new Error(`TomTom traffic service failed: ${response.status}`);
+                const errorText = await response.text();
+                console.error('TomTom traffic service error response:', errorText);
+                throw new Error(`TomTom traffic service failed: ${response.status} - ${errorText}`);
             }
             
             const data = await response.json();
+            console.log('TomTom traffic response:', data);
             
-            if (data.ok && data.ok.status === 'success') {
-                const trafficData = data.ok;
+            if (data.status === 'success') {
                 return {
-                    trafficDelay: trafficData.traffic_delay_seconds / 60, // Convert to minutes
-                    congestionLevel: trafficData.congestion_level,
-                    travelTime: trafficData.travel_time_seconds / 60
+                    trafficDelay: (data.traffic_delay_seconds || 0) / 60, // Convert to minutes
+                    congestionLevel: data.congestion_level || 'unknown',
+                    travelTime: (data.travel_time_seconds || 0) / 60
                 };
             } else {
-                throw new Error('Invalid response from TomTom traffic service');
+                throw new Error(`Invalid response from TomTom traffic service: ${JSON.stringify(data)}`);
             }
         } catch (error) {
             console.warn('TomTom traffic service failed:', error);
@@ -3505,6 +3511,114 @@ showNotification(message, type = 'info') {
         } else {
             console.error('❌ Missing elements for address selection');
         }
+    }
+    
+    detectJurisdiction(pickupLat, pickupLng, deliveryLat, deliveryLng) {
+        // Simple jurisdiction detection based on coordinate ranges
+        // This could be enhanced with more sophisticated geofencing
+        
+        // Use pickup location as primary jurisdiction determinant
+        const lat = pickupLat;
+        const lng = pickupLng;
+        
+        // North America (US/Canada)
+        if (lat >= 25 && lat <= 72 && lng >= -168 && lng <= -52) {
+            if (lat >= 49) {
+                return 'CA'; // Canada
+            }
+            return 'US'; // United States
+        }
+        
+        // Europe
+        if (lat >= 35 && lat <= 71 && lng >= -10 && lng <= 40) {
+            return 'EU'; // European Union
+        }
+        
+        // South America (Chile example from logs)
+        if (lat >= -56 && lat <= 12 && lng >= -82 && lng <= -34) {
+            return 'CL'; // Chile
+        }
+        
+        // Australia/Oceania
+        if (lat >= -47 && lat <= -10 && lng >= 113 && lng <= 154) {
+            return 'AU'; // Australia
+        }
+        
+        // Default to international standards
+        return 'INTL';
+    }
+    
+    async getJurisdictionHoursLimit(jurisdiction) {
+        try {
+            // Fetch hours limit from rules service (try jurisdiction-specific first, then general employee rule)
+            let response = await fetch(`${this.apiBaseUrl}/rules`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'read'
+                },
+                body: JSON.stringify({
+                    query: `match $rule isa rule, has rule-name "max_daily_hours.${jurisdiction}", has rule-value $value; select $value;`
+                })
+            });
+            
+            // If no jurisdiction-specific rule found, try general employee rule
+            let result;
+            if (response.ok) {
+                result = await response.json();
+                if (!result.ok?.answers || result.ok.answers.length === 0) {
+                    response = await fetch(`${this.apiBaseUrl}/rules`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-service-method': 'read'
+                        },
+                        body: JSON.stringify({
+                            query: `match $rule isa rule, has rule-name "employee.max_daily_hours", has rule-value $value; select $value;`
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        result = await response.json();
+                    }
+                }
+            }
+            
+            if (!response.ok) {
+                console.warn(`Failed to fetch hours limit for jurisdiction ${jurisdiction}, using default`);
+                return this.getDefaultHoursLimit(jurisdiction);
+            }
+            const rules = result.ok?.answers || [];
+            
+            if (rules.length > 0 && rules[0].data?.value?.value) {
+                const hoursLimit = parseFloat(rules[0].data.value.value);
+                console.log(`📋 Jurisdiction ${jurisdiction} hours limit: ${hoursLimit}`);
+                return hoursLimit;
+            }
+            
+            // Fallback to default if no rule found
+            return this.getDefaultHoursLimit(jurisdiction);
+            
+        } catch (error) {
+            console.error('Error fetching jurisdiction hours limit:', error);
+            return this.getDefaultHoursLimit(jurisdiction);
+        }
+    }
+    
+    getDefaultHoursLimit(jurisdiction) {
+        // Regulatory defaults by jurisdiction
+        const defaults = {
+            'US': 11.0,    // US DOT: 11-hour driving limit
+            'CA': 13.0,    // Canada: 13-hour on-duty limit  
+            'EU': 9.0,     // EU: 9-hour daily driving limit
+            'CL': 10.0,    // Chile: 10-hour limit
+            'AU': 12.0,    // Australia: 12-hour work day
+            'INTL': 10.0   // International default
+        };
+        
+        const limit = defaults[jurisdiction] || defaults['INTL'];
+        console.log(`📋 Using default hours limit for ${jurisdiction}: ${limit}`);
+        return limit;
     }
     
     setupDateTimeConstraints() {
