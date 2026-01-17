@@ -3,8 +3,20 @@ define
   # Core Attributes
   # ----------------------------
   attribute id, value string;
-  attribute timestamp, value datetime;
-  attribute status, value string @values("available", "busy", "offline", "maintenance", "hours_exceeded", "suspended", "active", "pending", "in_transit", "delivered", "failed", "operational", "scheduled");
+  
+  # Semantic timestamps
+  attribute created-at, value datetime;
+  attribute updated-at, value datetime;
+  attribute assigned-at, value datetime;
+  attribute event-time, value datetime;
+  
+  # Entity-specific status attributes
+  attribute vehicle-status, value string @values("operational", "maintenance", "out_of_service");
+  attribute employee-status, value string @values("available", "busy", "offline", "hours_exceeded", "suspended");
+  attribute assignment-status, value string @values("active", "pending", "completed", "cancelled");
+  attribute delivery-status, value string @values("pending", "in_transit", "delivered", "failed");
+  attribute event-status, value string @values("active", "completed", "failed", "scheduled");
+  
   attribute priority, value integer;
   
   # Vehicle Attributes
@@ -18,18 +30,20 @@ define
   attribute status-color, value string;
   attribute gps-latitude, value double;
   attribute gps-longitude, value double;
+  # Certification name attribute
+  attribute certification-name, value string;
   
   # Employee Attributes
   attribute employee-name, value string;
   attribute employee-role, value string @values("driver", "mechanic", "dispatcher", "supervisor");
   attribute shift-schedule, value string @values("day", "evening", "night", "rotating");
-  attribute license-class, value string @values("CDL-A", "CDL-B", "CDL-C", "regular");
-  attribute vehicle-assignment, value string;
+  # license-class removed - certifications now handled via relations
+  # vehicle-assignment will be replaced with assignment relation
   attribute current-lat, value double;
   attribute current-lng, value double;
   attribute daily-hours, value double;
   attribute performance-rating, value double;
-  attribute certifications, value string;
+  # Remove string-based certifications - replaced with relations
   
   # Delivery Attributes
   attribute delivery-id, value string;
@@ -51,7 +65,6 @@ define
   
   # Operation Attributes
   attribute operation-id, value string;
-  attribute assignment-id, value string;
   
   # Rules Attributes
   attribute rule-name, value string;
@@ -76,7 +89,9 @@ define
     owns status-color,
     owns gps-latitude,
     owns gps-longitude,
-    owns status,
+    # Certifications handled via relations
+    owns vehicle-status,
+    owns created-at,
     plays assignment:assigned-vehicle;
     
     
@@ -88,8 +103,8 @@ define
     owns delivery-time,
     owns weight,
     owns priority,
-    owns status,
-    owns timestamp,
+    owns delivery-status,
+    owns created-at,
     owns route-id,
     owns customer-priority,
     owns dest-lat,
@@ -101,15 +116,14 @@ define
   # Dog-Queue Entities (Background Processing)
   # ----------------------------
   
-  entity operation,
+  entity operation-event,
     owns id @key,
     owns operation-id,
-    owns assignment-id,
-    owns vehicle-id,
     owns job-type,
-    owns status,
-    owns timestamp,
-    plays queue-processing:processing-queue;
+    owns event-status,
+    owns event-time,
+    plays queue-processing:processing-queue,
+    plays operation-assignment:operation;
     
   entity employee,
     owns id @key,
@@ -119,13 +133,12 @@ define
     owns current-lng,
     owns daily-hours,
     owns performance-rating,
-    owns certifications,
-    owns status,
-    owns timestamp,
+    # Certifications handled via relations
+    owns employee-status,
+    owns created-at,
     # Role-specific attributes
     owns shift-schedule,
-    owns license-class,
-    owns vehicle-assignment,
+    # license-class and vehicle-assignment removed - handled via relations
     plays assignment:assigned-employee,
     plays queue-processing:queue-processor;
     
@@ -135,8 +148,7 @@ define
     owns rule-category,
     owns effective-from,
     owns effective-until,
-    owns status,
-    owns timestamp;
+    owns created-at;
     
   
   # ----------------------------
@@ -148,8 +160,9 @@ define
     relates assigned-delivery,
     relates assigned-vehicle,
     relates assigned-employee,
-    owns timestamp,
-    owns status;
+    owns assigned-at,
+    owns assignment-status,
+    plays operation-assignment:related-assignment;
     
   # Safety constraint attribute - inferred by rules
   attribute operational-safety-status, value string @values("safe", "unsafe");
@@ -164,9 +177,48 @@ define
     owns queue-position,
     owns retry-count,
     owns scheduled-at,
-    owns timestamp;
+    owns event-time;
 
+  # Operation-Assignment Connection (replaces foreign keys)
+  relation operation-assignment,
+    relates operation,
+    relates related-assignment,
+    owns event-time;
 
-
-
+  # ----------------------------
+  # Certification System (Proper TypeDB Modeling)
+  # ----------------------------
   
+  entity certification,
+    owns certification-name @key;
+  
+  # Employee has certifications
+  relation has-certification,
+    relates certified-employee,
+    relates held-certification;
+  
+  # Vehicle requires certifications
+  relation requires-certification,
+    relates requiring-vehicle,
+    relates required-certification;
+  
+  # Derived relation: employee eligible for vehicle
+  relation eligible-assignment,
+    relates eligible-employee,
+    relates eligible-vehicle;
+  
+  # Update entity role participation
+  employee plays has-certification:certified-employee,
+           plays eligible-assignment:eligible-employee;
+  
+  vehicle plays requires-certification:requiring-vehicle,
+          plays eligible-assignment:eligible-vehicle;
+  
+  certification plays has-certification:held-certification,
+                plays requires-certification:required-certification;
+
+# ===========================
+# RULES (Temporarily removed for schema loading)
+# ===========================
+
+# Rules will be added after basic schema loads successfully

@@ -1,31 +1,31 @@
 define
 
 fun premium_delivery_assignments($delivery: delivery) -> { employee }:
-match 
-    $delivery has customer-priority "premium";
-    $employee isa employee, has employee-role "driver", has performance-rating >= 4.0, has status "available";
-return { $employee };
+    match 
+        $delivery has customer-priority "premium";
+        $employee isa employee, has employee-role "driver", has performance-rating >= 4.0, has employee-status "available";
+    return { $employee };
 
 fun urgent_delivery_assignments($delivery: delivery) -> { employee }:
-match 
-    $delivery has customer-priority "urgent";
-    $employee isa employee, has employee-role "driver", has status "available";
-return { $employee };
+    match 
+        $delivery has customer-priority "urgent";
+        $employee isa employee, has employee-role "driver", has employee-status "available";
+    return { $employee };
 
 fun eligible_employees($delivery: delivery) -> { employee }:
-match 
-    $delivery has customer-priority $priority;
-    $employee isa employee, has status "available";
-    {
-        $priority == "premium"; $employee has performance-rating >= 4.0;
-    } or {
-        $priority == "urgent";
-    } or {
-        $priority == "standard";
-    } or {
-        $priority == "express";
-    };
-return { $employee };
+    match 
+        $delivery has customer-priority $priority;
+        $employee isa employee, has employee-status "available";
+        {
+            $priority == "premium"; $employee has performance-rating >= 4.0;
+        } or {
+            $priority == "urgent";
+        } or {
+            $priority == "standard";
+        } or {
+            $priority == "express";
+        };
+    return { $employee };
 
 fun hours_exceeded_employees($maxHours: double) -> { employee }:
     match 
@@ -49,13 +49,13 @@ fun available_drivers_in_area($maxHours: double, $minLat: double, $maxLat: doubl
 
 fun best_employee_for_route() -> { employee }:
 match 
-    $employee isa employee, has employee-role "driver", has status "available", has performance-rating $rating;
+    $employee isa employee, has employee-role "driver", has employee-status "available", has performance-rating $rating;
     $rating >= 4.0;
 return { $employee };
 
 fun suitable_backup_vehicles() -> { vehicle }:
 match 
-    $vehicle isa vehicle, has status "available", has maintenance-status "good", has capacity $cap, has fuel-level $fuel, has maintenance-score $score;
+    $vehicle isa vehicle, has vehicle-status "available", has maintenance-status "good", has capacity $cap, has fuel-level $fuel, has maintenance-score $score;
     $cap >= 1000.0;
     $fuel >= 50.0;
     $score >= 3.0;
@@ -75,7 +75,7 @@ return { $delivery };
 
 fun delayed_deliveries() -> { delivery }:
 match 
-    $delivery isa delivery, has status "active";
+    $delivery isa delivery, has delivery-status "pending";
 return { $delivery };
 
 fun vehicles_requiring_maintenance() -> { vehicle }:
@@ -86,12 +86,12 @@ return { $vehicle };
 
 fun available_backup_vehicles() -> { vehicle }:
 match 
-    $vehicle isa vehicle, has status "available", has maintenance-status "good";
+    $vehicle isa vehicle, has vehicle-status "available", has maintenance-status "good";
 return { $vehicle };
 
-fun routes_for_vehicle() -> { operation }:
+fun routes_for_vehicle() -> { operation-event }:
 match 
-    $route isa operation, has status "active";
+    $route isa operation-event, has event-status "active";
 return { $route };
 
 fun vehicles_without_drivers() -> { vehicle }:
@@ -104,9 +104,34 @@ return { $vehicle };
 
 fun operational_vehicles_with_drivers() -> { vehicle }:
 match 
-    $vehicle isa vehicle, has status $status;
+    $vehicle isa vehicle, has vehicle-status $status;
     $assignment isa assignment (assigned-vehicle: $vehicle, assigned-employee: $employee);
-    $employee has status "available";
-    { $status == "operational"; } or { $status == "busy"; };
+    $employee has employee-status "available";
+    { $status == "operational"; } or { $status == "maintenance"; };
 return { $vehicle };
+
+# ===========================
+# CERTIFICATION-BASED ASSIGNMENT FUNCTIONS
+# ===========================
+
+# Function: Get all drivers eligible for a specific vehicle (using proper relations)
+fun eligible_drivers_for_vehicle($vehicle: vehicle) -> { employee }:
+match
+    $employee isa employee, has employee-status "available", has employee-role "driver";
+    (eligible-employee: $employee, eligible-vehicle: $vehicle) isa eligible-assignment;
+return { $employee };
+
+# ===========================
+# COMPLIANCE FUNCTIONS (Temporarily removed problematic parameterized functions)
+# ===========================
+
+# Note: Parameterized functions with string parameters are causing TypeDB 3.0 parsing issues
+# These will be re-added once the parameter naming conflicts are resolved
+
+# Function: Get compliance status for all active assignments
+fun assignment_compliance_report() -> { assignment }:
+match
+    $assignment isa assignment, has assignment-status $status;
+    { $status == "active"; } or { $status == "non-compliant"; };
+return { $assignment };
 

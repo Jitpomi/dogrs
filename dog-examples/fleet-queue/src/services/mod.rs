@@ -14,6 +14,7 @@ pub mod employees;
 pub mod tomtom;
 pub mod jobs;
 pub mod rules;
+pub mod certifications;
 
 pub struct FleetServices {
     pub vehicles: Arc<dyn DogService<serde_json::Value, FleetParams>>,
@@ -23,6 +24,7 @@ pub struct FleetServices {
     pub tomtom: Arc<dyn DogService<serde_json::Value, FleetParams>>,
     pub jobs: Arc<dyn DogService<serde_json::Value, FleetParams>>,
     pub rules: Arc<dyn DogService<serde_json::Value, FleetParams>>,
+    pub certifications: Arc<dyn DogService<serde_json::Value, FleetParams>>,
 }
 
 pub fn configure(
@@ -58,6 +60,12 @@ pub fn configure(
     app.register_service("rules", Arc::clone(&rules));
     rules::rules_shared::register_hooks(app)?;
 
+
+    let certifications: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(certifications::CertificationsService::new(Arc::clone(&state)));
+    app.register_service("certifications", Arc::clone(&certifications));
+    certifications::certifications_shared::register_hooks(app)?;
+
+
     Ok(FleetServices {
         vehicles,
         deliveries,
@@ -66,5 +74,6 @@ pub fn configure(
         tomtom,
         jobs,
         rules,
+        certifications,
     })
 }

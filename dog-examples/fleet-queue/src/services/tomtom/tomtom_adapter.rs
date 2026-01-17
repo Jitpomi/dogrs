@@ -296,6 +296,77 @@ impl TomTomAdapter {
         Err(anyhow::anyhow!("Could not calculate ETA"))
     }
 
+    /// Handle reverse geocoding requests using TomTom Reverse Geocoding API
+    pub async fn reverse_geocode(&self, data: Value) -> Result<Value> {
+        let lat = data.get("lat")
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'lat' field"))?;
+            
+        let lng = data.get("lng")
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'lng' field"))?;
+
+        // Make direct TomTom Reverse Geocoding API call
+        let url = format!(
+            "{}/search/2/reverseGeocode/{},{}.json?key={}",
+            self.base_url,
+            lat,
+            lng,
+            self.api_key
+        );
+
+        let timeout_secs = self.app.get("tomtom.reverse_geocode.timeout")
+            .unwrap_or_else(|| "10".to_string())
+            .parse()
+            .unwrap_or(10);
+
+        let response = self.client
+            .get(&url)
+            .timeout(Duration::from_secs(timeout_secs))
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("TomTom reverse geocode request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("TomTom API error: {}", response.status()));
+        }
+
+        let json_response: Value = response
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to parse TomTom response: {}", e))?;
+
+        // Extract address from TomTom reverse geocoding response
+        if let Some(addresses) = json_response["addresses"].as_array() {
+            if let Some(first_address) = addresses.first() {
+                if let Some(address_obj) = first_address["address"].as_object() {
+                    let formatted_address = format!(
+                        "{}, {}, {} {}",
+                        address_obj.get("streetNumber").and_then(|v| v.as_str()).unwrap_or(""),
+                        address_obj.get("streetName").and_then(|v| v.as_str()).unwrap_or(""),
+                        address_obj.get("municipality").and_then(|v| v.as_str()).unwrap_or(""),
+                        address_obj.get("postalCode").and_then(|v| v.as_str()).unwrap_or("")
+                    ).trim_start_matches(", ").trim_end_matches(", ").to_string();
+                    
+                    return Ok(json!({
+                        "status": "success",
+                        "address": formatted_address,
+                        "lat": lat,
+                        "lng": lng
+                    }));
+                }
+            }
+        }
+
+        // Fallback if no address found
+        Ok(json!({
+            "status": "success",
+            "address": format!("{:.4}, {:.4}", lat, lng),
+            "lat": lat,
+            "lng": lng
+        }))
+    }
+
     /// Handle traffic check requests using TomTom Traffic Flow API
     pub async fn check_traffic(&self, data: Value) -> Result<Value> {
         let from_lat = data.get("from_lat")

@@ -35,6 +35,7 @@ pub async fn build() -> anyhow::Result<AxumApp<Value, FleetParams>> {
         .use_service("/tomtom", svcs.tomtom)
         .use_service("/jobs", svcs.jobs)
         .use_service("/rules", svcs.rules)
+        .use_service("/certifications", svcs.certifications)
         .service("/health", || async { "ok" });
 
     // Add CORS middleware to allow browser requests

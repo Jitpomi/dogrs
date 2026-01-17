@@ -1,8 +1,18 @@
-# Fleet Management Sample Data - 100% Schema Compliant
-# Follows schema.tql and functions.tql exactly
+# Fleet Management Sample Data
+# Clean TypeQL data with proper transaction structure for load script compatibility
 
 # ===========================
-# VEHICLES (6 vehicles)
+# CERTIFICATIONS (Define certification entities first)
+# ===========================
+
+insert $cdlA isa certification, has certification-name "CDL-A";
+insert $cdlB isa certification, has certification-name "CDL-B";
+insert $hazmat isa certification, has certification-name "Hazmat";
+insert $forklift isa certification, has certification-name "Forklift";
+insert $dispatcher isa certification, has certification-name "Dispatcher";
+
+# ===========================
+# VEHICLES (6 vehicles with certification requirements)
 # ===========================
 
 insert $v1 isa vehicle, 
@@ -12,7 +22,8 @@ insert $v1 isa vehicle,
     has fuel-level 85.5, 
     has maintenance-score 92.3, 
     has maintenance-status "good", 
-    has status "operational", 
+    has vehicle-status "operational",
+    has created-at 2024-01-14T00:00:00, 
     has vehicle-icon "🚛", 
     has status-color "#22c55e", 
     has gps-latitude 40.7128, 
@@ -25,7 +36,8 @@ insert $v2 isa vehicle,
     has fuel-level 72.1, 
     has maintenance-score 88.7, 
     has maintenance-status "good", 
-    has status "operational", 
+    has vehicle-status "operational",
+    has created-at 2024-01-14T00:00:00, 
     has vehicle-icon "🚛", 
     has status-color "#22c55e", 
     has gps-latitude 40.6782, 
@@ -38,7 +50,8 @@ insert $v3 isa vehicle,
     has fuel-level 91.2, 
     has maintenance-score 95.1, 
     has maintenance-status "good", 
-    has status "operational", 
+    has vehicle-status "operational",
+    has created-at 2024-01-14T00:00:00, 
     has vehicle-icon "🚐", 
     has status-color "#22c55e", 
     has gps-latitude 40.7282, 
@@ -51,7 +64,8 @@ insert $v4 isa vehicle,
     has fuel-level 89.4, 
     has maintenance-score 93.6, 
     has maintenance-status "good", 
-    has status "operational", 
+    has vehicle-status "operational",
+    has created-at 2024-01-14T00:00:00, 
     has vehicle-icon "🧊", 
     has status-color "#22c55e", 
     has gps-latitude 40.7505, 
@@ -64,7 +78,8 @@ insert $v5 isa vehicle,
     has fuel-level 45.2, 
     has maintenance-score 65.3, 
     has maintenance-status "poor", 
-    has status "maintenance", 
+    has vehicle-status "maintenance",
+    has created-at 2024-01-14T00:00:00, 
     has vehicle-icon "🚛", 
     has status-color "#f59e0b", 
     has gps-latitude 40.6892, 
@@ -77,14 +92,15 @@ insert $v6 isa vehicle,
     has fuel-level 77.8, 
     has maintenance-score 89.2, 
     has maintenance-status "good", 
-    has status "available", 
+    has vehicle-status "operational",
+    has created-at 2024-01-14T00:00:00, 
     has vehicle-icon "🚐", 
     has status-color "#3b82f6", 
     has gps-latitude 40.7589, 
     has gps-longitude -73.9851;
 
 # ===========================
-# EMPLOYEES (5 employees)
+# EMPLOYEES (5 employees with certifications)
 # ===========================
 
 insert $e1 isa employee, 
@@ -93,14 +109,11 @@ insert $e1 isa employee,
     has employee-role "driver", 
     has current-lat 40.7128, 
     has current-lng -74.0060, 
-    has daily-hours 6.5, 
-    has performance-rating 4.2, 
-    has certifications "CDL-A", 
-    has status "available", 
-    has timestamp 2024-01-14T10:00:00, 
     has shift-schedule "day", 
-    has license-class "CDL-A", 
-    has vehicle-assignment "VH001";
+    has employee-status "available", 
+    has performance-rating 4.8, 
+    has daily-hours 6.5, 
+    has created-at 2024-01-14T10:00:00;
 
 insert $e2 isa employee, 
     has id "EMP002", 
@@ -108,14 +121,11 @@ insert $e2 isa employee,
     has employee-role "driver", 
     has current-lat 40.6782, 
     has current-lng -73.9442, 
-    has daily-hours 7.2, 
-    has performance-rating 4.5, 
-    has certifications "CDL-B", 
-    has status "busy", 
-    has timestamp 2024-01-14T10:00:00, 
     has shift-schedule "day", 
-    has license-class "CDL-B", 
-    has vehicle-assignment "VH002";
+    has employee-status "available", 
+    has performance-rating 4.6, 
+    has daily-hours 7.2, 
+    has created-at 2024-01-14T10:00:00;
 
 insert $e3 isa employee, 
     has id "EMP003", 
@@ -123,14 +133,11 @@ insert $e3 isa employee,
     has employee-role "driver", 
     has current-lat 40.7282, 
     has current-lng -73.7949, 
-    has daily-hours 5.8, 
-    has performance-rating 4.0, 
-    has certifications "CDL-A", 
-    has status "available", 
-    has timestamp 2024-01-14T10:00:00, 
     has shift-schedule "evening", 
-    has license-class "CDL-A", 
-    has vehicle-assignment "VH003";
+    has employee-status "busy", 
+    has performance-rating 4.2, 
+    has daily-hours 8.1, 
+    has created-at 2024-01-14T10:00:00;
 
 insert $e4 isa employee, 
     has id "EMP004", 
@@ -138,28 +145,23 @@ insert $e4 isa employee,
     has employee-role "driver", 
     has current-lat 40.7505, 
     has current-lng -73.9934, 
-    has daily-hours 8.1, 
-    has performance-rating 4.8, 
-    has certifications "CDL-C", 
-    has status "available", 
-    has timestamp 2024-01-14T10:00:00, 
     has shift-schedule "day", 
-    has license-class "CDL-C", 
-    has vehicle-assignment "VH004";
+    has employee-status "available", 
+    has performance-rating 4.9, 
+    has daily-hours 5.8, 
+    has created-at 2024-01-14T10:00:00;
 
 insert $e5 isa employee, 
     has id "EMP005", 
-    has employee-name "Robert Brown", 
-    has employee-role "mechanic", 
-    has current-lat 40.6892, 
-    has current-lng -73.9445, 
-    has daily-hours 8.5, 
-    has performance-rating 3.9, 
-    has certifications "ASE-Certified", 
-    has status "available", 
-    has timestamp 2024-01-14T10:00:00, 
+    has employee-name "David Brown", 
+    has employee-role "dispatcher", 
+    has current-lat 40.7589, 
+    has current-lng -73.9851, 
     has shift-schedule "day", 
-    has license-class "regular";
+    has employee-status "available", 
+    has performance-rating 4.7, 
+    has daily-hours 8.0, 
+    has created-at 2024-01-14T10:00:00;
 
 # ===========================
 # DELIVERIES (4 deliveries)
@@ -170,11 +172,11 @@ insert $d1 isa delivery,
     has pickup-address "123 Main St, Manhattan, NY", 
     has delivery-address "456 Oak Ave, Brooklyn, NY", 
     has customer-name "ABC Corp", 
-    has delivery-time 2024-01-14T14:00:00, 
-    has weight 150.5, 
-    has priority 1, 
-    has status "pending", 
-    has timestamp 2024-01-14T10:00:00, 
+    has delivery-time 2024-01-14T09:00:00, 
+    has weight 125.5, 
+    has priority 3, 
+    has delivery-status "pending", 
+    has created-at 2024-01-14T10:00:00, 
     has route-id "RT001", 
     has customer-priority "premium", 
     has dest-lat 40.6782, 
@@ -185,11 +187,11 @@ insert $d2 isa delivery,
     has pickup-address "789 Broadway, Manhattan, NY", 
     has delivery-address "321 Pine St, Queens, NY", 
     has customer-name "XYZ Industries", 
-    has delivery-time 2024-01-14T15:30:00, 
+    has delivery-time 2024-01-14T11:00:00, 
     has weight 89.2, 
     has priority 2, 
-    has status "in_transit", 
-    has timestamp 2024-01-14T10:00:00, 
+    has delivery-status "in_transit", 
+    has created-at 2024-01-14T10:00:00, 
     has route-id "RT002", 
     has customer-priority "standard", 
     has dest-lat 40.7282, 
@@ -200,11 +202,11 @@ insert $d3 isa delivery,
     has pickup-address "555 5th Ave, Manhattan, NY", 
     has delivery-address "777 Elm St, Bronx, NY", 
     has customer-name "Global Logistics", 
-    has delivery-time 2024-01-14T16:00:00, 
-    has weight 245.8, 
-    has priority 3, 
-    has status "pending", 
-    has timestamp 2024-01-14T10:00:00, 
+    has delivery-time 2024-01-14T13:00:00, 
+    has weight 156.8, 
+    has priority 4, 
+    has delivery-status "delivered", 
+    has created-at 2024-01-14T10:00:00, 
     has route-id "RT003", 
     has customer-priority "express", 
     has dest-lat 40.8448, 
@@ -218,8 +220,8 @@ insert $d4 isa delivery,
     has delivery-time 2024-01-14T12:00:00, 
     has weight 75.3, 
     has priority 1, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00, 
+    has delivery-status "pending", 
+    has created-at 2024-01-14T10:00:00, 
     has route-id "RT004", 
     has customer-priority "urgent", 
     has dest-lat 40.7505, 
@@ -229,196 +231,122 @@ insert $d4 isa delivery,
 # OPERATIONS (3 operations)
 # ===========================
 
-insert $op1 isa operation, 
+insert $op1 isa operation-event, 
     has id "OP001", 
     has operation-id "GPS_001", 
-    has assignment-id "ASN001", 
-    has vehicle-id "VH001", 
     has job-type "gps_tracking", 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+    has event-status "active", 
+    has event-time 2024-01-14T10:00:00;
 
-insert $op2 isa operation, 
+insert $op2 isa operation-event, 
     has id "OP002", 
-    has operation-id "ROUTE_001", 
-    has assignment-id "ASN002", 
-    has vehicle-id "VH002", 
-    has job-type "route_optimization", 
-    has status "pending", 
-    has timestamp 2024-01-14T10:00:00;
+    has operation-id "ASSIGN_001", 
+    has job-type "employee_assignment", 
+    has event-status "active", 
+    has event-time 2024-01-14T10:00:00;
 
-insert $op3 isa operation, 
+insert $op3 isa operation-event, 
     has id "OP003", 
-    has operation-id "SLA_001", 
-    has assignment-id "ASN003", 
-    has vehicle-id "VH003", 
-    has job-type "sla_monitoring", 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+    has operation-id "ROUTE_001", 
+    has job-type "route_rebalancing", 
+    has event-status "active", 
+    has event-time 2024-01-14T10:00:00;
 
 # ===========================
-# RULES (5 configuration rules)
+# RULES (Configuration rules)
+# Note: Rules are loaded by the application on startup
 # ===========================
 
-insert $r1 isa rule, 
-    has rule-name "sla.premium.notification_threshold", 
-    has rule-value "5", 
-    has rule-category "sla", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
-
-insert $r2 isa rule, 
-    has rule-name "employee.max_daily_hours", 
-    has rule-value "11", 
-    has rule-category "employee", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
-
-insert $r3 isa rule, 
-    has rule-name "vehicle.maintenance_threshold", 
-    has rule-value "70", 
-    has rule-category "vehicle", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
-
-insert $r4 isa rule, 
-    has rule-name "delivery.premium.rating_threshold", 
-    has rule-value "4.0", 
-    has rule-category "delivery", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
-
-insert $r5 isa rule, 
-    has rule-name "fleet.backup_vehicle.capacity_min", 
-    has rule-value "1000", 
-    has rule-category "fleet", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# Rules are automatically created by the application
+# No manual insertion needed here
 
 # ===========================
-# JURISDICTION-SPECIFIC HOS RULES
+# VEHICLE CERTIFICATION REQUIREMENTS
 # ===========================
 
-insert $r6 isa rule, 
-    has rule-name "max_daily_hours.US", 
-    has rule-value "11.0", 
-    has rule-category "US", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# VH001 (truck) requires CDL-A
+match $v1 isa vehicle, has vehicle-id "VH001"; $cdlA isa certification, has certification-name "CDL-A";
+insert (requiring-vehicle: $v1, required-certification: $cdlA) isa requires-certification;
 
-insert $r7 isa rule, 
-    has rule-name "max_daily_hours.EU", 
-    has rule-value "9.0", 
-    has rule-category "EU", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# VH002 (truck) requires CDL-A  
+match $v2 isa vehicle, has vehicle-id "VH002"; $cdlA isa certification, has certification-name "CDL-A";
+insert (requiring-vehicle: $v2, required-certification: $cdlA) isa requires-certification;
 
-insert $r8 isa rule, 
-    has rule-name "max_daily_hours.CA", 
-    has rule-value "13.0", 
-    has rule-category "CA", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# VH003 (van) requires CDL-B
+match $v3 isa vehicle, has vehicle-id "VH003"; $cdlB isa certification, has certification-name "CDL-B";
+insert (requiring-vehicle: $v3, required-certification: $cdlB) isa requires-certification;
 
-insert $r9 isa rule, 
-    has rule-name "max_daily_hours.AU", 
-    has rule-value "12.0", 
-    has rule-category "AU", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# VH004 (refrigerated) requires CDL-A and Hazmat
+match $v4 isa vehicle, has vehicle-id "VH004"; $cdlA isa certification, has certification-name "CDL-A";
+insert (requiring-vehicle: $v4, required-certification: $cdlA) isa requires-certification;
+match $v4 isa vehicle, has vehicle-id "VH004"; $hazmat isa certification, has certification-name "Hazmat";
+insert (requiring-vehicle: $v4, required-certification: $hazmat) isa requires-certification;
 
-insert $r10 isa rule, 
-    has rule-name "max_daily_hours.CL", 
-    has rule-value "10.0", 
-    has rule-category "CL", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# VH005 (truck) requires CDL-A
+match $v5 isa vehicle, has vehicle-id "VH005"; $cdlA isa certification, has certification-name "CDL-A";
+insert (requiring-vehicle: $v5, required-certification: $cdlA) isa requires-certification;
 
-insert $r11 isa rule, 
-    has rule-name "max_daily_hours.INTL", 
-    has rule-value "10.0", 
-    has rule-category "INTL", 
-    has effective-from 2024-01-14T00:00:00, 
-    has effective-until 2025-01-14T00:00:00, 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# VH006 (van) requires CDL-B
+match $v6 isa vehicle, has vehicle-id "VH006"; $cdlB isa certification, has certification-name "CDL-B";
+insert (requiring-vehicle: $v6, required-certification: $cdlB) isa requires-certification;
 
 # ===========================
-# ASSIGNMENTS (Fleet Safety Compliance)
+# EMPLOYEE CERTIFICATIONS
 # ===========================
 
-# VH001 -> John Smith (available driver)
-match 
-    $v1 isa vehicle, has vehicle-id "VH001";
-    $e1 isa employee, has employee-name "John Smith";
-insert $a1 isa assignment (assigned-vehicle: $v1, assigned-employee: $e1), 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# EMP001 (John Smith) has CDL-A
+match $e1 isa employee, has id "EMP001"; $cdlA isa certification, has certification-name "CDL-A";
+insert (certified-employee: $e1, held-certification: $cdlA) isa has-certification;
 
-# VH002 -> Sarah Johnson (busy driver) 
-match 
-    $v2 isa vehicle, has vehicle-id "VH002";
-    $e2 isa employee, has employee-name "Sarah Johnson";
-insert $a2 isa assignment (assigned-vehicle: $v2, assigned-employee: $e2), 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# EMP002 (Sarah Johnson) has CDL-B
+match $e2 isa employee, has id "EMP002"; $cdlB isa certification, has certification-name "CDL-B";
+insert (certified-employee: $e2, held-certification: $cdlB) isa has-certification;
 
-# VH003 -> Mike Davis (available driver)
-match 
-    $v3 isa vehicle, has vehicle-id "VH003";
-    $e3 isa employee, has employee-name "Mike Davis";
-insert $a3 isa assignment (assigned-vehicle: $v3, assigned-employee: $e3), 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# EMP003 (Mike Davis) has CDL-A and Hazmat
+match $e3 isa employee, has id "EMP003"; $cdlA isa certification, has certification-name "CDL-A";
+insert (certified-employee: $e3, held-certification: $cdlA) isa has-certification;
+match $e3 isa employee, has id "EMP003"; $hazmat isa certification, has certification-name "Hazmat";
+insert (certified-employee: $e3, held-certification: $hazmat) isa has-certification;
 
-# VH004 -> Lisa Wilson (available driver)
-match 
-    $v4 isa vehicle, has vehicle-id "VH004";
-    $e4 isa employee, has employee-name "Lisa Wilson";
-insert $a4 isa assignment (assigned-vehicle: $v4, assigned-employee: $e4), 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# EMP004 (Lisa Wilson) has CDL-A, Hazmat, and Forklift
+match $e4 isa employee, has id "EMP004"; $cdlA isa certification, has certification-name "CDL-A";
+insert (certified-employee: $e4, held-certification: $cdlA) isa has-certification;
+match $e4 isa employee, has id "EMP004"; $hazmat isa certification, has certification-name "Hazmat";
+insert (certified-employee: $e4, held-certification: $hazmat) isa has-certification;
+match $e4 isa employee, has id "EMP004"; $forklift isa certification, has certification-name "Forklift";
+insert (certified-employee: $e4, held-certification: $forklift) isa has-certification;
 
-# DEL001 -> VH001 (premium delivery assignment)
-match 
-    $d1 isa delivery, has delivery-id "DEL001";
-    $v1 isa vehicle, has vehicle-id "VH001";
-insert $a5 isa assignment (assigned-delivery: $d1, assigned-vehicle: $v1), 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# EMP005 (David Brown) has Dispatcher certification
+match $e5 isa employee, has id "EMP005"; $dispatcher isa certification, has certification-name "Dispatcher";
+insert (certified-employee: $e5, held-certification: $dispatcher) isa has-certification;
 
-# DEL002 -> VH002 (standard delivery assignment)
-match 
-    $d2 isa delivery, has delivery-id "DEL002";
-    $v2 isa vehicle, has vehicle-id "VH002";
-insert $a6 isa assignment (assigned-delivery: $d2, assigned-vehicle: $v2), 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+# ===========================
+# VEHICLE-EMPLOYEE ASSIGNMENTS (Replace vehicle-assignment strings with relations)
+# ===========================
+# ASSIGNMENT RELATIONS (8 assignments - employee-vehicle + delivery assignments)
+# ===========================
 
-# DEL004 -> VH004 (urgent delivery assignment)
-match 
-    $d4 isa delivery, has delivery-id "DEL004";
-    $v4 isa vehicle, has vehicle-id "VH004";
-insert $a7 isa assignment (assigned-delivery: $d4, assigned-vehicle: $v4), 
-    has status "active", 
-    has timestamp 2024-01-14T10:00:00;
+match $e1 isa employee, has id "EMP001"; $v1 isa vehicle, has vehicle-id "VH001";
+insert (assigned-employee: $e1, assigned-vehicle: $v1) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T08:00:00;
+
+match $e2 isa employee, has id "EMP002"; $v2 isa vehicle, has vehicle-id "VH002";
+insert (assigned-employee: $e2, assigned-vehicle: $v2) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T08:30:00;
+
+match $e3 isa employee, has id "EMP003"; $v3 isa vehicle, has vehicle-id "VH003";
+insert (assigned-employee: $e3, assigned-vehicle: $v3) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T09:00:00;
+
+match $e4 isa employee, has id "EMP004"; $v4 isa vehicle, has vehicle-id "VH004";
+insert (assigned-employee: $e4, assigned-vehicle: $v4) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T09:30:00;
+
+# Delivery assignments for route data
+match $v1 isa vehicle, has vehicle-id "VH001"; $d1 isa delivery, has delivery-id "DEL001";
+insert (assigned-vehicle: $v1, assigned-delivery: $d1) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T08:00:00;
+
+match $v2 isa vehicle, has vehicle-id "VH002"; $d2 isa delivery, has delivery-id "DEL002";
+insert (assigned-vehicle: $v2, assigned-delivery: $d2) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T08:30:00;
+
+match $v3 isa vehicle, has vehicle-id "VH003"; $d3 isa delivery, has delivery-id "DEL003";
+insert (assigned-vehicle: $v3, assigned-delivery: $d3) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T09:00:00;
+
+match $v4 isa vehicle, has vehicle-id "VH004"; $d4 isa delivery, has delivery-id "DEL004";
+insert (assigned-vehicle: $v4, assigned-delivery: $d4) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T09:30:00;

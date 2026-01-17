@@ -40,6 +40,8 @@ impl DogService<Value, FleetParams> for TomTomService {
         match method {
             "geocode" => self.adapter.geocode(data).await
                 .map_err(|e| DogError::new(ErrorKind::BadRequest, e.to_string()).into_anyhow()),
+            "reverse-geocode" => self.adapter.reverse_geocode(data).await
+                .map_err(|e| DogError::new(ErrorKind::BadRequest, e.to_string()).into_anyhow()),
             "search" => self.adapter.search_addresses(data).await
                 .map_err(|e| DogError::new(ErrorKind::BadRequest, e.to_string()).into_anyhow()),
             "route" => self.adapter.calculate_route(data).await

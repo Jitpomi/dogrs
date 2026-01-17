@@ -94,6 +94,41 @@ fi
 echo "✅ Server is running"
 echo ""
 
+echo "🧹 Clearing existing data from database..."
+echo "========================================"
+
+clear_entities() {
+  local service="$1"
+  local entity="$2"
+  echo "🗑️  Clearing $entity entities..."
+  local response
+  response="$(curl -sS -X POST "$BASE_URL/$service" \
+    -H "Content-Type: application/json" \
+    -H "x-service-method: write" \
+    -d "{\"query\":\"match \$x isa $entity; delete \$x;\"}" 2>/dev/null || echo '{"error":"Connection failed"}')"
+  
+  if echo "$response" | jq -e '.ok' >/dev/null 2>&1; then
+    local count=$(echo "$response" | jq -r '.ok.answers | length // 0' 2>/dev/null || echo "0")
+    echo "✅ Cleared $count $entity records"
+  else
+    echo "⚠️  Clear $entity: $response"
+  fi
+}
+
+# Clear all entities in dependency order (relations first, then entities)
+clear_entities "operations" "assignment"
+clear_entities "operations" "has-certification" 
+clear_entities "operations" "requires-certification"
+clear_entities "operations" "eligible-assignment"
+clear_entities "vehicles" "vehicle"
+clear_entities "employees" "employee"
+clear_entities "deliveries" "delivery"
+clear_entities "operations" "operation-event"
+clear_entities "operations" "certification"
+
+echo "✅ Database cleared successfully"
+echo ""
+
 echo "� Parsing $FILE for transaction blocks..."
 
 while IFS= read -r line || [[ -n "$line" ]]; do
@@ -163,7 +198,7 @@ read_query "vehicles" 'match $v isa vehicle; select $v;'
 read_query "employees" 'match $e isa employee, has employee-role "driver"; select $e;'
 read_query "deliveries" 'match $del isa delivery; select $del;'
 read_query "employees" 'match $e isa employee; select $e;'
-read_query "operations" 'match $o isa operation; select $o;'
+read_query "operations" 'match $o isa operation-event; select $o;'
 
 echo "🎉 Fleet management database seeding completed!"
 echo ""

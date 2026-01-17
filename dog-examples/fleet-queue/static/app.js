@@ -181,7 +181,7 @@ class FleetCommandPro {
                     'x-service-method': 'read'
                 },
                 body: JSON.stringify({
-                    query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has status $status, has vehicle-icon $icon, has status-color $color, has gps-latitude $lat, has gps-longitude $lng, has capacity $capacity, has fuel-level $fuel, has maintenance-score $maintenance; $assignment isa assignment (assigned-vehicle: $v, assigned-employee: $employee); select $v, $id, $type, $status, $icon, $color, $lat, $lng, $capacity, $fuel, $maintenance; limit 50;'
+                    query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has vehicle-status $status, has vehicle-icon $icon, has status-color $color, has gps-latitude $lat, has gps-longitude $lng, has capacity $capacity, has fuel-level $fuel, has maintenance-score $maintenance; $assignment isa assignment (assigned-vehicle: $v, assigned-employee: $employee); select $v, $id, $type, $status, $icon, $color, $lat, $lng, $capacity, $fuel, $maintenance; limit 50;'
                 })
             });
             const result = await response.json();
@@ -241,7 +241,7 @@ class FleetCommandPro {
                     'x-service-method': 'read'
                 },
                 body: JSON.stringify({
-                    query: 'match $op isa operation; select $op; limit 50;'
+                    query: 'match $op isa operation-event; select $op; limit 50;'
                 })
             });
             const result = await response.json();
@@ -1222,7 +1222,7 @@ class FleetCommandPro {
                                  has pickup-address $pickup,
                                  has delivery-address $destination,
                                  has delivery-time $deliveryTime,
-                                 has status $deliveryStatus;
+                                 has delivery-status $deliveryStatus;
                         select $routeId, $pickup, $destination, $deliveryTime, $deliveryStatus;
                     `
                 })
@@ -1734,10 +1734,11 @@ class FleetCommandPro {
                         $vehicle has vehicle-id "${vehicleId}";
                         $employee has employee-name $name,
                                    has performance-rating $rating,
-                                   has certifications $certs,
                                    has employee-role $role,
                                    has shift-schedule $schedule;
-                        select $employee, $name, $schedule, $rating, $certs, $role;
+                        $cert_rel isa has-certification (certified-employee: $employee, held-certification: $cert);
+                        $cert has certification-name $cert_name;
+                        select $employee, $name, $schedule, $rating, $role, $cert_name;
                     `
                 })
             });
@@ -1750,11 +1751,18 @@ class FleetCommandPro {
             
             if (data.ok && data.ok.answers && data.ok.answers.length > 0) {
                 const employee = data.ok.answers[0].data;
+                
+                // Collect all certifications from the results
+                const certifications = data.ok.answers
+                    .map(answer => answer.data.cert_name?.value)
+                    .filter(cert => cert)
+                    .join(', ');
+                
                 return {
                     name: employee.name?.value || 'Unknown Driver',
                     status: employee.schedule?.value || 'unknown',
                     rating: employee.rating?.value || 0,
-                    certifications: employee.certs?.value || 'N/A',
+                    certifications: certifications || 'None',
                     role: employee.role?.value || 'driver'
                 };
             }
@@ -1791,7 +1799,7 @@ class FleetCommandPro {
                                  has pickup-address $pickup,
                                  has delivery-address $destination,
                                  has delivery-time $deliveryTime,
-                                 has status $deliveryStatus;
+                                 has delivery-status $deliveryStatus;
                         select $routeId, $pickup, $destination, $deliveryTime, $deliveryStatus;
                     `
                 })
@@ -1799,23 +1807,27 @@ class FleetCommandPro {
 
             if (deliveryResponse.ok) {
                 const deliveryData = await deliveryResponse.json();
-                if (deliveryData.deliveries && deliveryData.deliveries.length > 0) {
-                    const delivery = deliveryData.deliveries[0].data;
-                    const destLat = parseFloat(delivery.dest_lat?.value);
-                    const destLng = parseFloat(delivery.dest_lng?.value);
-
-                    if (destLat && destLng) {
-                        // Fetch real-time traffic data from TomTom API
-                        await this.fetchTomTomTrafficData(vehicleId, currentLat, currentLng, destLat, destLng);
-                        
-                        // Fetch ETA data
-                        await this.fetchTomTomETA(vehicleId, currentLat, currentLng, destLat, destLng);
-                    }
+                if (deliveryData.ok && deliveryData.ok.answers && deliveryData.ok.answers.length > 0) {
+                    const delivery = deliveryData.ok.answers[0].data;
+                    const routeId = delivery.routeId?.value || 'Unknown Route';
+                    const pickup = delivery.pickup?.value || 'Unknown Pickup';
+                    const destination = delivery.destination?.value || 'Unknown Destination';
+                    const deliveryStatus = delivery.deliveryStatus?.value || 'Unknown';
+                    
+                    // Update route information in the UI
+                    document.getElementById(`route-status-${vehicleId}`).textContent = routeId;
+                    document.getElementById(`traffic-status-${vehicleId}`).textContent = `Status: ${deliveryStatus}`;
+                    document.getElementById(`eta-${vehicleId}`).textContent = `${pickup} → ${destination}`;
+                    
+                    // Try to get destination coordinates for TomTom integration if available
+                    // For now, show the route information we have from the database
                 }
+            } else {
+                // No delivery assigned - show default status
+                document.getElementById(`route-status-${vehicleId}`).textContent = 'No Active Route';
+                document.getElementById(`traffic-status-${vehicleId}`).textContent = 'No Assignment';
+                document.getElementById(`eta-${vehicleId}`).textContent = 'Awaiting Assignment';
             }
-
-            // Update route status
-            document.getElementById(`route-status-${vehicleId}`).textContent = 'Active Route';
             
         } catch (error) {
             this.showNotification(`Error loading route data for vehicle ${vehicleId}`, 'error');
@@ -2365,7 +2377,7 @@ class FleetCommandPro {
                     'x-service-method': 'write'
                 },
                 body: JSON.stringify({
-                    query: `match $d isa delivery, has delivery-id "${deliveryId}"; $emp isa employee, has id "${driverId}"; insert (assigned-delivery: $d, assigned-employee: $emp) isa assignment, has timestamp ${new Date().toISOString()}, has status "active";`
+                    query: `match $d isa delivery, has delivery-id "${deliveryId}"; $emp isa employee, has id "${driverId}"; insert (assigned-delivery: $d, assigned-employee: $emp) isa assignment, has assigned-at ${new Date().toISOString()}, has assignment-status "active";`
                 })
             });
             
@@ -2452,7 +2464,7 @@ async assignDeliveryToDriver(deliveryId, driverId) {
                 'x-service-method': 'write'
             },
             body: JSON.stringify({
-                query: `match $d isa delivery, has delivery-id "${deliveryId}"; $emp isa employee, has id "${driverId}"; insert (assigned-delivery: $d, assigned-employee: $emp) isa assignment, has timestamp ${new Date().toISOString()}, has status "active";`
+                query: `match $d isa delivery, has delivery-id "${deliveryId}"; $emp isa employee, has id "${driverId}"; insert (assigned-delivery: $d, assigned-employee: $emp) isa assignment, has assigned-at ${new Date().toISOString()}, has assignment-status "active";`
             })
         });
         
@@ -2571,16 +2583,21 @@ showNotification(message, type = 'info') {
                     </div>
                     
                     <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Schedule Assignment</label>
+                        <input type="datetime-local" id="assignment-schedule" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
+                    </div>
+                    
+                    <div>
                         <label class="block text-sm font-medium text-slate-700 mb-2">Vehicle Assignment</label>
                         <select id="vehicle-assignment" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
                             <option value="">Select a vehicle...</option>
                         </select>
                     </div>
                     
-                    <div>
+                    <div id="pickup-location-container" class="hidden">
                         <label class="block text-sm font-medium text-slate-700 mb-2">Pickup Location</label>
                         <div class="relative">
-                            <input type="text" id="pickup-address" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" placeholder="Enter pickup address">
+                            <input type="text" id="pickup-address" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" placeholder="Auto-populated from vehicle location" readonly>
                             <div id="address-suggestions" class="absolute z-10 w-full bg-white border border-gray-300 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto hidden"></div>
                             <input type="hidden" id="pickup-lat">
                             <input type="hidden" id="pickup-lng">
@@ -2607,7 +2624,7 @@ showNotification(message, type = 'info') {
                         </select>
                     </div>
                     
-                    <div>
+                    <div id="certification-requirements-container" class="hidden">
                         <label class="block text-sm font-medium text-slate-700 mb-2">Required Certifications</label>
                         <div class="grid grid-cols-2 gap-2">
                             <label class="flex items-center py-1">
@@ -2627,11 +2644,6 @@ showNotification(message, type = 'info') {
                                 <span class="text-sm">Forklift</span>
                             </label>
                         </div>
-                    </div>
-                    
-                    <div>
-                        <label class="block text-sm font-medium text-slate-700 mb-2">Schedule Assignment</label>
-                        <input type="datetime-local" id="assignment-schedule" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
                     </div>
                     
                     <div id="driver-assignment-container" class="hidden">
@@ -2684,7 +2696,7 @@ showNotification(message, type = 'info') {
         
         // Load available vehicles and setup date-dependent driver loading
         setTimeout(() => {
-            this.loadAvailableVehicles();
+            this.setupScheduleDependentFormFlow();
             this.setupDateDependentDriverLoading();
             this.setupFormValidation();
         }, 500);
@@ -2771,9 +2783,47 @@ showNotification(message, type = 'info') {
         }
     }
     
+    setupScheduleDependentFormFlow() {
+        const scheduleInput = document.getElementById('assignment-schedule');
+        const vehicleContainer = document.getElementById('vehicle-assignment').parentElement;
+        const pickupContainer = document.getElementById('pickup-location-container');
+        
+        if (!scheduleInput) return;
+        
+        // Initially hide vehicle and pickup containers
+        vehicleContainer.classList.add('hidden');
+        pickupContainer.classList.add('hidden');
+        
+        // Add event listener for schedule changes
+        scheduleInput.addEventListener('change', () => {
+            const hasSchedule = scheduleInput.value;
+            
+            if (hasSchedule) {
+                // Show vehicle selection and load vehicles with location prediction
+                vehicleContainer.classList.remove('hidden');
+                this.loadAvailableVehicles();
+                
+                // Keep pickup location hidden until vehicle is selected
+                pickupContainer.classList.add('hidden');
+            } else {
+                // Hide vehicle and pickup containers if no schedule
+                vehicleContainer.classList.add('hidden');
+                pickupContainer.classList.add('hidden');
+                
+                // Clear vehicle and pickup selections
+                document.getElementById('vehicle-assignment').value = '';
+                document.getElementById('pickup-address').value = '';
+                document.getElementById('pickup-lat').value = '';
+                document.getElementById('pickup-lng').value = '';
+            }
+        });
+    }
+    
     async loadAvailableVehicles() {
         try {
             const vehicleSelect = document.getElementById('vehicle-assignment');
+            const scheduleInput = document.getElementById('assignment-schedule');
+            
             if (!vehicleSelect) {
                 console.error('Vehicle select element not found');
                 return;
@@ -2782,7 +2832,37 @@ showNotification(message, type = 'info') {
             // Clear existing options except the first one
             vehicleSelect.innerHTML = '<option value="">Select a vehicle...</option>';
             
-            // Fetch available vehicles from database using correct API structure
+            // Get pickup time for location prediction
+            const assignmentDateTime = scheduleInput?.value;
+            if (!assignmentDateTime) {
+                console.log('No assignment time selected, using simple vehicle query');
+                // Fallback to simple query if no time selected
+                const response = await fetch(`${this.apiBaseUrl}/vehicles`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-service-method': 'read'
+                    },
+                    body: JSON.stringify({
+                        query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has vehicle-status $status, has maintenance-status "good", has fuel-level $fuel; $fuel >= 50.0; not { $assignment isa assignment (assigned-vehicle: $v, assigned-employee: $employee); }; select $v, $id, $type, $status; limit 10;'
+                    })
+                });
+                this.processVehicleResponse(response, false);
+                return;
+            }
+            
+            // Convert datetime-local format to ISO format for query
+            const assignmentDate = new Date(assignmentDateTime);
+            const isoDateTime = assignmentDate.toISOString();
+            
+            // Enhanced Vehicle Selection Query: Find vehicles available at pickup time and predict where they'll be
+            // 
+            // Query Logic:
+            // 1. Filter by maintenance status and fuel level (operational vehicles only)
+            // 2. Predict vehicle location at pickup time using disjunction:
+            //    - Case A: Vehicle idle → use current GPS position (gps-latitude, gps-longitude)
+            //    - Case B: Vehicle busy → use delivery destination (dest-lat, dest-lng)
+            // 3. Return vehicles with predicted locations for pickup location auto-population
             const response = await fetch(`${this.apiBaseUrl}/vehicles`, {
                 method: 'POST',
                 headers: {
@@ -2790,7 +2870,7 @@ showNotification(message, type = 'info') {
                     'x-service-method': 'read'
                 },
                 body: JSON.stringify({
-                    query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has status $status, has maintenance-status "good", has fuel-level $fuel; $fuel >= 50.0; not { $assignment isa assignment (assigned-vehicle: $v, assigned-employee: $employee); }; select $v, $id, $type, $status; limit 10;'
+                    query: `match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has vehicle-status $status, has maintenance-status "good", has fuel-level $fuel; $fuel >= 50.0; { $v has gps-latitude $lat, has gps-longitude $lng; not { $assignment1 isa assignment (assigned-vehicle: $v, assigned-delivery: $delivery1), has assigned-at $assignTime1; $assignTime1 == "${isoDateTime}"; }; } or { $assignment2 isa assignment (assigned-vehicle: $v, assigned-delivery: $delivery2), has assigned-at $assignTime2; $assignTime2 == "${isoDateTime}"; $delivery2 has dest-lat $lat, has dest-lng $lng; }; select $v, $id, $type, $status, $lat, $lng; limit 10;`
                 })
             });
             
@@ -2801,19 +2881,7 @@ showNotification(message, type = 'info') {
             const result = await response.json();
             console.log('Loaded available vehicles from database:', result);
             
-            const availableVehicles = result.ok?.answers || [];
-            
-            availableVehicles.forEach(answer => {
-                const vehicleData = answer.data;
-                if (vehicleData && vehicleData.id) {
-                    const option = document.createElement('option');
-                    option.value = vehicleData.id.value;
-                    option.textContent = `${vehicleData.id.value} - ${vehicleData.type?.value || 'Vehicle'} (${vehicleData.status?.value || 'available'})`;
-                    vehicleSelect.appendChild(option);
-                }
-            });
-            
-            console.log(`Loaded ${availableVehicles.length} available vehicles from database`);
+            this.processVehicleResponse(result, true);
             
         } catch (error) {
             console.error('Error loading available vehicles:', error);
@@ -2825,6 +2893,220 @@ showNotification(message, type = 'info') {
             }
             
             this.showNotification('Failed to load available vehicles from database', 'error');
+        }
+    }
+    
+    processVehicleResponse(data, hasLocationData) {
+        try {
+            console.log('Loaded available vehicles from database:', data);
+            
+            const availableVehicles = data.ok?.answers || [];
+            const vehicleSelect = document.getElementById('vehicle-assignment');
+            
+            // Store vehicle location data for pickup auto-population
+            this.vehicleLocations = {};
+            
+            availableVehicles.forEach(answer => {
+                const vehicleData = answer.data;
+                if (vehicleData && vehicleData.id) {
+                    const vehicleId = vehicleData.id.value;
+                    const option = document.createElement('option');
+                    option.value = vehicleId;
+                    
+                    // Store location data if available
+                    if (hasLocationData && vehicleData.lat && vehicleData.lng) {
+                        this.vehicleLocations[vehicleId] = {
+                            lat: vehicleData.lat.value,
+                            lng: vehicleData.lng.value
+                        };
+                        option.textContent = `${vehicleId} - ${vehicleData.type?.value || 'Vehicle'}`;
+                    } else {
+                        option.textContent = `${vehicleId} - ${vehicleData.type?.value || 'Vehicle'} (${vehicleData.status?.value || 'available'})`;
+                    }
+                    
+                    vehicleSelect.appendChild(option);
+                }
+            });
+            
+            console.log(`Loaded ${availableVehicles.length} available vehicles from database`);
+            
+            // Add event listener for vehicle selection to auto-populate pickup location
+            if (hasLocationData) {
+                this.setupVehicleLocationAutoPopulation();
+            }
+            
+        } catch (error) {
+            console.error('Error processing vehicle response:', error);
+        }
+    }
+    
+    setupVehicleLocationAutoPopulation() {
+        const vehicleSelect = document.getElementById('vehicle-assignment');
+        if (!vehicleSelect) return;
+        
+        // Remove existing listener to avoid duplicates
+        vehicleSelect.removeEventListener('change', this.handleVehicleSelection);
+        
+        // Add new listener
+        this.handleVehicleSelection = async (event) => {
+            const selectedVehicleId = event.target.value;
+            const pickupContainer = document.getElementById('pickup-location-container');
+            
+            if (selectedVehicleId && this.vehicleLocations && this.vehicleLocations[selectedVehicleId]) {
+                const location = this.vehicleLocations[selectedVehicleId];
+                
+                // Show pickup location container
+                pickupContainer.classList.remove('hidden');
+                
+                // Auto-populate pickup location with predicted vehicle location
+                document.getElementById('pickup-lat').value = location.lat;
+                document.getElementById('pickup-lng').value = location.lng;
+                
+                // Convert coordinates to address using reverse geocoding
+                this.reverseGeocode(location.lat, location.lng, 'pickup-address');
+                
+                console.log(`Auto-populated pickup location for vehicle ${selectedVehicleId}:`, location);
+            } else {
+                // Hide pickup location if no vehicle selected
+                pickupContainer.classList.add('hidden');
+                
+                // Clear pickup location data
+                document.getElementById('pickup-address').value = '';
+                document.getElementById('pickup-lat').value = '';
+                document.getElementById('pickup-lng').value = '';
+            }
+            
+            // Show/hide and auto-populate certification requirements based on selected vehicle
+            const certificationContainer = document.getElementById('certification-requirements-container');
+            if (selectedVehicleId) {
+                // Show certification requirements section
+                certificationContainer.classList.remove('hidden');
+                await this.loadVehicleCertificationRequirements(selectedVehicleId);
+            } else {
+                // Hide certification requirements section when no vehicle selected
+                certificationContainer.classList.add('hidden');
+                this.clearCertificationRequirements();
+            }
+        };
+        
+        vehicleSelect.addEventListener('change', this.handleVehicleSelection);
+    }
+    
+    async loadVehicleCertificationRequirements(vehicleId) {
+        try {
+            // Query vehicle certification requirements via requires-certification relations
+            const response = await fetch(`${this.apiBaseUrl}/vehicles`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'read'
+                },
+                body: JSON.stringify({
+                    query: `
+                        match
+                        $vehicle isa vehicle, has vehicle-id "${vehicleId}";
+                        $req_rel isa requires-certification (requiring-vehicle: $vehicle, required-certification: $cert);
+                        $cert has certification-name $cert_name;
+                        select $cert_name;
+                    `
+                })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.ok && data.ok.answers && data.ok.answers.length > 0) {
+                    // Extract required certification names
+                    const requiredCertifications = data.ok.answers
+                        .map(answer => answer.data.cert_name?.value)
+                        .filter(cert => cert);
+                    
+                    // Auto-check the required certification checkboxes
+                    this.updateCertificationCheckboxes(requiredCertifications);
+                    
+                    console.log(`Auto-populated certification requirements for vehicle ${vehicleId}:`, requiredCertifications);
+                } else {
+                    // No certification requirements for this vehicle
+                    this.clearCertificationRequirements();
+                    console.log(`No certification requirements found for vehicle ${vehicleId}`);
+                }
+            }
+        } catch (error) {
+            console.error(`Error loading certification requirements for vehicle ${vehicleId}:`, error);
+            this.clearCertificationRequirements();
+        }
+    }
+    
+    updateCertificationCheckboxes(requiredCertifications) {
+        // First, clear all checkboxes
+        this.clearCertificationRequirements();
+        
+        // Then check the required ones and disable all checkboxes
+        const checkboxes = document.querySelectorAll('.certification-checkbox');
+        checkboxes.forEach(checkbox => {
+            if (requiredCertifications.includes(checkbox.value)) {
+                checkbox.checked = true;
+            }
+            // Disable all checkboxes since they're system-controlled
+            checkbox.disabled = true;
+        });
+    }
+    
+    clearCertificationRequirements() {
+        // Uncheck all certification checkboxes and re-enable them for manual selection
+        const checkboxes = document.querySelectorAll('.certification-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = false;
+            checkbox.disabled = false; // Re-enable for manual selection when no vehicle selected
+        });
+    }
+    
+    async reverseGeocode(lat, lng, inputId) {
+        try {
+            // Convert string coordinates to numbers
+            const numLat = parseFloat(lat);
+            const numLng = parseFloat(lng);
+            
+            // Use TomTom backend service for reverse geocoding
+            const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'reverse-geocode'
+                },
+                body: JSON.stringify({
+                    lat: numLat,
+                    lng: numLng
+                })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                console.log('TomTom reverse geocode response:', data);
+                
+                if (data.status === 'success' && data.address) {
+                    const addressInput = document.getElementById(inputId);
+                    if (addressInput) {
+                        addressInput.value = data.address;
+                    }
+                    return data.address;
+                } else {
+                    throw new Error('Invalid reverse geocoding response');
+                }
+            } else {
+                throw new Error(`Reverse geocoding failed: ${response.status}`);
+            }
+            
+        } catch (error) {
+            console.warn('Reverse geocoding failed:', error);
+            // Fallback to coordinates
+            const numLat = parseFloat(lat) || 0;
+            const numLng = parseFloat(lng) || 0;
+            const address = `${numLat.toFixed(4)}, ${numLng.toFixed(4)}`;
+            const addressInput = document.getElementById(inputId);
+            if (addressInput) {
+                addressInput.value = address;
+            }
+            return address;
         }
     }
     
@@ -2905,15 +3187,29 @@ showNotification(message, type = 'info') {
             const minLng = minLngBase - deltaLng;
             const maxLng = maxLngBase + deltaLng;
             
-            // Driver Selection Query: Find up to 15 legally compliant drivers who will be near the pickup location at the pickup time—using their current position if idle or their delivery destination if busy.
+            // Get required certifications from the form
+            const requiredCerts = Array.from(document.querySelectorAll('.certification-checkbox:checked')).map(cb => cb.value);
+            
+            // Driver Selection Query: Find up to 15 legally compliant drivers with required certifications who will be near the pickup location at the pickup time
             // 
             // Query Logic:
             // 1. Filter by jurisdiction-specific hours compliance (compliant_employees function)
-            // 2. Predict driver location at pickup time using disjunction:
+            // 2. Filter by required certifications using has-certification relations
+            // 3. Predict driver location at pickup time using disjunction:
             //    - Case A: Driver idle → use current position (current-lat, current-lng)
             //    - Case B: Driver busy → use delivery destination (dest-lat, dest-lng)
-            // 3. Apply geographic bounding box filter for proximity
-            // 4. Return candidate drivers for JavaScript scoring (distance, performance, fatigue, etc.)
+            // 4. Apply geographic bounding box filter for proximity
+            // 5. Return candidate drivers for JavaScript scoring (distance, performance, fatigue, etc.)
+            
+            let certificationFilter = '';
+            if (requiredCerts.length > 0) {
+                // Build certification filter - driver must have ALL required certifications
+                const certFilters = requiredCerts.map(cert => 
+                    `$cert_rel_${cert.replace('-', '_')} isa has-certification (certified-employee: $compliant, held-certification: $cert_${cert.replace('-', '_')}); $cert_${cert.replace('-', '_')} has certification-name "${cert}";`
+                ).join(' ');
+                certificationFilter = certFilters;
+            }
+            
             const response = await fetch(`${this.apiBaseUrl}/employees`, {
                 method: 'POST',
                 headers: {
@@ -2921,7 +3217,7 @@ showNotification(message, type = 'info') {
                     'x-service-method': 'read'
                 },
                 body: JSON.stringify({
-                    query: `match let $compliant in compliant_employees(${maxHours}); $compliant has id $id, has employee-name $name, has employee-role "driver", has daily-hours $hours, has performance-rating $rating, has certifications $certs; { $compliant has current-lat $lat, has current-lng $lng; not { $assignment1 isa assignment (assigned-employee: $compliant, assigned-delivery: $delivery1), has timestamp $assignTime1; $assignTime1 == "${isoDateTime}"; }; } or { $assignment2 isa assignment (assigned-employee: $compliant, assigned-delivery: $delivery2), has timestamp $assignTime2; $assignTime2 == "${isoDateTime}"; $delivery2 has dest-lat $lat, has dest-lng $lng; }; $lat > ${minLat}; $lat < ${maxLat}; $lng > ${minLng}; $lng < ${maxLng}; select $compliant, $id, $name, $lat, $lng, $hours, $rating, $certs; limit 15;`
+                    query: `match let $compliant in compliant_employees(${maxHours}); $compliant has id $id, has employee-name $name, has employee-role "driver", has daily-hours $hours, has performance-rating $rating; ${certificationFilter} { $compliant has current-lat $lat, has current-lng $lng; not { $assignment1 isa assignment (assigned-employee: $compliant, assigned-delivery: $delivery1), has assigned-at $assignTime1; $assignTime1 == "${isoDateTime}"; }; } or { $assignment2 isa assignment (assigned-employee: $compliant, assigned-delivery: $delivery2), has assigned-at $assignTime2; $assignTime2 == "${isoDateTime}"; $delivery2 has dest-lat $lat, has dest-lng $lng; }; $lat > ${minLat}; $lat < ${maxLat}; $lng > ${minLng}; $lng < ${maxLng}; select $compliant, $id, $name, $lat, $lng, $hours, $rating; limit 15;`
                 })
             });
             
@@ -2942,7 +3238,7 @@ showNotification(message, type = 'info') {
                     const driverLng = parseFloat(driverData.lng.value);
                     const dailyHours = parseFloat(driverData.hours?.value || 0);
                     const performanceRating = parseFloat(driverData.rating?.value || 3.0);
-                    const driverCertifications = driverData.certs?.value || '';
+                    const driverCertifications = '';
                     
                     // Get required certifications from form
                     const requiredCerts = Array.from(document.querySelectorAll('.certification-checkbox:checked')).map(cb => cb.value);
@@ -3249,7 +3545,9 @@ showNotification(message, type = 'info') {
             const driverContainer = document.getElementById('driver-assignment-container');
             
             // Check if all required fields except driver are filled
+            // Note: pickup fields are auto-populated when vehicle is selected, so we check if they exist
             const allFieldsExceptDriverFilled = routeId && 
+                                               scheduleTime &&
                                                vehicleId && 
                                                pickupAddress && 
                                                pickupLat && 
@@ -3257,8 +3555,7 @@ showNotification(message, type = 'info') {
                                                deliveryAddress &&
                                                deliveryLat &&
                                                deliveryLng &&
-                                               deliveryPriority && 
-                                               scheduleTime;
+                                               deliveryPriority;
             
             // Show/hide driver field based on other fields
             if (allFieldsExceptDriverFilled) {
@@ -3332,7 +3629,7 @@ showNotification(message, type = 'info') {
                     'x-service-method': 'read'
                 },
                 body: JSON.stringify({
-                    query: 'match $e isa employee, has id $id, has employee-name $name, has employee-role "driver", has status "available", has daily-hours $hours; $hours < 11.0; not { $assignment isa assignment (assigned-employee: $e, assigned-vehicle: $vehicle); }; select $e, $id, $name; limit 10;'
+                    query: 'match $e isa employee, has id $id, has employee-name $name, has employee-role "driver", has employee-status "available", has daily-hours $hours; $hours < 11.0; not { $assignment isa assignment (assigned-employee: $e, assigned-vehicle: $vehicle); }; select $e, $id, $name; limit 10;'
                 })
             });
             
