@@ -3574,31 +3574,37 @@ showNotification(message, type = 'info') {
             recurring_schedule: recurringSchedule
         };
         
-        // Create TypeDB assignment query with all data
+        // Helper function to escape TypeQL string literals
+        const escapeTypeQLString = (str) => {
+            return str.replace(/"/g, '\\"').replace(/'/g, "\\'");
+        };
+
+        // Create TypeDB assignment query with proper single 3-role assignment and put for idempotency
         const assignmentQuery = `
             match
-            $vehicle isa vehicle, has id "${assignmentData.vehicle_id}";
+            $vehicle isa vehicle, has vehicle-id "${assignmentData.vehicle_id}";
             $driver isa employee, has id "${assignmentData.driver_id}";
             
-            insert
+            put
             $delivery isa delivery,
                 has delivery-id "${assignmentData.route_id}",
                 has route-id "${assignmentData.route_id}",
-                has pickup-address "${assignmentData.pickup_address}",
-                has delivery-address "${assignmentData.delivery_address}",
+                has pickup-address "${escapeTypeQLString(assignmentData.pickup_address)}",
+                has delivery-address "${escapeTypeQLString(assignmentData.delivery_address)}",
                 has dest-lat ${assignmentData.delivery_location[0]},
                 has dest-lng ${assignmentData.delivery_location[1]},
-                has customer-name "${document.getElementById('customer-name').value || 'Customer ' + assignmentData.route_id}",
-                has delivery-time "${document.getElementById('delivery-time').value ? new Date(document.getElementById('delivery-time').value).toISOString() : new Date(Date.now() + 2*60*60*1000).toISOString()}",
-                has weight ${parseFloat(document.getElementById('package-weight').value) || 10.0},
-                has priority ${parseInt(document.getElementById('priority-level').value) || 1},
+                has customer-name "${escapeTypeQLString(this.deliveryDetails?.customerName || 'Customer ' + assignmentData.route_id)}",
+                has delivery-time ${this.deliveryDetails?.deliveryTime ? new Date(this.deliveryDetails.deliveryTime).toISOString().replace(/\.\d{3}Z$/, '') : new Date(Date.now() + 2*60*60*1000).toISOString().replace(/\.\d{3}Z$/, '')},
+                has weight ${parseFloat(this.deliveryDetails?.packageWeight) || 10.0},
+                has priority 1,
                 has customer-priority "${assignmentData.delivery_priority}",
                 has delivery-status "pending",
-                has created-at "${new Date().toISOString()}";
+                has created-at ${new Date().toISOString().replace(/\.\d{3}Z$/, '')};
             
-            $assignment (assigned-vehicle: $vehicle, assigned-employee: $driver, assigned-delivery: $delivery) isa assignment,
+            insert
+            (assigned-employee: $driver, assigned-vehicle: $vehicle, assigned-delivery: $delivery) isa assignment,
                 has assignment-status "${assignmentData.assignment_status}",
-                has assigned-at "${new Date().toISOString()}";
+                has assigned-at ${new Date().toISOString().replace(/\.\d{3}Z$/, '')};
         `;
 
         try {
