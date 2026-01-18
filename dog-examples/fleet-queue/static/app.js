@@ -2654,8 +2654,8 @@ showNotification(message, type = 'info') {
                     </div>
                     
                     <div class="flex gap-3 pt-4">
-                        <button type="submit" id="schedule-assignment-btn" class="flex-1 bg-gray-400 text-white px-4 py-2 text-sm rounded-lg cursor-not-allowed transition-colors" disabled>
-                            Schedule Assignment
+                        <button type="submit" id="assignment-submit-btn" class="flex-1 bg-gray-400 text-white px-4 py-2 text-sm rounded-lg cursor-not-allowed transition-colors" disabled>
+                            <span id="assignment-btn-text">Create Assignment</span>
                         </button>
                         <button type="button" onclick="fleetCommand.hideDriverAssignmentPanel()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
                             Cancel
@@ -2685,7 +2685,7 @@ showNotification(message, type = 'info') {
         const form = panel.querySelector('#assignment-form');
         form.addEventListener('submit', (e) => {
             e.preventDefault();
-            this.submitDriverAssignment();
+            this.showAssignmentConfirmationPopup();
         });
         
         // Setup address autocomplete
@@ -2704,7 +2704,405 @@ showNotification(message, type = 'info') {
         return panel;
     }
     
-    async submitDriverAssignment() {
+    showAssignmentConfirmationPopup() {
+        // Validate form first
+        const routeId = document.getElementById('route-id').value;
+        const vehicleId = document.getElementById('vehicle-assignment').value;
+        const driverId = document.getElementById('driver-assignment').value;
+        const pickupLat = parseFloat(document.getElementById('pickup-lat').value);
+        const pickupLng = parseFloat(document.getElementById('pickup-lng').value);
+        
+        if (!routeId || !vehicleId || !driverId || isNaN(pickupLat) || isNaN(pickupLng)) {
+            this.showNotification('Please fill in all required fields including route ID, vehicle, driver, and pickup address', 'error');
+            return;
+        }
+        
+        // Create confirmation modal
+        const modal = document.createElement('div');
+        modal.id = 'assignment-confirmation-modal';
+        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+        
+        modal.innerHTML = `
+            <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-slate-900">Confirm Assignment</h3>
+                    <button onclick="fleetCommand.closeAssignmentConfirmationPopup()" class="text-slate-400 hover:text-slate-600">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                
+                <div class="mb-6">
+                    <p class="text-slate-600 mb-4">How would you like to process this assignment?</p>
+                    
+                    <div class="space-y-3">
+                        <button onclick="fleetCommand.confirmAssignment('immediate')" class="w-full flex items-center justify-between p-4 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors">
+                            <div class="text-left">
+                                <div class="font-medium text-slate-900">Confirm Now</div>
+                                <div class="text-sm text-slate-500">Start assignment immediately</div>
+                            </div>
+                            <svg class="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+                            </svg>
+                        </button>
+                        
+                        <button onclick="fleetCommand.confirmAssignment('scheduled')" class="w-full flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                            <div class="text-left">
+                                <div class="font-medium text-slate-900">Schedule for Later</div>
+                                <div class="text-sm text-slate-500">Start at scheduled time</div>
+                            </div>
+                            <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="flex justify-end">
+                    <button onclick="fleetCommand.closeAssignmentConfirmationPopup()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+    }
+    
+    closeAssignmentConfirmationPopup() {
+        const modal = document.getElementById('assignment-confirmation-modal');
+        if (modal) {
+            modal.remove();
+        }
+    }
+    
+    confirmAssignment(timing) {
+        // Close the confirmation popup
+        this.closeAssignmentConfirmationPopup();
+        
+        if (timing === 'scheduled') {
+            // Show scheduling UI for later assignments
+            this.showSchedulingInterface();
+        } else {
+            // Submit assignment immediately
+            this.submitDriverAssignment(timing);
+        }
+    }
+    
+    showSchedulingInterface() {
+        // Create scheduling modal
+        const modal = document.createElement('div');
+        modal.id = 'scheduling-interface-modal';
+        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+        
+        // Get current date/time for default values
+        const now = new Date();
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(9, 0, 0, 0); // Default to 9 AM tomorrow
+        
+        const defaultDate = tomorrow.toISOString().split('T')[0];
+        const defaultTime = '09:00';
+        
+        modal.innerHTML = `
+            <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-slate-900">Schedule Assignment</h3>
+                    <button onclick="fleetCommand.closeSchedulingInterface()" class="text-slate-400 hover:text-slate-600">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                
+                <div class="mb-6">
+                    <p class="text-slate-600 mb-4">When would you like this assignment to start?</p>
+                    
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Date</label>
+                                <input type="date" id="scheduled-date" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" value="${defaultDate}" min="${now.toISOString().split('T')[0]}">
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Time</label>
+                                <input type="time" id="scheduled-time" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" value="${defaultTime}">
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-2">Repeat Schedule</label>
+                            <select id="repeat-frequency" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
+                                <option value="none">No repeat (One-time)</option>
+                                <option value="daily">Daily</option>
+                                <option value="weekly">Weekly</option>
+                                <option value="monthly">Monthly</option>
+                                <option value="custom">Custom interval</option>
+                            </select>
+                        </div>
+                        
+                        <div id="custom-interval-container" class="hidden">
+                            <label class="block text-sm font-medium text-slate-700 mb-2">Custom Interval</label>
+                            <div class="flex gap-2">
+                                <input type="number" id="custom-interval-value" class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" min="1" value="1" placeholder="1">
+                                <select id="custom-interval-unit" class="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
+                                    <option value="days">Days</option>
+                                    <option value="weeks">Weeks</option>
+                                    <option value="months">Months</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div id="repeat-options-container" class="hidden">
+                            <div class="border border-gray-200 rounded-lg p-3 space-y-3">
+                                <h4 class="text-sm font-medium text-slate-700">Repeat Options</h4>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">End Condition</label>
+                                    <select id="repeat-end-condition" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
+                                        <option value="never">Never end</option>
+                                        <option value="after-occurrences">After number of occurrences</option>
+                                        <option value="end-date">End by date</option>
+                                    </select>
+                                </div>
+                                
+                                <div id="occurrences-container" class="hidden">
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">Number of Occurrences</label>
+                                    <input type="number" id="max-occurrences" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" min="1" value="10" placeholder="10">
+                                </div>
+                                
+                                <div id="end-date-container" class="hidden">
+                                    <label class="block text-sm font-medium text-slate-700 mb-2">End Date</label>
+                                    <input type="date" id="repeat-end-date" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" min="${now.toISOString().split('T')[0]}">
+                                </div>
+                                
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="skip-weekends" class="mr-2">
+                                    <label for="skip-weekends" class="text-sm text-slate-700">Skip weekends (Saturday & Sunday)</label>
+                                </div>
+                                
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="skip-holidays" class="mr-2">
+                                    <label for="skip-holidays" class="text-sm text-slate-700">Skip holidays</label>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                            <div class="flex items-start">
+                                <svg class="w-5 h-5 text-blue-500 mt-0.5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                </svg>
+                                <div class="text-sm text-blue-700">
+                                    <p class="font-medium">Scheduling Note</p>
+                                    <p id="scheduling-summary">The assignment will be queued and automatically activated at the scheduled time.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="flex gap-3">
+                    <button onclick="fleetCommand.scheduleAssignment()" class="flex-1 bg-blue-600 text-white px-4 py-2 text-sm rounded-lg hover:bg-blue-700 transition-colors">
+                        Schedule Assignment
+                    </button>
+                    <button onclick="fleetCommand.closeSchedulingInterface()" class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Add event listeners for dynamic UI updates
+        this.setupSchedulingEventHandlers();
+    }
+    
+    setupSchedulingEventHandlers() {
+        const repeatFrequency = document.getElementById('repeat-frequency');
+        const customIntervalContainer = document.getElementById('custom-interval-container');
+        const repeatOptionsContainer = document.getElementById('repeat-options-container');
+        const repeatEndCondition = document.getElementById('repeat-end-condition');
+        const occurrencesContainer = document.getElementById('occurrences-container');
+        const endDateContainer = document.getElementById('end-date-container');
+        const schedulingSummary = document.getElementById('scheduling-summary');
+        
+        // Handle repeat frequency changes
+        repeatFrequency.addEventListener('change', () => {
+            const frequency = repeatFrequency.value;
+            
+            if (frequency === 'none') {
+                customIntervalContainer.classList.add('hidden');
+                repeatOptionsContainer.classList.add('hidden');
+                schedulingSummary.textContent = 'The assignment will be queued and automatically activated at the scheduled time.';
+            } else {
+                repeatOptionsContainer.classList.remove('hidden');
+                
+                if (frequency === 'custom') {
+                    customIntervalContainer.classList.remove('hidden');
+                } else {
+                    customIntervalContainer.classList.add('hidden');
+                }
+                
+                this.updateSchedulingSummary();
+            }
+        });
+        
+        // Handle end condition changes
+        repeatEndCondition.addEventListener('change', () => {
+            const condition = repeatEndCondition.value;
+            
+            occurrencesContainer.classList.add('hidden');
+            endDateContainer.classList.add('hidden');
+            
+            if (condition === 'after-occurrences') {
+                occurrencesContainer.classList.remove('hidden');
+            } else if (condition === 'end-date') {
+                endDateContainer.classList.remove('hidden');
+            }
+            
+            this.updateSchedulingSummary();
+        });
+        
+        // Handle other field changes for summary updates
+        document.getElementById('custom-interval-value').addEventListener('input', () => this.updateSchedulingSummary());
+        document.getElementById('custom-interval-unit').addEventListener('change', () => this.updateSchedulingSummary());
+        document.getElementById('max-occurrences').addEventListener('input', () => this.updateSchedulingSummary());
+        document.getElementById('repeat-end-date').addEventListener('change', () => this.updateSchedulingSummary());
+        document.getElementById('skip-weekends').addEventListener('change', () => this.updateSchedulingSummary());
+        document.getElementById('skip-holidays').addEventListener('change', () => this.updateSchedulingSummary());
+    }
+    
+    updateSchedulingSummary() {
+        const frequency = document.getElementById('repeat-frequency').value;
+        const endCondition = document.getElementById('repeat-end-condition').value;
+        const schedulingSummary = document.getElementById('scheduling-summary');
+        
+        if (frequency === 'none') {
+            schedulingSummary.textContent = 'The assignment will be queued and automatically activated at the scheduled time.';
+            return;
+        }
+        
+        let summary = 'This assignment will repeat ';
+        
+        // Add frequency description
+        if (frequency === 'daily') {
+            summary += 'daily';
+        } else if (frequency === 'weekly') {
+            summary += 'weekly';
+        } else if (frequency === 'monthly') {
+            summary += 'monthly';
+        } else if (frequency === 'custom') {
+            const value = document.getElementById('custom-interval-value').value || '1';
+            const unit = document.getElementById('custom-interval-unit').value;
+            summary += `every ${value} ${unit}`;
+        }
+        
+        // Add end condition
+        if (endCondition === 'never') {
+            summary += ' indefinitely';
+        } else if (endCondition === 'after-occurrences') {
+            const occurrences = document.getElementById('max-occurrences').value || '10';
+            summary += ` for ${occurrences} occurrences`;
+        } else if (endCondition === 'end-date') {
+            const endDate = document.getElementById('repeat-end-date').value;
+            if (endDate) {
+                summary += ` until ${new Date(endDate).toLocaleDateString()}`;
+            }
+        }
+        
+        // Add skip options
+        const skipWeekends = document.getElementById('skip-weekends').checked;
+        const skipHolidays = document.getElementById('skip-holidays').checked;
+        
+        if (skipWeekends || skipHolidays) {
+            summary += ', skipping';
+            if (skipWeekends) summary += ' weekends';
+            if (skipWeekends && skipHolidays) summary += ' and';
+            if (skipHolidays) summary += ' holidays';
+        }
+        
+        summary += '.';
+        schedulingSummary.textContent = summary;
+    }
+    
+    closeSchedulingInterface() {
+        const modal = document.getElementById('scheduling-interface-modal');
+        if (modal) {
+            modal.remove();
+        }
+    }
+    
+    scheduleAssignment() {
+        const scheduledDate = document.getElementById('scheduled-date').value;
+        const scheduledTime = document.getElementById('scheduled-time').value;
+        
+        if (!scheduledDate || !scheduledTime) {
+            this.showNotification('Please select both date and time for scheduling', 'error');
+            return;
+        }
+        
+        // Combine date and time into ISO string
+        const scheduledDateTime = `${scheduledDate}T${scheduledTime}:00`;
+        
+        // Validate that scheduled time is in the future
+        const scheduledTimestamp = new Date(scheduledDateTime);
+        const now = new Date();
+        
+        if (scheduledTimestamp <= now) {
+            this.showNotification('Scheduled time must be in the future', 'error');
+            return;
+        }
+        
+        // Collect recurring schedule data
+        const repeatFrequency = document.getElementById('repeat-frequency').value;
+        const recurringSchedule = {
+            frequency: repeatFrequency,
+            start_datetime: scheduledDateTime
+        };
+        
+        if (repeatFrequency !== 'none') {
+            // Add custom interval data if applicable
+            if (repeatFrequency === 'custom') {
+                recurringSchedule.custom_interval = {
+                    value: parseInt(document.getElementById('custom-interval-value').value) || 1,
+                    unit: document.getElementById('custom-interval-unit').value
+                };
+            }
+            
+            // Add end condition data
+            const endCondition = document.getElementById('repeat-end-condition').value;
+            recurringSchedule.end_condition = {
+                type: endCondition
+            };
+            
+            if (endCondition === 'after-occurrences') {
+                recurringSchedule.end_condition.max_occurrences = parseInt(document.getElementById('max-occurrences').value) || 10;
+            } else if (endCondition === 'end-date') {
+                const endDate = document.getElementById('repeat-end-date').value;
+                if (endDate) {
+                    recurringSchedule.end_condition.end_date = endDate;
+                }
+            }
+            
+            // Add skip options
+            recurringSchedule.skip_options = {
+                skip_weekends: document.getElementById('skip-weekends').checked,
+                skip_holidays: document.getElementById('skip-holidays').checked
+            };
+        }
+        
+        // Close scheduling interface
+        this.closeSchedulingInterface();
+        
+        // Submit assignment with scheduled timing and recurring data
+        this.submitDriverAssignment('scheduled', scheduledDateTime, recurringSchedule);
+    }
+    
+    async submitDriverAssignment(assignmentTiming = 'immediate', scheduledDateTime = null, recurringSchedule = null) {
         const routeId = document.getElementById('route-id').value;
         const vehicleId = document.getElementById('vehicle-assignment').value;
         const driverId = document.getElementById('driver-assignment').value;
@@ -2712,6 +3110,8 @@ showNotification(message, type = 'info') {
         const pickupLng = parseFloat(document.getElementById('pickup-lng').value);
         const deliveryPriority = document.getElementById('delivery-priority').value;
         const scheduleTime = document.getElementById('assignment-schedule').value;
+        
+        // Use the timing parameter passed from confirmation popup
         
         // Get selected certifications
         const certificationCheckboxes = document.querySelectorAll('.certification-checkbox:checked');
@@ -2726,6 +3126,12 @@ showNotification(message, type = 'info') {
         const deliveryLng = parseFloat(document.getElementById('delivery-lng').value);
         const deliveryAddress = document.getElementById('delivery-address').value;
         
+        // Determine assignment status based on timing selection
+        const assignmentStatus = assignmentTiming === 'immediate' ? 'active' : 'scheduled';
+        
+        // Use the specific scheduled datetime if provided, otherwise fall back to form schedule time
+        const finalScheduledTime = scheduledDateTime || scheduleTime || null;
+        
         const assignmentData = {
             route_id: routeId,
             vehicle_id: vehicleId,
@@ -2736,7 +3142,10 @@ showNotification(message, type = 'info') {
             delivery_address: deliveryAddress,
             delivery_priority: deliveryPriority,
             required_certifications: requiredCertifications,
-            scheduled_time: scheduleTime || null
+            scheduled_time: finalScheduledTime,
+            assignment_timing: assignmentTiming,
+            assignment_status: assignmentStatus,
+            recurring_schedule: recurringSchedule
         };
         
         try {
@@ -2806,7 +3215,7 @@ showNotification(message, type = 'info') {
                 // Keep pickup location hidden until vehicle is selected
                 pickupContainer.classList.add('hidden');
             } else {
-                // Hide vehicle and pickup containers if no schedule
+                // Hide all containers if no schedule
                 vehicleContainer.classList.add('hidden');
                 pickupContainer.classList.add('hidden');
                 
@@ -2816,6 +3225,26 @@ showNotification(message, type = 'info') {
                 document.getElementById('pickup-lat').value = '';
                 document.getElementById('pickup-lng').value = '';
             }
+        });
+    }
+    
+    setupAssignmentTimingHandlers() {
+        const timingRadios = document.querySelectorAll('input[name="assignment-timing"]');
+        const buttonText = document.getElementById('assignment-btn-text');
+        
+        if (!buttonText) return;
+        
+        // Add event listeners to timing radio buttons
+        timingRadios.forEach(radio => {
+            radio.addEventListener('change', (event) => {
+                const selectedTiming = event.target.value;
+                
+                if (selectedTiming === 'immediate') {
+                    buttonText.textContent = 'Assign Immediately';
+                } else if (selectedTiming === 'scheduled') {
+                    buttonText.textContent = 'Schedule Assignment';
+                }
+            });
         });
     }
     
@@ -3541,7 +3970,7 @@ showNotification(message, type = 'info') {
             const scheduleTime = document.getElementById('assignment-schedule').value;
             const driverId = document.getElementById('driver-assignment').value;
             
-            const submitBtn = document.getElementById('schedule-assignment-btn');
+            const submitBtn = document.getElementById('assignment-submit-btn');
             const driverContainer = document.getElementById('driver-assignment-container');
             
             // Check if all required fields except driver are filled
