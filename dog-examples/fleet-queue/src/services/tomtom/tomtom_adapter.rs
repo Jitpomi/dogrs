@@ -161,13 +161,74 @@ impl TomTomAdapter {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
 
-        // Make direct TomTom Routing API call
+        // Extract vehicle parameters for commercial vehicle routing
+        let mut url_params = vec![format!("key={}", self.api_key)];
+        
+        // Try to get vehicle specs from database first, fallback to request params
+        if let Ok(vehicle_specs) = self.get_vehicle_specs(vehicle_id).await {
+            if let Some(engine_type) = vehicle_specs.get("engine_type").and_then(|v| v.as_str()) {
+                url_params.push(format!("vehicleEngineType={}", engine_type));
+            }
+            if let Some(max_speed) = vehicle_specs.get("max_speed").and_then(|v| v.as_f64()) {
+                url_params.push(format!("vehicleMaxSpeed={}", max_speed as i64));
+            }
+            if let Some(weight) = vehicle_specs.get("vehicle_weight").and_then(|v| v.as_f64()) {
+                url_params.push(format!("vehicleWeight={}", weight as i64));
+            }
+            if let Some(axle_weight) = vehicle_specs.get("axle_weight").and_then(|v| v.as_f64()) {
+                url_params.push(format!("vehicleAxleWeight={}", axle_weight as i64));
+            }
+            if let Some(length) = vehicle_specs.get("vehicle_length").and_then(|v| v.as_f64()) {
+                url_params.push(format!("vehicleLength={}", length));
+            }
+            if let Some(width) = vehicle_specs.get("vehicle_width").and_then(|v| v.as_f64()) {
+                url_params.push(format!("vehicleWidth={}", width));
+            }
+            if let Some(height) = vehicle_specs.get("vehicle_height").and_then(|v| v.as_f64()) {
+                url_params.push(format!("vehicleHeight={}", height));
+            }
+            if let Some(commercial) = vehicle_specs.get("is_commercial").and_then(|v| v.as_bool()) {
+                if commercial {
+                    url_params.push("vehicleCommercial=true".to_string());
+                }
+            }
+        } else if let Some(vehicle_params) = data.get("vehicleParams") {
+            // Fallback to frontend-provided params if database query fails
+            if let Some(engine_type) = vehicle_params.get("engineType").and_then(|v| v.as_str()) {
+                url_params.push(format!("vehicleEngineType={}", engine_type));
+            }
+            if let Some(max_speed) = vehicle_params.get("maxSpeed").and_then(|v| v.as_i64()) {
+                url_params.push(format!("vehicleMaxSpeed={}", max_speed));
+            }
+            if let Some(weight) = vehicle_params.get("weight").and_then(|v| v.as_i64()) {
+                url_params.push(format!("vehicleWeight={}", weight));
+            }
+            if let Some(axle_weight) = vehicle_params.get("axleWeight").and_then(|v| v.as_i64()) {
+                url_params.push(format!("vehicleAxleWeight={}", axle_weight));
+            }
+            if let Some(length) = vehicle_params.get("length").and_then(|v| v.as_f64()) {
+                url_params.push(format!("vehicleLength={}", length));
+            }
+            if let Some(width) = vehicle_params.get("width").and_then(|v| v.as_f64()) {
+                url_params.push(format!("vehicleWidth={}", width));
+            }
+            if let Some(height) = vehicle_params.get("height").and_then(|v| v.as_f64()) {
+                url_params.push(format!("vehicleHeight={}", height));
+            }
+            if let Some(commercial) = vehicle_params.get("commercial").and_then(|v| v.as_bool()) {
+                if commercial {
+                    url_params.push("vehicleCommercial=true".to_string());
+                }
+            }
+        }
+
+        // Make direct TomTom Routing API call with commercial vehicle parameters
         let url = format!(
-            "{}/routing/1/calculateRoute/{},{}:{},{}/json?key={}",
+            "{}/routing/1/calculateRoute/{},{}:{},{}/json?{}",
             self.base_url,
             from_lat, from_lng,
             to_lat, to_lng,
-            self.api_key
+            url_params.join("&")
         );
 
         let timeout_secs = self.app.get("tomtom.route.timeout")
@@ -453,6 +514,58 @@ impl TomTomAdapter {
         }
 
         Err(anyhow::anyhow!("Could not get traffic information"))
+    }
+
+    /// Get vehicle specifications from database for routing
+    async fn get_vehicle_specs(&self, vehicle_id: &str) -> Result<Value> {
+        let query = format!(
+            r#"
+            match $v isa vehicle, has vehicle-id "{}",
+                has engine-type $engine,
+                has max-speed $speed,
+                has vehicle-weight $weight,
+                has axle-weight $axle,
+                has vehicle-length $length,
+                has vehicle-width $width,
+                has vehicle-height $height,
+                has is-commercial $commercial;
+            select $engine, $speed, $weight, $axle, $length, $width, $height, $commercial;
+            "#,
+            vehicle_id
+        );
+
+        let response = self.client
+            .post(&format!("{}/operations", self.app.get("api.baseUrl").unwrap_or_else(|| "http://localhost:3036".to_string())))
+            .header("Content-Type", "application/json")
+            .header("x-service-method", "read")
+            .json(&json!({
+                "query": query
+            }))
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to query vehicle specs: {}", e))?;
+
+        let result: Value = response
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to parse vehicle specs response: {}", e))?;
+
+        if let Some(data) = result.get("ok").and_then(|v| v.as_array()) {
+            if let Some(first_result) = data.first() {
+                return Ok(json!({
+                    "engine_type": first_result.get("engine").and_then(|v| v.get("value")),
+                    "max_speed": first_result.get("speed").and_then(|v| v.get("value")),
+                    "vehicle_weight": first_result.get("weight").and_then(|v| v.get("value")),
+                    "axle_weight": first_result.get("axle").and_then(|v| v.get("value")),
+                    "vehicle_length": first_result.get("length").and_then(|v| v.get("value")),
+                    "vehicle_width": first_result.get("width").and_then(|v| v.get("value")),
+                    "vehicle_height": first_result.get("height").and_then(|v| v.get("value")),
+                    "is_commercial": first_result.get("commercial").and_then(|v| v.get("value"))
+                }));
+            }
+        }
+
+        Err(anyhow::anyhow!("Vehicle specs not found for vehicle: {}", vehicle_id))
     }
 
     /// Get service statistics (simplified since no queue)

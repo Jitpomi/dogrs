@@ -30,6 +30,17 @@ define
   attribute status-color, value string;
   attribute gps-latitude, value double;
   attribute gps-longitude, value double;
+  
+  # Commercial Vehicle Routing Attributes
+  attribute engine-type, value string @values("combustion", "electric", "hybrid");
+  attribute max-speed, value double;
+  attribute vehicle-weight, value double;
+  attribute axle-weight, value double;
+  attribute vehicle-length, value double;
+  attribute vehicle-width, value double;
+  attribute vehicle-height, value double;
+  attribute is-commercial, value boolean;
+  
   # Certification name attribute
   attribute certification-name, value string;
   
@@ -89,6 +100,15 @@ define
     owns status-color,
     owns gps-latitude,
     owns gps-longitude,
+    # Commercial vehicle routing attributes
+    owns engine-type,
+    owns max-speed,
+    owns vehicle-weight,
+    owns axle-weight,
+    owns vehicle-length,
+    owns vehicle-width,
+    owns vehicle-height,
+    owns is-commercial,
     # Certifications handled via relations
     owns vehicle-status,
     owns created-at,

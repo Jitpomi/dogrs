@@ -2408,6 +2408,431 @@ class FleetCommandPro {
         console.log('🗺️ Map marker auto-updates disabled - awaiting real vehicle GPS data');
     }
     
+    setupDeliveryDetailsButton() {
+        const deliveryDetailsBtn = document.getElementById('delivery-details-btn');
+        if (deliveryDetailsBtn) {
+            deliveryDetailsBtn.addEventListener('click', () => {
+                this.showDeliveryDetailsPanel();
+            });
+        }
+    }
+    
+    showDeliveryDetailsPanel() {
+        // Remove existing panel if any
+        const existingPanel = document.getElementById('delivery-details-panel');
+        if (existingPanel) {
+            existingPanel.remove();
+        }
+        
+        const panel = document.createElement('div');
+        panel.id = 'delivery-details-panel';
+        panel.className = 'fixed w-96 bg-white rounded-lg shadow-xl border border-gray-200 z-50 max-h-[90vh] overflow-y-auto';
+        
+        // Position next to the main assignment panel
+        const mainPanel = document.getElementById('driver-assignment-panel');
+        if (mainPanel) {
+            const mainRect = mainPanel.getBoundingClientRect();
+            panel.style.left = `${mainRect.right + 16}px`;
+            panel.style.top = `${mainRect.top}px`;
+        } else {
+            // Fallback positioning
+            panel.style.right = '4px';
+            panel.style.top = '4px';
+        }
+        
+        panel.innerHTML = `
+            <div class="p-4 border-b border-gray-100">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-semibold text-slate-800">📦 Delivery Details</h3>
+                    <button onclick="this.closest('#delivery-details-panel').remove()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="p-4 space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Customer Name</label>
+                        <input type="text" id="customer-name" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" placeholder="Enter customer name">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Package Weight (lbs)</label>
+                        <input type="number" id="package-weight" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" placeholder="10" min="0.1" step="0.1" value="10">
+                    </div>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Estimated Delivery Window</label>
+                    <div id="delivery-calculation" class="bg-gray-50 rounded-lg p-3 text-sm">
+                        <div class="text-gray-600 mb-2">Calculating delivery window...</div>
+                        <div id="delivery-estimate" class="hidden">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="text-gray-700">Pickup Date:</span>
+                                <span id="pickup-date-display" class="font-medium">--</span>
+                            </div>
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="text-gray-700">Travel Time:</span>
+                                <span id="travel-time-display" class="font-medium">--</span>
+                            </div>
+                            <div class="flex justify-between items-center mb-3 pt-2 border-t border-gray-200">
+                                <span class="text-gray-700 font-medium">Estimated Delivery:</span>
+                                <span id="estimated-delivery-display" class="font-semibold text-blue-600">--</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-3">
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Custom Delivery Time (Optional)</label>
+                        <input type="datetime-local" id="delivery-time" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent" placeholder="Override estimated time">
+                        <p class="text-xs text-gray-500 mt-1">Leave empty to use estimated delivery time</p>
+                    </div>
+                </div>
+                
+                <div class="flex gap-2 pt-4 border-t border-gray-100">
+                    <button type="button" onclick="fleetCommand.saveDeliveryDetails()" class="flex-1 bg-green-500 text-white px-4 py-2 text-sm rounded-lg hover:bg-green-600 transition-colors">
+                        ✓ Save Details
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(panel);
+        
+        // Setup handlers for the new panel
+        this.setupDeliveryCalculation();
+        this.setupSmartDefaults();
+        
+        // Restore previously saved delivery details if they exist
+        this.restoreDeliveryDetails();
+    }
+    
+    setupDeliveryCalculation() {
+        // Calculate delivery window when panel opens
+        this.calculateDeliveryWindow();
+        
+        // Listen for changes in pickup date from main panel
+        const pickupDateInput = document.getElementById('assignment-schedule');
+        if (pickupDateInput) {
+            pickupDateInput.addEventListener('change', () => {
+                this.calculateDeliveryWindow();
+            });
+        }
+    }
+    
+    async calculateDeliveryWindow() {
+        const pickupDateInput = document.getElementById('assignment-schedule');
+        const pickupAddress = document.getElementById('pickup-address');
+        const deliveryAddress = document.getElementById('delivery-address');
+        
+        const pickupDateDisplay = document.getElementById('pickup-date-display');
+        const travelTimeDisplay = document.getElementById('travel-time-display');
+        const estimatedDeliveryDisplay = document.getElementById('estimated-delivery-display');
+        const deliveryEstimate = document.getElementById('delivery-estimate');
+        
+        if (!pickupDateInput || !pickupAddress || !deliveryAddress) {
+            return;
+        }
+        
+        const pickupDate = pickupDateInput.value;
+        const pickup = pickupAddress.value;
+        const delivery = deliveryAddress.value;
+        
+        if (pickupDate && pickup && delivery) {
+            // Show loading state
+            travelTimeDisplay.textContent = 'Calculating...';
+            estimatedDeliveryDisplay.textContent = 'Calculating...';
+            deliveryEstimate.classList.remove('hidden');
+            
+            // Calculate estimated travel time using TomTom API
+            const estimatedTravelHours = await this.estimateTravelTime(pickup, delivery);
+            
+            // Calculate delivery time = pickup time + travel time
+            const pickupDateTime = new Date(pickupDate);
+            const deliveryDateTime = new Date(pickupDateTime.getTime() + estimatedTravelHours * 60 * 60 * 1000);
+            
+            // Update displays
+            pickupDateDisplay.textContent = pickupDateTime.toLocaleString();
+            travelTimeDisplay.textContent = `~${estimatedTravelHours} hours`;
+            estimatedDeliveryDisplay.textContent = deliveryDateTime.toLocaleString();
+            
+            // Set the hidden delivery time input to the calculated time
+            const deliveryTimeInput = document.getElementById('delivery-time');
+            if (deliveryTimeInput && !deliveryTimeInput.value) {
+                deliveryTimeInput.value = deliveryDateTime.toISOString().slice(0, 16);
+            }
+        }
+    }
+    
+    async estimateTravelTime(pickupAddress, deliveryAddress) {
+        try {
+            // Get coordinates for both addresses using TomTom geocoding
+            const pickupCoords = await this.geocodeAddress(pickupAddress);
+            const deliveryCoords = await this.geocodeAddress(deliveryAddress);
+            
+            if (pickupCoords && deliveryCoords) {
+                // Use TomTom routing API for accurate travel time
+                const travelTimeHours = await this.getTomTomTravelTime(pickupCoords, deliveryCoords);
+                if (travelTimeHours) {
+                    return travelTimeHours;
+                }
+            }
+        } catch (error) {
+            console.warn('TomTom routing failed, using fallback estimation:', error);
+        }
+        
+        // Fallback to simple estimation if TomTom fails
+        const pickup = pickupAddress.toLowerCase();
+        const delivery = deliveryAddress.toLowerCase();
+        
+        if (this.isSameCity(pickup, delivery)) {
+            return 1; // 1 hour for local delivery
+        }
+        
+        if (this.isSameState(pickup, delivery)) {
+            return 3; // 3 hours for regional delivery
+        }
+        
+        return 8; // 8 hours for long-distance delivery
+    }
+    
+    async getTomTomTravelTime(fromCoords, toCoords) {
+        try {
+            // Get current assignment context for delivery_id and vehicle_id
+            const routeId = document.getElementById('route-id')?.value || 'temp-route';
+            const vehicleId = document.getElementById('vehicle-assignment')?.value || 'unknown-vehicle';
+            
+            const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'route'
+                },
+                body: JSON.stringify({
+                    delivery_id: routeId,
+                    vehicle_id: vehicleId,
+                    service: 'routing',
+                    from_lat: fromCoords.lat,
+                    from_lng: fromCoords.lng,
+                    to_lat: toCoords.lat,
+                    to_lng: toCoords.lng
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.status === 'success' && data.duration_seconds) {
+                const travelTimeHours = Math.ceil(data.duration_seconds / 3600); // Convert seconds to hours, round up
+                console.log(`TomTom routing: ${travelTimeHours} hours (${data.duration_seconds}s) for ${fromCoords.lat},${fromCoords.lng} to ${toCoords.lat},${toCoords.lng}`);
+                return travelTimeHours;
+            }
+        } catch (error) {
+            console.error('TomTom routing API error:', error);
+        }
+        
+        return null;
+    }
+    
+    async geocodeAddress(address) {
+        try {
+            // Get current assignment context for delivery_id (same as routing call)
+            const routeId = document.getElementById('route-id')?.value || 'temp-route';
+            
+            // Use TomTom backend service for geocoding (same pattern as reverse geocoding)
+            const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'geocode'
+                },
+                body: JSON.stringify({
+                    address: address,
+                    delivery_id: routeId
+                })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                console.log('TomTom geocode response:', data);
+                
+                if (data.status === 'success') {
+                    return { lat: data.latitude, lng: data.longitude };
+                } else {
+                    throw new Error('Invalid geocoding response');
+                }
+            } else {
+                throw new Error(`Geocoding failed: ${response.status}`);
+            }
+        } catch (error) {
+            console.error('Geocoding error:', error);
+        }
+        
+        return null;
+    }
+    
+    restoreDeliveryDetails() {
+        // Restore previously saved delivery details if they exist
+        if (this.deliveryDetails) {
+            const customerNameInput = document.getElementById('customer-name');
+            const packageWeightInput = document.getElementById('package-weight');
+            const deliveryTimeInput = document.getElementById('delivery-time');
+            
+            if (customerNameInput && this.deliveryDetails.customerName) {
+                customerNameInput.value = this.deliveryDetails.customerName;
+            }
+            
+            if (packageWeightInput && this.deliveryDetails.packageWeight) {
+                packageWeightInput.value = this.deliveryDetails.packageWeight;
+            }
+            
+            if (deliveryTimeInput && this.deliveryDetails.deliveryTime) {
+                deliveryTimeInput.value = this.deliveryDetails.deliveryTime;
+            }
+            
+            console.log('Restored delivery details:', this.deliveryDetails);
+        }
+    }
+    
+    saveDeliveryDetails() {
+        try {
+            // Get all the delivery detail values
+            const customerName = document.getElementById('customer-name')?.value || '';
+            const packageWeight = document.getElementById('package-weight')?.value || '';
+            const deliveryTime = document.getElementById('delivery-time')?.value || '';
+            
+            // Get delivery priority from main panel (not duplicate priority level)
+            const deliveryPriority = document.getElementById('delivery-priority')?.value || 'standard';
+            
+            // Store the values persistently so they're available when panel is reopened
+            this.deliveryDetails = {
+                customerName,
+                packageWeight,
+                deliveryTime,
+                deliveryPriority
+            };
+            
+            // Close the delivery details panel
+            const panel = document.getElementById('delivery-details-panel');
+            if (panel) {
+                panel.remove();
+            }
+            
+            // Show success feedback
+            console.log('Delivery details saved:', this.deliveryDetails);
+            
+            // Optional: Show a brief success message
+            this.showNotification('Delivery details saved successfully', 'success');
+            
+        } catch (error) {
+            console.error('Error saving delivery details:', error);
+            this.showNotification('Error saving delivery details', 'error');
+        }
+    }
+    
+    showNotification(message, type = 'info') {
+        // Simple notification system
+        const notification = document.createElement('div');
+        notification.className = `fixed top-4 right-4 px-4 py-2 rounded-lg text-white z-50 ${
+            type === 'success' ? 'bg-green-500' : 
+            type === 'error' ? 'bg-red-500' : 'bg-blue-500'
+        }`;
+        notification.textContent = message;
+        
+        document.body.appendChild(notification);
+        
+        // Auto-remove after 3 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 3000);
+    }
+    
+    isSameCity(pickup, delivery) {
+        // Extract city names and compare
+        const pickupParts = pickup.split(',');
+        const deliveryParts = delivery.split(',');
+        
+        if (pickupParts.length > 1 && deliveryParts.length > 1) {
+            const pickupCity = pickupParts[1].trim();
+            const deliveryCity = deliveryParts[1].trim();
+            return pickupCity === deliveryCity;
+        }
+        
+        return false;
+    }
+    
+    isSameState(pickup, delivery) {
+        // Extract state/region and compare
+        const pickupParts = pickup.split(',');
+        const deliveryParts = delivery.split(',');
+        
+        if (pickupParts.length > 2 && deliveryParts.length > 2) {
+            const pickupState = pickupParts[2].trim().substring(0, 2);
+            const deliveryState = deliveryParts[2].trim().substring(0, 2);
+            return pickupState === deliveryState;
+        }
+        
+        return false;
+    }
+    
+    setupSmartDefaults() {
+        const customerNameInput = document.getElementById('customer-name');
+        const deliveryAddressInput = document.getElementById('delivery-address');
+        const packageWeightInput = document.getElementById('package-weight');
+        const priorityLevelSelect = document.getElementById('priority-level');
+        const deliveryPrioritySelect = document.getElementById('delivery-priority');
+        
+        // Auto-generate customer name from delivery address
+        if (deliveryAddressInput && customerNameInput) {
+            deliveryAddressInput.addEventListener('blur', () => {
+                if (!customerNameInput.value && deliveryAddressInput.value) {
+                    const address = deliveryAddressInput.value;
+                    const parts = address.split(',');
+                    if (parts.length > 0) {
+                        const streetOrBuilding = parts[0].trim();
+                        customerNameInput.value = `Customer at ${streetOrBuilding}`;
+                    }
+                }
+            });
+        }
+        
+        // Sync priority levels
+        if (deliveryPrioritySelect && priorityLevelSelect) {
+            deliveryPrioritySelect.addEventListener('change', () => {
+                const priorityMap = {
+                    'low': '1',
+                    'standard': '1', 
+                    'high': '2',
+                    'urgent': '4',
+                    'critical': '5'
+                };
+                
+                const numericPriority = priorityMap[deliveryPrioritySelect.value] || '1';
+                priorityLevelSelect.value = numericPriority;
+            });
+        }
+        
+        // Adjust weight based on priority
+        if (priorityLevelSelect && packageWeightInput) {
+            priorityLevelSelect.addEventListener('change', () => {
+                const currentWeight = parseFloat(packageWeightInput.value) || 10;
+                if (currentWeight === 10) { // Only adjust if still default
+                    const weightMap = {
+                        '1': 10,
+                        '2': 15,
+                        '3': 20,
+                        '4': 25,
+                        '5': 30
+                    };
+                    packageWeightInput.value = weightMap[priorityLevelSelect.value] || 10;
+                }
+            });
+        }
+    }
+    
     showNotification(message, type = 'info') {
         const notification = document.createElement('div');
         const colors = {
@@ -2583,7 +3008,7 @@ showNotification(message, type = 'info') {
                     </div>
                     
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 mb-2">Schedule Assignment</label>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Vehicle Pickup Date</label>
                         <input type="datetime-local" id="assignment-schedule" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
                     </div>
                     
@@ -2617,11 +3042,18 @@ showNotification(message, type = 'info') {
                     <div>
                         <label class="block text-sm font-medium text-slate-700 mb-2">Delivery Priority</label>
                         <select id="delivery-priority" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent">
-                            <option value="standard">Standard</option>
+                            <option value="low">Low</option>
+                            <option value="standard" selected>Standard</option>
                             <option value="high">High</option>
                             <option value="urgent">Urgent</option>
                             <option value="critical">Critical</option>
                         </select>
+                    </div>
+                    
+                    <div class="flex gap-2">
+                        <button type="button" id="delivery-details-btn" class="flex-1 bg-blue-500 text-white px-4 py-2 text-sm rounded-lg hover:bg-blue-600 transition-colors">
+                            📦 Delivery Details
+                        </button>
                     </div>
                     
                     <div id="certification-requirements-container" class="hidden">
@@ -2663,13 +3095,6 @@ showNotification(message, type = 'info') {
                     </div>
                 </form>
             </div>
-            
-            <div class="border-t border-gray-100 p-4">
-                <h3 class="text-sm font-medium text-slate-700 mb-3">Recent Assignments</h3>
-                <div id="recent-assignments" class="space-y-2 max-h-32 overflow-y-auto">
-                    <div class="text-sm text-slate-500">No recent assignments</div>
-                </div>
-            </div>
         `;
         
         // Position panel next to navigation menu
@@ -2698,6 +3123,7 @@ showNotification(message, type = 'info') {
         setTimeout(() => {
             this.setupScheduleDependentFormFlow();
             this.setupDateDependentDriverLoading();
+            this.setupDeliveryDetailsButton();
             this.setupFormValidation();
         }, 500);
         
@@ -3148,20 +3574,47 @@ showNotification(message, type = 'info') {
             recurring_schedule: recurringSchedule
         };
         
+        // Create TypeDB assignment query with all data
+        const assignmentQuery = `
+            match
+            $vehicle isa vehicle, has id "${assignmentData.vehicle_id}";
+            $driver isa employee, has id "${assignmentData.driver_id}";
+            
+            insert
+            $delivery isa delivery,
+                has delivery-id "${assignmentData.route_id}",
+                has route-id "${assignmentData.route_id}",
+                has pickup-address "${assignmentData.pickup_address}",
+                has delivery-address "${assignmentData.delivery_address}",
+                has dest-lat ${assignmentData.delivery_location[0]},
+                has dest-lng ${assignmentData.delivery_location[1]},
+                has customer-name "${document.getElementById('customer-name').value || 'Customer ' + assignmentData.route_id}",
+                has delivery-time "${document.getElementById('delivery-time').value ? new Date(document.getElementById('delivery-time').value).toISOString() : new Date(Date.now() + 2*60*60*1000).toISOString()}",
+                has weight ${parseFloat(document.getElementById('package-weight').value) || 10.0},
+                has priority ${parseInt(document.getElementById('priority-level').value) || 1},
+                has customer-priority "${assignmentData.delivery_priority}",
+                has delivery-status "pending",
+                has created-at "${new Date().toISOString()}";
+            
+            $assignment (assigned-vehicle: $vehicle, assigned-employee: $driver, assigned-delivery: $delivery) isa assignment,
+                has assignment-status "${assignmentData.assignment_status}",
+                has assigned-at "${new Date().toISOString()}";
+        `;
+
         try {
-            const response = await fetch(`${this.apiBaseUrl}/api/assignments`, {
+            const response = await fetch(`${this.apiBaseUrl}/operations`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'x-service-method': 'write'
                 },
-                body: JSON.stringify(assignmentData)
+                body: JSON.stringify({ query: assignmentQuery })
             });
             
             if (response.ok) {
                 const result = await response.json();
                 this.showNotification('Assignment scheduled successfully', 'success');
                 this.clearAssignmentForm();
-                this.loadRecentAssignments();
             } else {
                 throw new Error('Failed to schedule assignment');
             }
@@ -3969,6 +4422,10 @@ showNotification(message, type = 'info') {
             const deliveryPriority = document.getElementById('delivery-priority').value;
             const scheduleTime = document.getElementById('assignment-schedule').value;
             const driverId = document.getElementById('driver-assignment').value;
+            const customerNameEl = document.getElementById('customer-name');
+            const packageWeightEl = document.getElementById('package-weight');
+            const customerName = customerNameEl ? customerNameEl.value.trim() : '';
+            const packageWeight = packageWeightEl ? packageWeightEl.value : '';
             
             const submitBtn = document.getElementById('assignment-submit-btn');
             const driverContainer = document.getElementById('driver-assignment-container');
@@ -4388,35 +4845,6 @@ showNotification(message, type = 'info') {
         }, 100);
     }
     
-    async loadRecentAssignments() {
-        try {
-            const response = await fetch(`${this.apiBaseUrl}/api/assignments/recent`);
-            if (response.ok) {
-                const assignments = await response.json();
-                this.displayRecentAssignments(assignments);
-            }
-        } catch (error) {
-            console.error('Error loading recent assignments:', error);
-        }
-    }
-    
-    displayRecentAssignments(assignments) {
-        const container = document.getElementById('recent-assignments');
-        if (!container) return;
-        
-        if (assignments.length === 0) {
-            container.innerHTML = '<div class="text-xs text-slate-500">No recent assignments</div>';
-            return;
-        }
-        
-        container.innerHTML = assignments.map(assignment => `
-            <div class="bg-slate-50 rounded p-2">
-                <div class="text-xs font-medium">${assignment.route_id}</div>
-                <div class="text-xs text-slate-600">${assignment.delivery_priority} priority</div>
-                <div class="text-xs text-slate-500">${new Date(assignment.created_at).toLocaleDateString()}</div>
-            </div>
-        `).join('');
-    }
     
     showNotification(message, type = 'info') {
         const notification = document.createElement('div');

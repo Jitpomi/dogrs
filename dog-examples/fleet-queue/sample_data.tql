@@ -27,7 +27,15 @@ insert $v1 isa vehicle,
     has vehicle-icon "🚛", 
     has status-color "#22c55e", 
     has gps-latitude 40.7128, 
-    has gps-longitude -74.0060;
+    has gps-longitude -74.0060,
+    has engine-type "combustion",
+    has max-speed 90,
+    has vehicle-weight 12000,
+    has axle-weight 10000,
+    has vehicle-length 8.5,
+    has vehicle-width 2.5,
+    has vehicle-height 3.8,
+    has is-commercial true;
 
 insert $v2 isa vehicle, 
     has vehicle-id "VH002", 
@@ -41,7 +49,15 @@ insert $v2 isa vehicle,
     has vehicle-icon "🚛", 
     has status-color "#22c55e", 
     has gps-latitude 40.6782, 
-    has gps-longitude -73.9442;
+    has gps-longitude -73.9442,
+    has engine-type "combustion",
+    has max-speed 85,
+    has vehicle-weight 14000,
+    has axle-weight 11000,
+    has vehicle-length 9.2,
+    has vehicle-width 2.6,
+    has vehicle-height 4.0,
+    has is-commercial true;
 
 insert $v3 isa vehicle, 
     has vehicle-id "VH003", 
@@ -55,7 +71,15 @@ insert $v3 isa vehicle,
     has vehicle-icon "🚐", 
     has status-color "#22c55e", 
     has gps-latitude 40.7282, 
-    has gps-longitude -73.7949;
+    has gps-longitude -73.7949,
+    has engine-type "combustion",
+    has max-speed 100,
+    has vehicle-weight 3500,
+    has axle-weight 2000,
+    has vehicle-length 5.8,
+    has vehicle-width 2.0,
+    has vehicle-height 2.8,
+    has is-commercial true;
 
 insert $v4 isa vehicle, 
     has vehicle-id "VH004", 
@@ -69,7 +93,15 @@ insert $v4 isa vehicle,
     has vehicle-icon "🧊", 
     has status-color "#22c55e", 
     has gps-latitude 40.7505, 
-    has gps-longitude -73.9934;
+    has gps-longitude -73.9934,
+    has engine-type "electric",
+    has max-speed 80,
+    has vehicle-weight 15000,
+    has axle-weight 12000,
+    has vehicle-length 10.5,
+    has vehicle-width 2.5,
+    has vehicle-height 4.2,
+    has is-commercial true;
 
 insert $v5 isa vehicle, 
     has vehicle-id "VH005", 
@@ -83,7 +115,15 @@ insert $v5 isa vehicle,
     has vehicle-icon "🚛", 
     has status-color "#f59e0b", 
     has gps-latitude 40.6892, 
-    has gps-longitude -73.9445;
+    has gps-longitude -73.9445,
+    has engine-type "hybrid",
+    has max-speed 75,
+    has vehicle-weight 16000,
+    has axle-weight 13000,
+    has vehicle-length 11.0,
+    has vehicle-width 2.7,
+    has vehicle-height 4.5,
+    has is-commercial true;
 
 insert $v6 isa vehicle, 
     has vehicle-id "VH006", 
@@ -97,7 +137,15 @@ insert $v6 isa vehicle,
     has vehicle-icon "🚐", 
     has status-color "#3b82f6", 
     has gps-latitude 40.7589, 
-    has gps-longitude -73.9851;
+    has gps-longitude -73.9851,
+    has engine-type "electric",
+    has max-speed 110,
+    has vehicle-weight 2800,
+    has axle-weight 1800,
+    has vehicle-length 5.2,
+    has vehicle-width 1.9,
+    has vehicle-height 2.5,
+    has is-commercial true;
 
 # ===========================
 # EMPLOYEES (5 employees with certifications)
