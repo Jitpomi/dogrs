@@ -1,7 +1,7 @@
 class FleetCommandPro {
     constructor() {
         this.apiBaseUrl = 'http://127.0.0.1:3036';
-        this.tomtomApiKey = process.env.TOMTOM_API_KEY;
+         this.tomtomApiKey = 'c1xp5uxxF9W7z0tPjNcQC48nQlABojKH';
         this.map = null;
         this.vehicleMarkers = new Map();
         this.deliveryMarkers = new Map();
@@ -186,7 +186,7 @@ class FleetCommandPro {
                     'x-service-method': 'read'
                 },
                 body: JSON.stringify({
-                    query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has vehicle-status $status, has vehicle-icon $icon, has status-color $color, has gps-latitude $lat, has gps-longitude $lng, has capacity $capacity, has fuel-level $fuel, has maintenance-score $maintenance; $assignment isa assignment (assigned-vehicle: $v, assigned-employee: $employee); select $v, $id, $type, $status, $icon, $color, $lat, $lng, $capacity, $fuel, $maintenance; limit 50;'
+                    query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has vehicle-status $status, has vehicle-icon $icon, has status-color $color, has gps-latitude $lat, has gps-longitude $lng, has capacity $capacity, has fuel-level $fuel, has maintenance-score $maintenance; $assignment isa assignment (assigned-vehicle: $v, assigned-employee: $employee), has assignment-status "active"; select $v, $id, $type, $status, $icon, $color, $lat, $lng, $capacity, $fuel, $maintenance; limit 50;'
                 })
             });
             const result = await response.json();
@@ -588,6 +588,9 @@ class FleetCommandPro {
         this.vehicleMarkers.clear();
         
         if (!this.data.vehicles || this.data.vehicles.length === 0) {
+            // Center map to world center when no vehicles are present
+            this.map.setCenter([0, 0]);
+            this.map.setZoom(2);
             return;
         }
         
@@ -1565,8 +1568,41 @@ class FleetCommandPro {
     }
 
 
+    // Consolidated route data fetching function - single source of truth
+    async getActiveRouteData(vehicleId) {
+        const response = await fetch(`${this.apiBaseUrl}/deliveries`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-service-method': 'read'
+            },
+            body: JSON.stringify({
+                query: `
+                    match 
+                    $assignment isa assignment (assigned-vehicle: $vehicle, assigned-delivery: $delivery);
+                    $vehicle has vehicle-id "${vehicleId}";
+                    $assignment has assigned-at $timestamp,
+                               has assignment-status "active";
+                    $delivery has route-id $routeId,
+                             has pickup-address $pickup,
+                             has delivery-address $destination,
+                             has delivery-time $deliveryTime,
+                             has delivery-status $deliveryStatus,
+                             has dest-lat $destLat,
+                             has dest-lng $destLng;
+                    select $routeId, $pickup, $destination, $deliveryTime, $deliveryStatus, $timestamp, $destLat, $destLng;
+                    sort $timestamp desc;
+                    limit 2;
+                `
+            })
+        });
+        
+        const routeData = await response.json();
+        return routeData;
+    }
 
     async loadVehicleTrafficData(vehicleId, lat, lng) {
+        console.log(`🔄 Loading traffic data for vehicle ${vehicleId} - Consolidated version`);
         try {
             // Check if DOM elements exist first
             const routeStatus = document.getElementById(`route-status-${vehicleId}`);
@@ -1582,35 +1618,9 @@ class FleetCommandPro {
             trafficStatus.textContent = 'Loading...';
             etaElement.textContent = 'Calculating...';
             
-            // Get route data from database for this vehicle
-            const response = await fetch(`${this.apiBaseUrl}/deliveries`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-service-method': 'read'
-                },
-                body: JSON.stringify({
-                    query: `
-                        match 
-                        $assignment isa assignment (assigned-vehicle: $vehicle, assigned-delivery: $delivery);
-                        $vehicle has vehicle-id "${vehicleId}";
-                        $assignment has assigned-at $timestamp,
-                                   has assignment-status "active";
-                        $delivery has route-id $routeId,
-                                 has pickup-address $pickup,
-                                 has delivery-address $destination,
-                                 has delivery-time $deliveryTime,
-                                 has delivery-status $deliveryStatus,
-                                 has dest-lat $destLat,
-                                 has dest-lng $destLng;
-                        select $routeId, $pickup, $destination, $deliveryTime, $deliveryStatus, $timestamp, $destLat, $destLng;
-                        sort $deliveryTime asc;
-                        limit 2;
-                    `
-                })
-            });
-            
-            const routeData = await response.json();
+            // Get route data using consolidated function
+            const routeData = await this.getActiveRouteData(vehicleId);
+            console.log('Query response for', vehicleId, ':', routeData);
             
             if (routeData.ok && routeData.ok.answers && routeData.ok.answers.length > 0) {
                 const currentRoute = routeData.ok.answers[0].data;
@@ -2105,9 +2115,9 @@ class FleetCommandPro {
                         $assignment (assigned-employee: $employee, assigned-vehicle: $vehicle, assigned-delivery: $delivery) isa assignment,
                             has assignment-status $status;
                         $vehicle has vehicle-id $vehicleId, has gps-latitude $vLat, has gps-longitude $vLng;
-                        $delivery has delivery-id $deliveryId, has dest-lat $dLat, has dest-lng $dLng;
+                        $delivery has delivery-id $deliveryId, has dest-lat $dLat, has dest-lng $dLng, has delivery-address $deliveryAddress, has delivery-status $deliveryStatus, has customer-name $customerName, has weight $packageWeight, has delivery-time $deliveryTime;
                         $status == "active";
-                        select $vehicleId, $deliveryId, $vLat, $vLng, $dLat, $dLng;
+                        select $vehicleId, $deliveryId, $vLat, $vLng, $dLat, $dLng, $deliveryAddress, $deliveryStatus, $customerName, $packageWeight, $deliveryTime;
                     `
                 })
             });
@@ -2131,6 +2141,11 @@ class FleetCommandPro {
                         const dLat = parseFloat(assignmentData.dLat?.value);
                         const dLng = parseFloat(assignmentData.dLng?.value);
                         const deliveryId = assignmentData.deliveryId?.value;
+                        const deliveryAddress = assignmentData.deliveryAddress?.value;
+                        const deliveryStatus = assignmentData.deliveryStatus?.value || 'pending';
+                        const customerName = assignmentData.customerName?.value;
+                        const packageWeight = assignmentData.packageWeight?.value;
+                        const deliveryTime = assignmentData.deliveryTime?.value;
                         
                         if (vLat && vLng && dLat && dLng && deliveryId) {
                             console.log(`🗺️ Creating route: ${vehicleId} (${vLat}, ${vLng}) → ${deliveryId} (${dLat}, ${dLng})`);
@@ -2139,7 +2154,7 @@ class FleetCommandPro {
                             this.clearTrackedRoute();
                             
                             // Create and display the delivery marker for this specific delivery
-                            this.addTrackedDeliveryMarker(deliveryId, dLat, dLng);
+                            this.addTrackedDeliveryMarker(deliveryId, dLat, dLng, deliveryAddress, deliveryStatus, customerName, packageWeight, deliveryTime);
                             
                             // Create and display the route
                             this.createTrackedRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng);
@@ -2191,10 +2206,10 @@ class FleetCommandPro {
         }
     }
 
-    addTrackedDeliveryMarker(deliveryId, lat, lng) {
+    async addTrackedDeliveryMarker(deliveryId, lat, lng, deliveryAddress = null, deliveryStatus = 'pending', customerName = null, packageWeight = null, deliveryTime = null) {
         if (!this.map) return;
         
-        console.log(`📦 Adding tracked delivery marker: ${deliveryId} at (${lat}, ${lng})`);
+        console.log(`📦 Adding tracked delivery marker: ${deliveryId} at (${lat}, ${lng}) - CACHE_BUSTER_v20`);
         
         // Create delivery marker element
         const markerElement = document.createElement('div');
@@ -2243,6 +2258,32 @@ class FleetCommandPro {
             .setLngLat([lng, lat])
             .addTo(this.map);
         
+        // Use provided delivery details or fallback to reverse geocoding
+        let finalDeliveryAddress = deliveryAddress;
+        let finalDeliveryStatus = deliveryStatus;
+        
+        if (!finalDeliveryAddress || !finalDeliveryAddress.includes(',')) {
+            console.log('No delivery address provided, trying reverse geocoding...');
+            try {
+                const address = await this.reverseGeocode(lat, lng, null);
+                if (address) {
+                    finalDeliveryAddress = address;
+                    console.log('✅ Using reverse geocoded address:', finalDeliveryAddress);
+                } else {
+                    finalDeliveryAddress = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+                    console.log('❌ Reverse geocoding failed, using coordinates');
+                }
+            } catch (geoError) {
+                finalDeliveryAddress = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+                console.log('❌ Reverse geocoding error, using coordinates:', geoError);
+            }
+        } else {
+            console.log('✅ Using provided delivery address:', finalDeliveryAddress);
+        }
+
+        console.log('Final delivery address for popup:', finalDeliveryAddress);
+        console.log('Final delivery status for popup:', finalDeliveryStatus);
+
         // Add popup for delivery marker
         const popup = new tt.Popup({ 
             offset: 25,
@@ -2251,13 +2292,69 @@ class FleetCommandPro {
             closeButton: true
         })
         .setHTML(`
-            <div class="p-4">
-                <h3 class="font-semibold text-slate-900 mb-2">📦 Delivery Destination</h3>
-                <div class="space-y-2">
-                    <div><span class="text-slate-600">Delivery ID:</span> <span class="font-medium">${deliveryId}</span></div>
-                    <div><span class="text-slate-600">Location:</span> <span class="font-medium">${lat.toFixed(4)}, ${lng.toFixed(4)}</span></div>
-                    <div><span class="text-slate-600">Status:</span> <span class="text-amber-600 font-medium">Tracked Destination</span></div>
+            <div class="p-4 min-w-80">
+                <h3 class="font-semibold text-slate-900 mb-3 flex items-center">
+                    <span class="mr-2">📦</span>
+                    Delivery Destination
+                </h3>
+                
+                <!-- Delivery Info -->
+                <div class="space-y-2 mb-3">
+                    <div class="flex justify-between">
+                        <span class="text-slate-600 text-sm">Delivery ID:</span> 
+                        <span class="font-medium text-sm">${deliveryId}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-600 text-sm">Status:</span> 
+                        <span class="text-blue-600 font-medium text-sm capitalize">${finalDeliveryStatus}</span>
+                    </div>
                 </div>
+                
+                <!-- Customer Info -->
+                ${customerName ? `
+                <div class="border-t pt-3 mb-3">
+                    <h4 class="font-medium text-slate-800 mb-2 flex items-center">
+                        <span class="mr-1">👤</span>
+                        Customer Information
+                    </h4>
+                    <div class="flex justify-between">
+                        <span class="text-slate-600 text-sm">Customer:</span>
+                        <span class="font-medium text-sm">${customerName}</span>
+                    </div>
+                </div>
+                ` : ''}
+                
+                <!-- Package Details -->
+                <div class="border-t pt-3 mb-3">
+                    <h4 class="font-medium text-slate-800 mb-2 flex items-center">
+                        <span class="mr-1">📋</span>
+                        Package Details
+                    </h4>
+                    ${packageWeight ? `
+                    <div class="flex justify-between mb-1">
+                        <span class="text-slate-600 text-sm">Weight:</span>
+                        <span class="font-medium text-sm">${packageWeight} kg</span>
+                    </div>
+                    ` : ''}
+                    <div class="text-sm text-slate-600">
+                        <span class="font-medium">Address:</span><br>
+                        <span class="text-slate-800">${finalDeliveryAddress}</span>
+                    </div>
+                </div>
+                
+                <!-- Delivery Window -->
+                ${deliveryTime ? `
+                <div class="border-t pt-3">
+                    <h4 class="font-medium text-slate-800 mb-2 flex items-center">
+                        <span class="mr-1">⏰</span>
+                        Estimated Delivery Window
+                    </h4>
+                    <div class="text-sm">
+                        <span class="text-slate-600">Target Time:</span>
+                        <span class="font-medium text-slate-800 ml-1">${new Date(deliveryTime).toLocaleString()}</span>
+                    </div>
+                </div>
+                ` : ''}
             </div>
         `);
         
@@ -2842,19 +2939,17 @@ class FleetCommandPro {
                 body: JSON.stringify({
                     query: `
                         match
-                        $assignment isa assignment (assigned-vehicle: $vehicle, assigned-employee: $employee, assigned-delivery: $delivery);
+                        $assignment isa assignment (assigned-vehicle: $vehicle, assigned-employee: $employee);
                         $vehicle has vehicle-id "${vehicleId}";
                         $assignment has assigned-at $timestamp,
                                    has assignment-status "active";
-                        $delivery has delivery-time $deliveryTime;
                         $employee has employee-name $name,
                                    has performance-rating $rating,
                                    has employee-role $role,
                                    has shift-schedule $schedule;
                         $cert_rel isa has-certification (certified-employee: $employee, held-certification: $cert);
                         $cert has certification-name $cert_name;
-                        select $employee, $name, $schedule, $rating, $role, $cert_name, $deliveryTime;
-                        sort $deliveryTime asc;
+                        select $employee, $name, $schedule, $rating, $role, $cert_name;
                         limit 1;
                     `
                 })
@@ -2977,30 +3072,10 @@ class FleetCommandPro {
             const currentLat = parseFloat(vehicle.data.lat?.value);
             const currentLng = parseFloat(vehicle.data.lng?.value);
 
-            // Get assigned delivery for this vehicle to determine destination
-            const deliveryResponse = await fetch(`${this.apiBaseUrl}/deliveries`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-service-method': 'read'
-                },
-                body: JSON.stringify({
-                    query: `
-                        match 
-                        $assignment isa assignment (assigned-vehicle: $vehicle, assigned-delivery: $delivery);
-                        $vehicle has vehicle-id "${vehicleId}";
-                        $delivery has route-id $routeId,
-                                 has pickup-address $pickup,
-                                 has delivery-address $destination,
-                                 has delivery-time $deliveryTime,
-                                 has delivery-status $deliveryStatus;
-                        select $routeId, $pickup, $destination, $deliveryTime, $deliveryStatus;
-                    `
-                })
-            });
+            // Get assigned delivery using consolidated function
+            const deliveryData = await this.getActiveRouteData(vehicleId);
 
-            if (deliveryResponse.ok) {
-                const deliveryData = await deliveryResponse.json();
+            if (deliveryData.ok) {
                 if (deliveryData.ok && deliveryData.ok.answers && deliveryData.ok.answers.length > 0) {
                     const delivery = deliveryData.ok.answers[0].data;
                     const routeId = delivery.routeId?.value || 'Unknown Route';

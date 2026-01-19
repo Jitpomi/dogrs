@@ -238,7 +238,7 @@ insert $d2 isa delivery,
     has delivery-time 2024-01-14T11:00:00, 
     has weight 89.2, 
     has priority 2, 
-    has delivery-status "in_transit", 
+    has delivery-status "failed", 
     has created-at 2024-01-14T10:00:00, 
     has route-id "RT002", 
     has customer-priority "standard", 
@@ -375,26 +375,45 @@ insert (certified-employee: $e5, held-certification: $dispatcher) isa has-certif
 # ===========================
 
 match $e1 isa employee, has id "EMP001"; $v1 isa vehicle, has vehicle-id "VH001";
-insert (assigned-employee: $e1, assigned-vehicle: $v1) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T08:00:00;
+insert (assigned-employee: $e1, assigned-vehicle: $v1) isa assignment, has assignment-status "cancelled", has assigned-at 2024-01-14T08:00:00;
 
 match $e2 isa employee, has id "EMP002"; $v2 isa vehicle, has vehicle-id "VH002";
-insert (assigned-employee: $e2, assigned-vehicle: $v2) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T08:30:00;
+insert (assigned-employee: $e2, assigned-vehicle: $v2) isa assignment, has assignment-status "cancelled", has assigned-at 2024-01-14T08:30:00;
 
 match $e3 isa employee, has id "EMP003"; $v3 isa vehicle, has vehicle-id "VH003";
-insert (assigned-employee: $e3, assigned-vehicle: $v3) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T09:00:00;
+insert (assigned-employee: $e3, assigned-vehicle: $v3) isa assignment, has assignment-status "completed", has assigned-at 2024-01-14T09:00:00;
 
 match $e4 isa employee, has id "EMP004"; $v4 isa vehicle, has vehicle-id "VH004";
-insert (assigned-employee: $e4, assigned-vehicle: $v4) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T09:30:00;
+insert (assigned-employee: $e4, assigned-vehicle: $v4) isa assignment, has assignment-status "cancelled", has assigned-at 2024-01-14T09:30:00;
 
 # Delivery assignments for route data
 match $v1 isa vehicle, has vehicle-id "VH001"; $d1 isa delivery, has delivery-id "DEL001";
-insert (assigned-vehicle: $v1, assigned-delivery: $d1) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T08:00:00;
+insert (assigned-vehicle: $v1, assigned-delivery: $d1) isa assignment, has assignment-status "cancelled", has assigned-at 2024-01-14T08:00:00;
 
 match $v2 isa vehicle, has vehicle-id "VH002"; $d2 isa delivery, has delivery-id "DEL002";
-insert (assigned-vehicle: $v2, assigned-delivery: $d2) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T08:30:00;
+insert (assigned-vehicle: $v2, assigned-delivery: $d2) isa assignment, has assignment-status "cancelled", has assigned-at 2024-01-14T08:30:00;
 
 match $v3 isa vehicle, has vehicle-id "VH003"; $d3 isa delivery, has delivery-id "DEL003";
-insert (assigned-vehicle: $v3, assigned-delivery: $d3) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T09:00:00;
+insert (assigned-vehicle: $v3, assigned-delivery: $d3) isa assignment, has assignment-status "completed", has assigned-at 2024-01-14T09:00:00;
 
 match $v4 isa vehicle, has vehicle-id "VH004"; $d4 isa delivery, has delivery-id "DEL004";
-insert (assigned-vehicle: $v4, assigned-delivery: $d4) isa assignment, has assignment-status "active", has assigned-at 2024-01-14T09:30:00;
+insert (assigned-vehicle: $v4, assigned-delivery: $d4) isa assignment, has assignment-status "cancelled", has assigned-at 2024-01-14T09:30:00;
+
+# Current active delivery for VH002
+insert $d5 isa delivery, 
+    has delivery-id "DEL005", 
+    has pickup-address "200 Broadway, Manhattan, NY", 
+    has delivery-address "500 Atlantic Ave, Brooklyn, NY", 
+    has customer-name "Current Client", 
+    has delivery-time 2026-01-20T15:00:00, 
+    has weight 95.0, 
+    has priority 1, 
+    has delivery-status "in_transit", 
+    has created-at 2026-01-19T09:00:00, 
+    has route-id "RT345", 
+    has customer-priority "urgent", 
+    has dest-lat 40.6892, 
+    has dest-lng -73.9442;
+
+match $v2 isa vehicle, has vehicle-id "VH002"; $d5 isa delivery, has delivery-id "DEL005";
+insert (assigned-vehicle: $v2, assigned-delivery: $d5) isa assignment, has assignment-status "cancelled", has assigned-at 2026-01-19T09:00:00;
