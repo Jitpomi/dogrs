@@ -1,7 +1,7 @@
 class FleetCommandPro {
     constructor() {
         this.apiBaseUrl = 'http://127.0.0.1:3036';
-        this.tomtomApiKey = 'c1xp5uxxF9W7z0tPjNcQC48nQlABojKH';
+        this.tomtomApiKey = process.env.TOMTOM_API_KEY;
         this.map = null;
         this.vehicleMarkers = new Map();
         this.deliveryMarkers = new Map();

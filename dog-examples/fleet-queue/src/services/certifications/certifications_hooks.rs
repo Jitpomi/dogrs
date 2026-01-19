@@ -36,7 +36,7 @@ pub struct AfterWrite;
 
 #[async_trait]
 impl DogAfterHook<Value, FleetParams> for AfterWrite {
-    async fn run(&self, ctx: &mut HookContext<Value, FleetParams>) -> Result<()> {
+    async fn run(&self, _ctx: &mut HookContext<Value, FleetParams>) -> Result<()> {
         
         Ok(())
     }

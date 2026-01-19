@@ -192,36 +192,8 @@ impl TomTomAdapter {
                     url_params.push("vehicleCommercial=true".to_string());
                 }
             }
-        } else if let Some(vehicle_params) = data.get("vehicleParams") {
-            // Fallback to frontend-provided params if database query fails
-            if let Some(engine_type) = vehicle_params.get("engineType").and_then(|v| v.as_str()) {
-                url_params.push(format!("vehicleEngineType={}", engine_type));
-            }
-            if let Some(max_speed) = vehicle_params.get("maxSpeed").and_then(|v| v.as_i64()) {
-                url_params.push(format!("vehicleMaxSpeed={}", max_speed));
-            }
-            if let Some(weight) = vehicle_params.get("weight").and_then(|v| v.as_i64()) {
-                url_params.push(format!("vehicleWeight={}", weight));
-            }
-            if let Some(axle_weight) = vehicle_params.get("axleWeight").and_then(|v| v.as_i64()) {
-                url_params.push(format!("vehicleAxleWeight={}", axle_weight));
-            }
-            if let Some(length) = vehicle_params.get("length").and_then(|v| v.as_f64()) {
-                url_params.push(format!("vehicleLength={}", length));
-            }
-            if let Some(width) = vehicle_params.get("width").and_then(|v| v.as_f64()) {
-                url_params.push(format!("vehicleWidth={}", width));
-            }
-            if let Some(height) = vehicle_params.get("height").and_then(|v| v.as_f64()) {
-                url_params.push(format!("vehicleHeight={}", height));
-            }
-            if let Some(commercial) = vehicle_params.get("commercial").and_then(|v| v.as_bool()) {
-                if commercial {
-                    url_params.push("vehicleCommercial=true".to_string());
-                }
-            }
-        }
-
+        } 
+    
         // Make direct TomTom Routing API call with commercial vehicle parameters
         let url = format!(
             "{}/routing/1/calculateRoute/{},{}:{},{}/json?{}",
