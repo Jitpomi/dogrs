@@ -252,18 +252,48 @@ impl TomTomAdapter {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to parse TomTom response: {}", e))?;
 
-        // Extract route information from TomTom response
+        // Extract route information from TomTom response including geometry
         if let Some(routes) = json_response["routes"].as_array() {
             if let Some(route) = routes.first() {
                 let summary = &route["summary"];
                 let distance = summary["lengthInMeters"].as_i64().unwrap_or(0) as i32;
                 let duration = summary["travelTimeInSeconds"].as_i64().unwrap_or(0) as i32;
 
+                // Extract route geometry coordinates from legs
+                let mut route_points = Vec::new();
+                if let Some(legs) = route["legs"].as_array() {
+                    for leg in legs {
+                        if let Some(points) = leg["points"].as_array() {
+                            for point in points {
+                                if let (Some(lat), Some(lng)) = (
+                                    point["latitude"].as_f64(),
+                                    point["longitude"].as_f64()
+                                ) {
+                                    route_points.push(json!({
+                                        "lat": lat,
+                                        "lng": lng
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 return Ok(json!({
                     "distance_meters": distance,
                     "duration_seconds": duration,
                     "vehicle_id": vehicle_id,
                     "delivery_id": delivery_id,
+                    "route_points": route_points,
+                    "route_geometry": {
+                        "type": "LineString",
+                        "coordinates": route_points.iter().map(|p| {
+                            vec![
+                                p["lng"].as_f64().unwrap_or(0.0),
+                                p["lat"].as_f64().unwrap_or(0.0)
+                            ]
+                        }).collect::<Vec<Vec<f64>>>()
+                    },
                     "route": {
                         "from": {"lat": from_lat, "lng": from_lng},
                         "to": {"lat": to_lat, "lng": to_lng}

@@ -227,8 +227,8 @@ insert $d1 isa delivery,
     has created-at 2024-01-14T10:00:00, 
     has route-id "RT001", 
     has customer-priority "premium", 
-    has dest-lat 40.6782, 
-    has dest-lng -73.9442;
+    has dest-lat 40.6502, 
+    has dest-lng -74.0785;
 
 insert $d2 isa delivery, 
     has delivery-id "DEL002", 
@@ -242,8 +242,8 @@ insert $d2 isa delivery,
     has created-at 2024-01-14T10:00:00, 
     has route-id "RT002", 
     has customer-priority "standard", 
-    has dest-lat 40.7282, 
-    has dest-lng -73.7949;
+    has dest-lat 40.7614, 
+    has dest-lng -73.8370;
 
 insert $d3 isa delivery, 
     has delivery-id "DEL003", 
@@ -272,8 +272,8 @@ insert $d4 isa delivery,
     has created-at 2024-01-14T10:00:00, 
     has route-id "RT004", 
     has customer-priority "urgent", 
-    has dest-lat 40.7505, 
-    has dest-lng -73.9934;
+    has dest-lat 40.7831, 
+    has dest-lng -73.9712;
 
 # ===========================
 # OPERATIONS (3 operations)

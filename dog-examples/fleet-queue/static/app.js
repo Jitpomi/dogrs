@@ -4,6 +4,11 @@ class FleetCommandPro {
         this.tomtomApiKey = 'c1xp5uxxF9W7z0tPjNcQC48nQlABojKH';
         this.map = null;
         this.vehicleMarkers = new Map();
+        this.deliveryMarkers = new Map();
+        this.assignmentRoutes = new Map();
+        this.trackedRoute = null;
+        this.trackedDeliveryMarker = null;
+        this.trackedVehicleId = null;
         this.currentView = 'dispatch';
         
         // Enterprise fleet data
@@ -372,6 +377,14 @@ class FleetCommandPro {
                     from { transform: translateX(100%); opacity: 0; }
                     to { transform: translateX(0); opacity: 1; }
                 }
+                @keyframes slideInFromRight {
+                    from { transform: translateX(100%); opacity: 0; }
+                    to { transform: translateX(0); opacity: 1; }
+                }
+                @keyframes slideOutToRight {
+                    from { transform: translateX(0); opacity: 1; }
+                    to { transform: translateX(100%); opacity: 0; }
+                }
   /* --- TomTom popup: remove inner padding + clip overflow --- */
   .custom-popup .tt-popup-content {
     padding: 0 !important;
@@ -703,19 +716,19 @@ class FleetCommandPro {
                                 <div class="space-y-3">
                                     <div class="flex justify-between items-center">
                                         <span class="text-slate-600 text-sm">Driver:</span>
-                                        <span class="text-slate-900 font-medium text-sm">${driverName}</span>
+                                        <span class="text-slate-900 font-medium text-sm driver-name">${driverName}</span>
                                     </div>
                                     <div class="flex justify-between items-center">
                                         <span class="text-slate-600 text-sm">Status:</span>
-                                        <span class="px-2 py-1 text-xs font-medium rounded-full capitalize text-white" style="background: ${statusColor};">${driverStatus}</span>
+                                        <span class="px-2 py-1 text-xs font-medium rounded-full capitalize text-white driver-status" style="background: ${statusColor};">${driverStatus}</span>
                                     </div>
                                     <div class="flex justify-between items-center">
                                         <span class="text-slate-600 text-sm">Rating:</span>
-                                        <span class="text-slate-900 font-medium text-sm">${driverRating}/5 ⭐</span>
+                                        <span class="text-slate-900 font-medium text-sm driver-rating">${driverRating}/5 ⭐</span>
                                     </div>
                                     <div class="flex justify-between items-center">
                                         <span class="text-slate-600 text-sm">Certifications:</span>
-                                        <span class="text-slate-900 font-medium text-sm">${driverCerts}</span>
+                                        <span class="text-slate-900 font-medium text-sm driver-certs">${driverCerts}</span>
                                     </div>
                                     
                                     <div class="pt-3 border-t border-gray-100">
@@ -847,7 +860,7 @@ class FleetCommandPro {
                         
                         <!-- Footer Actions -->
                         <div class="vehicle-popup-footer mt-6 pt-4 border-t border-gray-100">
-                            <div class="flex gap-3">
+                            <div class="flex gap-3" id="vehicle-actions-${vehicleId}">
                                 <button onclick="fleetCommand.trackVehicle('${vehicleId}')" class="text-xs px-4 py-2 bg-blue-500 hover:bg-blue-600 border border-blue-500 rounded text-white transition-colors">
                                     Track Vehicle
                                 </button>
@@ -866,6 +879,8 @@ class FleetCommandPro {
             popup.on('open', () => {
                 // Load traffic data when popup opens
                 setTimeout(() => this.loadVehicleTrafficData(vehicleId, lat, lng), 100);
+                // Load current driver data when popup opens
+                setTimeout(() => this.loadDriverDataForPopup(vehicleId), 150);
             });
             
             // Add intelligent popup positioning and map centering
@@ -876,6 +891,8 @@ class FleetCommandPro {
                 setTimeout(() => this.ensurePopupInView(vehicleId, [lng, lat]), 300);
                 // Load traffic data for this vehicle
                 setTimeout(() => this.loadVehicleTrafficData(vehicleId, lat, lng), 500);
+                // Load current driver data for this vehicle
+                setTimeout(() => this.loadDriverDataForPopup(vehicleId), 550);
             });
         });
         
@@ -885,6 +902,393 @@ class FleetCommandPro {
         
         // Center map on all vehicles after all markers are added
         this.centerMapOnVehicles();
+    }
+    
+    async addDeliveryMarkers() {
+        if (!this.map) return;
+        
+        console.log('🚚 Starting addDeliveryMarkers...');
+        
+        // Clear existing delivery markers
+        this.deliveryMarkers.forEach(marker => marker.remove());
+        this.deliveryMarkers.clear();
+        
+        try {
+            // Get all deliveries with their coordinates
+            const response = await fetch(`${this.apiBaseUrl}/deliveries`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'read'
+                },
+                body: JSON.stringify({
+                    query: `
+                        match 
+                        $delivery isa delivery,
+                            has delivery-id $deliveryId,
+                            has customer-name $customer,
+                            has delivery-address $address,
+                            has dest-lat $lat,
+                            has dest-lng $lng,
+                            has delivery-status $status,
+                            has customer-priority $priority;
+                        select $deliveryId, $customer, $address, $lat, $lng, $status, $priority;
+                    `
+                })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.ok && data.ok.answers) {
+                    console.log(`📦 Found ${data.ok.answers.length} deliveries to display`);
+                    data.ok.answers.forEach(delivery => {
+                        const deliveryData = delivery.data;
+                        const deliveryId = deliveryData.deliveryId?.value;
+                        const customer = deliveryData.customer?.value;
+                        const address = deliveryData.address?.value;
+                        const lat = parseFloat(deliveryData.lat?.value);
+                        const lng = parseFloat(deliveryData.lng?.value);
+                        const status = deliveryData.status?.value;
+                        const priority = deliveryData.priority?.value;
+                        
+                        console.log(`📍 Creating delivery marker: ${deliveryId} at (${lat}, ${lng})`);
+                        
+                        if (deliveryId && lat && lng) {
+                            this.createDeliveryMarker(deliveryId, customer, address, lat, lng, status, priority);
+                        } else {
+                            console.warn(`⚠️ Skipping delivery ${deliveryId}: missing coordinates`);
+                        }
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Error loading delivery markers:', error);
+            console.error('Delivery markers error details:', error.message, error.stack);
+        }
+    }
+    
+    createDeliveryMarker(deliveryId, customer, address, lat, lng, status, priority) {
+        const statusColors = {
+            'pending': '#f59e0b',
+            'in_transit': '#3b82f6',
+            'delivered': '#10b981',
+            'cancelled': '#ef4444'
+        };
+        
+        const priorityIcons = {
+            'standard': '📦',
+            'express': '⚡',
+            'urgent': '🚨',
+            'critical': '🔥'
+        };
+        
+        const color = statusColors[status] || '#6b7280';
+        const icon = priorityIcons[priority] || '📦';
+        
+        const markerElement = document.createElement('div');
+        markerElement.className = 'delivery-marker';
+        markerElement.innerHTML = `
+            <div style="
+                width: 28px; 
+                height: 28px; 
+                background: linear-gradient(135deg, ${color}, ${this.darkenColor(color, 0.2)});
+                border: 2px solid #ffffff;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.3s ease;
+            " onmouseover="this.style.transform='scale(1.2)'; this.style.zIndex='1000';" 
+               onmouseout="this.style.transform='scale(1)'; this.style.zIndex='auto';">
+                ${icon}
+            </div>
+        `;
+        
+        const marker = new tt.Marker({ element: markerElement })
+            .setLngLat([lng, lat])
+            .addTo(this.map);
+        
+        const popup = new tt.Popup({ 
+            offset: 25,
+            className: 'custom-popup',
+            closeOnClick: false,
+            closeButton: false
+        })
+        .setHTML(`
+            <div class="delivery-popup-container" style="width: 300px;">
+                <div class="flex items-center gap-3 mb-4">
+                    <div style="background-color: ${color}; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 50%;">
+                        <span class="text-white text-xs">${icon}</span>
+                    </div>
+                    <div>
+                        <h3 class="text-sm font-semibold text-slate-900">${deliveryId}</h3>
+                        <p class="text-xs text-slate-600">${customer}</p>
+                    </div>
+                </div>
+                
+                <div class="space-y-2 text-xs">
+                    <div class="flex justify-between">
+                        <span class="text-slate-600">Address:</span>
+                        <span class="text-slate-900 font-medium text-right" style="max-width: 180px;">${address}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-600">Status:</span>
+                        <span class="px-2 py-1 text-xs font-medium rounded-full text-white" style="background: ${color};">${status}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-600">Priority:</span>
+                        <span class="text-slate-900 font-medium">${priority}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-600">Coordinates:</span>
+                        <span class="text-slate-900 font-mono text-xs">${lat.toFixed(4)}, ${lng.toFixed(4)}</span>
+                    </div>
+                </div>
+            </div>
+        `);
+        
+        marker.setPopup(popup);
+        this.deliveryMarkers.set(deliveryId, marker);
+    }
+    
+    async addAssignmentRoutes() {
+        if (!this.map) return;
+        
+        console.log('🛣️ Starting addAssignmentRoutes...');
+        
+        // Clear existing assignment routes - remove layers before sources
+        this.assignmentRoutes.forEach(route => {
+            if (route.layer && this.map.getLayer(route.layer)) {
+                this.map.removeLayer(route.layer);
+            }
+            if (route.source && this.map.getSource(route.source)) {
+                this.map.removeSource(route.source);
+            }
+        });
+        this.assignmentRoutes.clear();
+        
+        try {
+            // Get all active assignments with vehicle and delivery coordinates
+            const response = await fetch(`${this.apiBaseUrl}/operations`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'read'
+                },
+                body: JSON.stringify({
+                    query: `
+                        match 
+                        $assignment (assigned-employee: $employee, assigned-vehicle: $vehicle, assigned-delivery: $delivery) isa assignment,
+                            has assignment-status $status;
+                        $vehicle has vehicle-id $vehicleId, has gps-latitude $vLat, has gps-longitude $vLng;
+                        $delivery has delivery-id $deliveryId, has dest-lat $dLat, has dest-lng $dLng;
+                        $status == "active";
+                        select $vehicleId, $deliveryId, $vLat, $vLng, $dLat, $dLng;
+                    `
+                })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                console.log('🔍 Assignment routes response:', data);
+                if (data.ok && data.ok.answers) {
+                    console.log(`🚛 Found ${data.ok.answers.length} active assignments to display`);
+                    data.ok.answers.forEach((assignment, index) => {
+                        const assignmentData = assignment.data;
+                        const vehicleId = assignmentData.vehicleId?.value;
+                        const deliveryId = assignmentData.deliveryId?.value;
+                        const vLat = parseFloat(assignmentData.vLat?.value);
+                        const vLng = parseFloat(assignmentData.vLng?.value);
+                        const dLat = parseFloat(assignmentData.dLat?.value);
+                        const dLng = parseFloat(assignmentData.dLng?.value);
+                        
+                        console.log(`🗺️ Creating route: ${vehicleId} (${vLat}, ${vLng}) → ${deliveryId} (${dLat}, ${dLng})`);
+                        
+                        if (vehicleId && deliveryId && vLat && vLng && dLat && dLng) {
+                            // Add small delay between route calculations to prevent API rate limiting
+                            setTimeout(() => {
+                                this.createAssignmentRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng, index);
+                            }, index * 200); // 200ms delay between each route calculation
+                        } else {
+                            console.warn(`⚠️ Skipping assignment route: missing data for ${vehicleId} → ${deliveryId}`);
+                        }
+                    });
+                } else {
+                    console.log('📭 No active assignments found');
+                }
+            } else {
+                console.error('❌ Assignment routes request failed:', response.status, response.statusText);
+            }
+        } catch (error) {
+            console.error('Error loading assignment routes:', error);
+        }
+    }
+    
+    async createAssignmentRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng, index) {
+        const sourceId = `assignment-route-${index}`;
+        const layerId = `assignment-line-${index}`;
+        
+        console.log(`🛣️ Calculating TomTom route for assignment: ${vehicleId} → ${deliveryId}`);
+        
+        try {
+            // Use TomTom route calculation API for actual road-based routes
+            const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'route'
+                },
+                body: JSON.stringify({
+                    from_lat: vLat,
+                    from_lng: vLng,
+                    to_lat: dLat,
+                    to_lng: dLng
+                })
+            });
+            
+            if (response.ok) {
+                const routeData = await response.json();
+                
+                let routeGeoJSON;
+                
+                if (routeData.status === 'success' && routeData.route_geometry && routeData.route_geometry.coordinates) {
+                    const coordinates = routeData.route_geometry.coordinates;
+                    
+                    routeGeoJSON = {
+                        type: 'Feature',
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: coordinates
+                        },
+                        properties: {
+                            vehicleId: vehicleId,
+                            deliveryId: deliveryId,
+                            distance: routeData.distance_meters || 0,
+                            duration: routeData.duration_seconds || 0
+                        }
+                    };
+                    console.log(`✅ TomTom assignment route calculated: ${coordinates.length} points, ${(routeData.distance_meters / 1000).toFixed(1)}km`);
+                } else {
+                    console.warn(`⚠️ TomTom route failed for ${vehicleId} → ${deliveryId}, falling back to straight line`);
+                    routeGeoJSON = this.createStraightLineRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng);
+                }
+                
+                // Wait for map to be fully loaded before adding source and layer
+                if (this.map.isStyleLoaded()) {
+                    this.addRouteToMap(sourceId, layerId, routeGeoJSON, vehicleId, deliveryId);
+                } else {
+                    this.map.on('styledata', () => {
+                        this.addRouteToMap(sourceId, layerId, routeGeoJSON, vehicleId, deliveryId);
+                    });
+                }
+                
+            } else {
+                throw new Error(`TomTom route API failed: ${response.status}`);
+            }
+            
+        } catch (error) {
+            console.error(`❌ TomTom route calculation failed for ${vehicleId} → ${deliveryId}: ${error.message}`);
+            console.log('📍 Falling back to straight line route');
+            
+            // Fallback to straight line if TomTom fails
+            const routeGeoJSON = this.createStraightLineRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng);
+            
+            if (this.map.isStyleLoaded()) {
+                this.addRouteToMap(sourceId, layerId, routeGeoJSON, vehicleId, deliveryId);
+            } else {
+                this.map.on('styledata', () => {
+                    this.addRouteToMap(sourceId, layerId, routeGeoJSON, vehicleId, deliveryId);
+                });
+            }
+        }
+    }
+    
+    createStraightLineRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng) {
+        return {
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: [
+                    [vLng, vLat], // Vehicle position
+                    [dLng, dLat]  // Delivery destination
+                ]
+            },
+            properties: {
+                vehicleId: vehicleId,
+                deliveryId: deliveryId,
+                fallback: true
+            }
+        };
+    }
+    
+    addRouteToMap(sourceId, layerId, routeGeoJSON, vehicleId, deliveryId) {
+        try {
+            // Add source if it doesn't exist
+            if (!this.map.getSource(sourceId)) {
+                this.map.addSource(sourceId, {
+                    type: 'geojson',
+                    data: routeGeoJSON
+                });
+            }
+            
+            // Add layer if it doesn't exist
+            if (!this.map.getLayer(layerId)) {
+                this.map.addLayer({
+                    id: layerId,
+                    type: 'line',
+                    source: sourceId,
+                    layout: {
+                        'line-join': 'round',
+                        'line-cap': 'round'
+                    },
+                    paint: {
+                        'line-color': '#3b82f6',
+                        'line-width': 3,
+                        'line-opacity': 0.7,
+                        'line-dasharray': [2, 2]
+                    }
+                });
+                
+                // Add click handler for route
+                this.map.on('click', layerId, (e) => {
+                    const coordinates = e.lngLat;
+                    new tt.Popup()
+                        .setLngLat(coordinates)
+                        .setHTML(`
+                            <div class="text-sm">
+                                <div class="font-semibold mb-2">Active Assignment</div>
+                                <div class="space-y-1">
+                                    <div><span class="text-slate-600">Vehicle:</span> ${vehicleId}</div>
+                                    <div><span class="text-slate-600">Delivery:</span> ${deliveryId}</div>
+                                    <div><span class="text-slate-600">Status:</span> <span class="text-blue-600">En Route</span></div>
+                                </div>
+                            </div>
+                        `)
+                        .addTo(this.map);
+                });
+                
+                // Change cursor on hover
+                this.map.on('mouseenter', layerId, () => {
+                    this.map.getCanvas().style.cursor = 'pointer';
+                });
+                
+                this.map.on('mouseleave', layerId, () => {
+                    this.map.getCanvas().style.cursor = '';
+                });
+            }
+            
+            // Store route info for cleanup
+            this.assignmentRoutes.set(`${vehicleId}-${deliveryId}`, {
+                source: sourceId,
+                layer: layerId
+            });
+            
+        } catch (error) {
+            console.error('Error adding route to map:', error);
+        }
     }
     
     ensurePopupInView(vehicleId, coordinates) {
@@ -1160,35 +1564,7 @@ class FleetCommandPro {
         }
     }
 
-    async startTrafficMonitoring() {
-        
-        // Monitor traffic every 2 minutes
-        setInterval(() => {
-            this.checkTrafficConditions();
-        }, 120000);
 
-        // Initial traffic check
-        this.checkTrafficConditions();
-    }
-
-    async checkTrafficConditions() {
-        try {
-            // Get current vehicle positions and check traffic for active routes
-            const activeVehicles = this.data.vehicles.filter(v => 
-                v.data?.vehicle?.status === 'operational' || v.data?.vehicle?.status === 'busy'
-            );
-
-            for (const vehicle of activeVehicles.slice(0, 3)) { // Limit to 3 vehicles to avoid API rate limits
-                const vehicleData = vehicle.data?.vehicle || {};
-                const vehicleId = vehicleData['vehicle-id'] || 'unknown';
-                
-                // Traffic checking disabled - should use real vehicle GPS coordinates
-                // TODO: Integrate with real vehicle GPS data when available
-            }
-        } catch (error) {
-            console.error('Traffic monitoring error:', error);
-        }
-    }
 
     async loadVehicleTrafficData(vehicleId, lat, lng) {
         try {
@@ -1218,12 +1594,18 @@ class FleetCommandPro {
                         match 
                         $assignment isa assignment (assigned-vehicle: $vehicle, assigned-delivery: $delivery);
                         $vehicle has vehicle-id "${vehicleId}";
+                        $assignment has assigned-at $timestamp,
+                                   has assignment-status "active";
                         $delivery has route-id $routeId,
                                  has pickup-address $pickup,
                                  has delivery-address $destination,
                                  has delivery-time $deliveryTime,
-                                 has delivery-status $deliveryStatus;
-                        select $routeId, $pickup, $destination, $deliveryTime, $deliveryStatus;
+                                 has delivery-status $deliveryStatus,
+                                 has dest-lat $destLat,
+                                 has dest-lng $destLng;
+                        select $routeId, $pickup, $destination, $deliveryTime, $deliveryStatus, $timestamp, $destLat, $destLng;
+                        sort $deliveryTime asc;
+                        limit 2;
                     `
                 })
             });
@@ -1231,11 +1613,11 @@ class FleetCommandPro {
             const routeData = await response.json();
             
             if (routeData.ok && routeData.ok.answers && routeData.ok.answers.length > 0) {
-                const route = routeData.ok.answers[0].data;
-                const routeId = route.routeId?.value || 'Unknown';
-                const destination = route.destination?.value || 'Unknown destination';
-                const deliveryTime = route.deliveryTime?.value || '';
-                const deliveryStatus = route.deliveryStatus?.value || 'pending';
+                const currentRoute = routeData.ok.answers[0].data;
+                const routeId = currentRoute.routeId?.value || 'Unknown';
+                const destination = currentRoute.destination?.value || 'Unknown destination';
+                const deliveryTime = currentRoute.deliveryTime?.value || '';
+                const deliveryStatus = currentRoute.deliveryStatus?.value || 'pending';
                 
                 // Calculate ETA based on delivery time
                 let eta = 'Unknown';
@@ -1254,10 +1636,13 @@ class FleetCommandPro {
                 // Get traffic conditions based on route and destination
                 const trafficConditions = this.getTrafficConditionForRoute(routeId, destination);
                 
-                // Update UI with database route data
+                // Update UI with current route data
                 routeStatus.textContent = `${routeId} → ${destination.split(',')[0]}`;
                 trafficStatus.innerHTML = `<span style="color: ${trafficConditions.color};">${trafficConditions.condition}</span>`;
                 etaElement.textContent = eta;
+                
+                // Create dual route visualization
+                this.createDualRouteVisualization(vehicleId, lat, lng, routeData.ok.answers);
                 
             } else {
                 routeStatus.textContent = 'No Active Route';
@@ -1273,6 +1658,226 @@ class FleetCommandPro {
             if (routeStatus) routeStatus.textContent = 'Error Loading Route';
             if (trafficStatus) trafficStatus.innerHTML = '<span style="color: #ef4444;">Error</span>';
             if (etaElement) etaElement.textContent = 'Error';
+        }
+    }
+
+    async createDualRouteVisualization(vehicleId, vehicleLat, vehicleLng, deliveries) {
+        try {
+            // Clear existing routes for this vehicle
+            this.clearVehicleRoutes(vehicleId);
+            
+            if (deliveries.length === 0) return;
+            
+            // Current route (first delivery)
+            const currentDelivery = deliveries[0].data;
+            const currentDestLat = parseFloat(currentDelivery.destLat?.value);
+            const currentDestLng = parseFloat(currentDelivery.destLng?.value);
+            const currentRouteId = currentDelivery.routeId?.value;
+            
+            if (currentDestLat && currentDestLng) {
+                await this.createVehicleRoute(
+                    vehicleId, 
+                    currentRouteId, 
+                    vehicleLat, 
+                    vehicleLng, 
+                    currentDestLat, 
+                    currentDestLng,
+                    'current'
+                );
+            }
+            
+            // Next route (second delivery if exists)
+            if (deliveries.length > 1) {
+                const nextDelivery = deliveries[1].data;
+                const nextDestLat = parseFloat(nextDelivery.destLat?.value);
+                const nextDestLng = parseFloat(nextDelivery.destLng?.value);
+                const nextRouteId = nextDelivery.routeId?.value;
+                
+                if (nextDestLat && nextDestLng) {
+                    // For next route, start from current delivery destination
+                    await this.createVehicleRoute(
+                        vehicleId, 
+                        nextRouteId, 
+                        currentDestLat, 
+                        currentDestLng, 
+                        nextDestLat, 
+                        nextDestLng,
+                        'next'
+                    );
+                }
+            }
+            
+        } catch (error) {
+            console.error(`Error creating dual route visualization for ${vehicleId}:`, error);
+        }
+    }
+
+    clearVehicleRoutes(vehicleId) {
+        // Clear existing current and next routes for this vehicle
+        const routeTypes = ['current', 'next'];
+        routeTypes.forEach(type => {
+            const sourceId = `${vehicleId}-${type}-route`;
+            const layerId = `${vehicleId}-${type}-route-line`;
+            
+            if (this.map.getLayer(layerId)) {
+                this.map.removeLayer(layerId);
+            }
+            if (this.map.getSource(sourceId)) {
+                this.map.removeSource(sourceId);
+            }
+        });
+    }
+
+    async createVehicleRoute(vehicleId, routeId, fromLat, fromLng, toLat, toLng, routeType) {
+        const sourceId = `${vehicleId}-${routeType}-route`;
+        const layerId = `${vehicleId}-${routeType}-route-line`;
+        
+        try {
+            // Use TomTom route calculation API
+            const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'route'
+                },
+                body: JSON.stringify({
+                    from_lat: fromLat,
+                    from_lng: fromLng,
+                    to_lat: toLat,
+                    to_lng: toLng
+                })
+            });
+            
+            let routeGeoJSON;
+            
+            if (response.ok) {
+                const routeData = await response.json();
+                
+                if (routeData.status === 'success' && routeData.route_geometry && routeData.route_geometry.coordinates) {
+                    const coordinates = routeData.route_geometry.coordinates;
+                    
+                    routeGeoJSON = {
+                        type: 'Feature',
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: coordinates
+                        },
+                        properties: {
+                            vehicleId: vehicleId,
+                            routeId: routeId,
+                            routeType: routeType,
+                            distance: routeData.distance_meters || 0,
+                            duration: routeData.duration_seconds || 0
+                        }
+                    };
+                } else {
+                    // Fallback to straight line
+                    routeGeoJSON = this.createStraightLineRoute(vehicleId, routeId, fromLat, fromLng, toLat, toLng);
+                    routeGeoJSON.properties.routeType = routeType;
+                }
+            } else {
+                // Fallback to straight line
+                routeGeoJSON = this.createStraightLineRoute(vehicleId, routeId, fromLat, fromLng, toLat, toLng);
+                routeGeoJSON.properties.routeType = routeType;
+            }
+            
+            // Add route to map with different styling based on type
+            this.addDualRouteToMap(sourceId, layerId, routeGeoJSON, routeType);
+            
+        } catch (error) {
+            console.error(`Error creating ${routeType} route for ${vehicleId}:`, error);
+            
+            // Fallback to straight line
+            const routeGeoJSON = this.createStraightLineRoute(vehicleId, routeId, fromLat, fromLng, toLat, toLng);
+            routeGeoJSON.properties.routeType = routeType;
+            this.addDualRouteToMap(sourceId, layerId, routeGeoJSON, routeType);
+        }
+    }
+
+    addDualRouteToMap(sourceId, layerId, routeGeoJSON, routeType) {
+        try {
+            // Add source if it doesn't exist
+            if (!this.map.getSource(sourceId)) {
+                this.map.addSource(sourceId, {
+                    type: 'geojson',
+                    data: routeGeoJSON
+                });
+            }
+            
+            // Define styling based on route type
+            const routeStyles = {
+                current: {
+                    color: '#3b82f6',      // Blue for current route
+                    width: 4,
+                    opacity: 0.8,
+                    dasharray: null        // Solid line
+                },
+                next: {
+                    color: '#10b981',      // Green for next route
+                    width: 3,
+                    opacity: 0.6,
+                    dasharray: [4, 4]      // Dashed line
+                }
+            };
+            
+            const style = routeStyles[routeType] || routeStyles.current;
+            
+            // Add layer if it doesn't exist
+            if (!this.map.getLayer(layerId)) {
+                const layerConfig = {
+                    id: layerId,
+                    type: 'line',
+                    source: sourceId,
+                    layout: {
+                        'line-join': 'round',
+                        'line-cap': 'round'
+                    },
+                    paint: {
+                        'line-color': style.color,
+                        'line-width': style.width,
+                        'line-opacity': style.opacity
+                    }
+                };
+                
+                if (style.dasharray) {
+                    layerConfig.paint['line-dasharray'] = style.dasharray;
+                }
+                
+                this.map.addLayer(layerConfig);
+                
+                // Add click handler for route
+                this.map.on('click', layerId, (e) => {
+                    const coordinates = e.lngLat;
+                    const properties = routeGeoJSON.properties;
+                    
+                    new tt.Popup()
+                        .setLngLat(coordinates)
+                        .setHTML(`
+                            <div class="text-sm">
+                                <div class="font-semibold mb-2">${routeType === 'current' ? 'Current Route' : 'Next Route'}</div>
+                                <div class="space-y-1">
+                                    <div><span class="text-slate-600">Vehicle:</span> ${properties.vehicleId}</div>
+                                    <div><span class="text-slate-600">Route:</span> ${properties.routeId}</div>
+                                    <div><span class="text-slate-600">Type:</span> <span class="capitalize text-${routeType === 'current' ? 'blue' : 'green'}-600">${routeType}</span></div>
+                                    <div><span class="text-slate-600">Distance:</span> ${(properties.distance / 1000).toFixed(1)}km</div>
+                                </div>
+                            </div>
+                        `)
+                        .addTo(this.map);
+                });
+                
+                // Change cursor on hover
+                this.map.on('mouseenter', layerId, () => {
+                    this.map.getCanvas().style.cursor = 'pointer';
+                });
+                
+                this.map.on('mouseleave', layerId, () => {
+                    this.map.getCanvas().style.cursor = '';
+                });
+            }
+            
+        } catch (error) {
+            console.error(`Error adding ${routeType} route to map:`, error);
         }
     }
     
@@ -1411,9 +2016,8 @@ class FleetCommandPro {
             notificationContainer.id = 'notificationContainer';
             notificationContainer.style.cssText = `
                 position: fixed;
-                top: 20px;
-                left: 50%;
-                transform: translateX(-50%);
+                bottom: 20px;
+                right: 20px;
                 z-index: 10000;
                 pointer-events: none;
             `;
@@ -1430,7 +2034,7 @@ class FleetCommandPro {
         
         notification.className = `${colors[type] || colors.info} text-white px-4 py-2 rounded-lg shadow-lg mb-2 text-sm font-medium`;
         notification.style.cssText = `
-            animation: slideDown 0.3s ease-out;
+            animation: slideInFromRight 0.3s ease-out;
             pointer-events: auto;
         `;
         notification.textContent = message;
@@ -1440,7 +2044,7 @@ class FleetCommandPro {
         // Auto-remove after 3 seconds
         setTimeout(() => {
             if (notification.parentElement) {
-                notification.style.animation = 'slideUp 0.3s ease-in';
+                notification.style.animation = 'slideOutToRight 0.3s ease-in';
                 setTimeout(() => notification.remove(), 300);
             }
         }, 3000);
@@ -1461,7 +2065,7 @@ class FleetCommandPro {
     }
 
     // Vehicle interaction functions
-    trackVehicle(vehicleId) {
+    async trackVehicle(vehicleId) {
         this.showNotification(`Now tracking vehicle ${vehicleId}`, 'info');
         
         // Find and highlight the vehicle marker
@@ -1473,6 +2077,514 @@ class FleetCommandPro {
                 zoom: 15,
                 duration: 1000
             });
+        }
+        
+        // Set tracking mode without clearing existing routes
+        this.enterTrackingMode(vehicleId);
+        
+        // Refresh popup route data to show current tracking assignment
+        this.loadVehicleRouteData(vehicleId);
+    }
+
+    async displayVehicleRoute(vehicleId) {
+        if (!this.map) return;
+        
+        console.log(`🛣️ Displaying route for vehicle ${vehicleId}`);
+        
+        try {
+            // Get assignment for this specific vehicle using the working operations endpoint
+            const response = await fetch(`${this.apiBaseUrl}/operations`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'read'
+                },
+                body: JSON.stringify({
+                    query: `
+                        match 
+                        $assignment (assigned-employee: $employee, assigned-vehicle: $vehicle, assigned-delivery: $delivery) isa assignment,
+                            has assignment-status $status;
+                        $vehicle has vehicle-id $vehicleId, has gps-latitude $vLat, has gps-longitude $vLng;
+                        $delivery has delivery-id $deliveryId, has dest-lat $dLat, has dest-lng $dLng;
+                        $status == "active";
+                        select $vehicleId, $deliveryId, $vLat, $vLng, $dLat, $dLng;
+                    `
+                })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                console.log(`🔍 Vehicle ${vehicleId} assignment response:`, data);
+                
+                if (data.ok && data.ok.answers && data.ok.answers.length > 0) {
+                    // Find the assignment for this specific vehicle
+                    const vehicleAssignment = data.ok.answers.find(assignment => {
+                        const assignmentData = assignment.data;
+                        return assignmentData.vehicleId?.value === vehicleId;
+                    });
+                    
+                    if (vehicleAssignment) {
+                        const assignmentData = vehicleAssignment.data;
+                        
+                        const vLat = parseFloat(assignmentData.vLat?.value);
+                        const vLng = parseFloat(assignmentData.vLng?.value);
+                        const dLat = parseFloat(assignmentData.dLat?.value);
+                        const dLng = parseFloat(assignmentData.dLng?.value);
+                        const deliveryId = assignmentData.deliveryId?.value;
+                        
+                        if (vLat && vLng && dLat && dLng && deliveryId) {
+                            console.log(`🗺️ Creating route: ${vehicleId} (${vLat}, ${vLng}) → ${deliveryId} (${dLat}, ${dLng})`);
+                            
+                            // Clear any existing tracked route and delivery marker (but preserve assignment routes)
+                            this.clearTrackedRoute();
+                            
+                            // Create and display the delivery marker for this specific delivery
+                            this.addTrackedDeliveryMarker(deliveryId, dLat, dLng);
+                            
+                            // Create and display the route
+                            this.createTrackedRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng);
+                            
+                            this.showNotification(`Route displayed for ${vehicleId} → ${deliveryId}`, 'success');
+                        } else {
+                            console.warn(`⚠️ Missing coordinate data for ${vehicleId}`);
+                            this.showNotification(`No route data available for ${vehicleId}`, 'warning');
+                        }
+                    } else {
+                        console.log(`📭 No vehicle assignment found for ${vehicleId}`);
+                        this.showNotification(`No active assignment for ${vehicleId}`, 'info');
+                    }
+                } else {
+                    console.log(`📭 No active assignments found`);
+                    this.showNotification(`No active assignment for ${vehicleId}`, 'info');
+                }
+            } else {
+                console.error('❌ Failed to fetch vehicle assignment:', response.status);
+                this.showNotification('Failed to load route data', 'error');
+            }
+        } catch (error) {
+            console.error('Error displaying vehicle route:', error);
+            this.showNotification('Error loading route', 'error');
+        }
+    }
+
+    clearTrackedRoute() {
+        // Clear any existing tracked route - remove layers before sources
+        if (this.trackedRoute) {
+            if (this.trackedRoute.layer && this.map.getLayer(this.trackedRoute.layer)) {
+                this.map.removeLayer(this.trackedRoute.layer);
+            }
+            if (this.trackedRoute.source && this.map.getSource(this.trackedRoute.source)) {
+                this.map.removeSource(this.trackedRoute.source);
+            }
+            this.trackedRoute = null;
+        }
+        
+        // Clear any existing tracked delivery marker
+        if (this.trackedDeliveryMarker) {
+            this.trackedDeliveryMarker.remove();
+            this.trackedDeliveryMarker = null;
+        }
+        
+        // Exit tracking mode - restore all vehicles
+        if (this.trackedVehicleId) {
+            this.exitTrackingMode();
+        }
+    }
+
+    addTrackedDeliveryMarker(deliveryId, lat, lng) {
+        if (!this.map) return;
+        
+        console.log(`📦 Adding tracked delivery marker: ${deliveryId} at (${lat}, ${lng})`);
+        
+        // Create delivery marker element
+        const markerElement = document.createElement('div');
+        markerElement.className = 'delivery-marker';
+        
+        markerElement.innerHTML = `
+            <div style="
+                width: 28px; 
+                height: 28px; 
+                background: linear-gradient(135deg, #f59e0b, #d97706);
+                border: 3px solid #ffffff;
+                border-radius: 8px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                box-shadow: 0 6px 16px rgba(0,0,0,0.7), 0 0 0 2px rgba(0,0,0,0.3);
+                cursor: pointer;
+                position: relative;
+                font-size: 14px;
+                transition: all 0.3s ease;
+                backdrop-filter: blur(10px);
+            " onmouseover="this.style.transform='scale(1.2)'; this.style.zIndex='1000';" onmouseout="this.style.transform='scale(1)'; this.style.zIndex='auto';">
+                <div style="font-size: 12px; line-height: 1; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7));">📦</div>
+            </div>
+            <div style="
+                position: absolute;
+                top: 32px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: linear-gradient(135deg, rgba(245,158,11,0.95), rgba(217,119,6,0.8));
+                color: #ffffff;
+                padding: 2px 6px;
+                border-radius: 4px;
+                font-size: 9px;
+                font-weight: 800;
+                white-space: nowrap;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.8);
+                border: 1px solid rgba(255,255,255,0.4);
+                backdrop-filter: blur(5px);
+                text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+            ">${deliveryId}</div>
+        `;
+        
+        // Create and add the marker to the map
+        this.trackedDeliveryMarker = new tt.Marker({ element: markerElement })
+            .setLngLat([lng, lat])
+            .addTo(this.map);
+        
+        // Add popup for delivery marker
+        const popup = new tt.Popup({ 
+            offset: 25,
+            className: 'custom-popup',
+            closeOnClick: false,
+            closeButton: true
+        })
+        .setHTML(`
+            <div class="p-4">
+                <h3 class="font-semibold text-slate-900 mb-2">📦 Delivery Destination</h3>
+                <div class="space-y-2">
+                    <div><span class="text-slate-600">Delivery ID:</span> <span class="font-medium">${deliveryId}</span></div>
+                    <div><span class="text-slate-600">Location:</span> <span class="font-medium">${lat.toFixed(4)}, ${lng.toFixed(4)}</span></div>
+                    <div><span class="text-slate-600">Status:</span> <span class="text-amber-600 font-medium">Tracked Destination</span></div>
+                </div>
+            </div>
+        `);
+        
+        // Add click event to show popup
+        markerElement.addEventListener('click', () => {
+            popup.setLngLat([lng, lat]).addTo(this.map);
+        });
+        
+        console.log(`✅ Tracked delivery marker added: ${deliveryId}`);
+    }
+
+    async createTrackedRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng) {
+        const sourceId = `tracked-route`;
+        const layerId = `tracked-route-line`;
+        
+        console.log(`🛣️ Calculating TomTom route: ${vehicleId} → ${deliveryId}`);
+        
+        try {
+            // Use TomTom route calculation API for actual road-based routes with geometry
+            const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'route'
+                },
+                body: JSON.stringify({
+                    from_lat: vLat,
+                    from_lng: vLng,
+                    to_lat: dLat,
+                    to_lng: dLng,
+                    vehicle_id: vehicleId,
+                    delivery_id: deliveryId
+                })
+            });
+            
+            if (response.ok) {
+                const routeData = await response.json();
+                console.log(`🗺️ TomTom route response:`, routeData);
+                console.log(`🔍 Response keys:`, Object.keys(routeData));
+                console.log(`🔍 Response status:`, routeData.status);
+                
+                let routeGeoJSON;
+                
+                if (routeData.status === 'success' && routeData.route_geometry && routeData.route_geometry.coordinates) {
+                    const coordinates = routeData.route_geometry.coordinates;
+                    
+                    routeGeoJSON = {
+                        type: 'Feature',
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: coordinates
+                        },
+                        properties: {
+                            vehicleId: vehicleId,
+                            deliveryId: deliveryId,
+                            routeType: 'tomtom',
+                            distance: routeData.distance_meters || 0,
+                            duration: routeData.duration_seconds || 0
+                        }
+                    };
+                    console.log(`✅ TomTom route calculated: ${coordinates.length} points, ${(routeData.distance_meters / 1000).toFixed(1)}km`);
+                } else {
+                    console.error('❌ TomTom backend did not return route geometry');
+                    console.log('Response structure:', Object.keys(routeData));
+                    throw new Error('No route geometry in TomTom response');
+                }
+                
+                // Enter tracking mode and focus on this vehicle
+                this.enterTrackingMode(vehicleId);
+                
+                // Add the TomTom route to map
+                if (this.map.isStyleLoaded()) {
+                    this.addTrackedRouteToMap(sourceId, layerId, routeGeoJSON, vehicleId, deliveryId);
+                } else {
+                    this.map.on('styledata', () => {
+                        this.addTrackedRouteToMap(sourceId, layerId, routeGeoJSON, vehicleId, deliveryId);
+                    });
+                }
+                
+            } else {
+                throw new Error(`TomTom route API failed: ${response.status}`);
+            }
+            
+        } catch (error) {
+            console.error(`❌ TomTom route calculation failed: ${error.message}`);
+            this.showNotification(`Failed to calculate route for ${vehicleId}`, 'error');
+        }
+    }
+
+    async getTomTomTrafficForRoute(fromLat, fromLng, toLat, toLng) {
+        try {
+            console.log(`🚦 Checking traffic conditions for route...`);
+            
+            const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': 'traffic'
+                },
+                body: JSON.stringify({
+                    from_lat: fromLat,
+                    from_lng: fromLng,
+                    to_lat: toLat,
+                    to_lng: toLng,
+                    include_incidents: true
+                })
+            });
+            
+            if (response.ok) {
+                const trafficData = await response.json();
+                console.log(`🚦 Traffic data received:`, trafficData);
+                
+                if (trafficData.status === 'success') {
+                    return {
+                        routeType: trafficData.heavy_traffic ? 'eco' : 'fastest',
+                        avoidTraffic: trafficData.heavy_traffic || false,
+                        trafficDelay: trafficData.traffic_delay || 0,
+                        incidents: trafficData.incidents || []
+                    };
+                } else {
+                    console.warn('⚠️ Traffic API returned error:', trafficData.error);
+                    return { routeType: 'fastest', avoidTraffic: false };
+                }
+            } else {
+                console.warn('⚠️ Traffic API request failed:', response.status);
+                return { routeType: 'fastest', avoidTraffic: false };
+            }
+        } catch (error) {
+            console.warn('⚠️ Traffic API error:', error.message);
+            return { routeType: 'fastest', avoidTraffic: false };
+        }
+    }
+
+    enterTrackingMode(vehicleId) {
+        console.log(`🎯 Entering tracking mode for vehicle: ${vehicleId}`);
+        this.trackedVehicleId = vehicleId;
+        
+        // Dim all other vehicles and highlight the tracked one
+        this.vehicleMarkers.forEach((marker, id) => {
+            const markerElement = marker.getElement();
+            if (id === vehicleId) {
+                // Highlight tracked vehicle
+                markerElement.style.opacity = '1.0';
+                markerElement.style.transform = 'scale(1.2)';
+                markerElement.style.zIndex = '1000';
+                markerElement.style.filter = 'drop-shadow(0 0 20px rgba(34, 197, 94, 0.8))';
+            } else {
+                // Dim other vehicles
+                markerElement.style.opacity = '0.3';
+                markerElement.style.transform = 'scale(0.8)';
+                markerElement.style.zIndex = '100';
+                markerElement.style.filter = 'grayscale(70%)';
+            }
+        });
+        
+        // Keep assignment routes visible - they provide important context
+        // Assignment routes remain visible to show all active vehicle assignments
+        
+        // Update the tracked vehicle's popup to show "Stop Tracking" button
+        this.updateVehiclePopupForTracking(vehicleId);
+        
+        this.showNotification(`🎯 Tracking ${vehicleId} - Click "Stop Tracking" to exit`, 'info');
+    }
+
+    exitTrackingMode() {
+        if (!this.trackedVehicleId) return;
+        
+        console.log(`🔄 Exiting tracking mode for vehicle: ${this.trackedVehicleId}`);
+        
+        // Restore all vehicle markers to normal appearance
+        this.vehicleMarkers.forEach((marker, id) => {
+            const markerElement = marker.getElement();
+            markerElement.style.opacity = '1.0';
+            markerElement.style.transform = 'scale(1.0)';
+            markerElement.style.zIndex = 'auto';
+            markerElement.style.filter = 'none';
+        });
+        
+        // Assignment routes remain visible throughout tracking
+        
+        // Restore the tracked vehicle's popup to normal
+        this.restoreVehiclePopupFromTracking(this.trackedVehicleId);
+        
+        this.trackedVehicleId = null;
+        this.showNotification('🔄 Tracking mode disabled - All vehicles visible', 'info');
+    }
+
+    fitMapToRoute(routeGeoJSON, vehicleId, deliveryId) {
+        if (!routeGeoJSON || !routeGeoJSON.geometry || !routeGeoJSON.geometry.coordinates) {
+            console.warn('⚠️ Cannot fit map to route - no coordinates available');
+            return;
+        }
+        
+        const coordinates = routeGeoJSON.geometry.coordinates;
+        
+        // Calculate bounding box for the route
+        let minLng = coordinates[0][0], maxLng = coordinates[0][0];
+        let minLat = coordinates[0][1], maxLat = coordinates[0][1];
+        
+        coordinates.forEach(coord => {
+            const [lng, lat] = coord;
+            minLng = Math.min(minLng, lng);
+            maxLng = Math.max(maxLng, lng);
+            minLat = Math.min(minLat, lat);
+            maxLat = Math.max(maxLat, lat);
+        });
+        
+        // Add padding to the bounding box
+        const padding = 0.1; // degrees
+        const bounds = [
+            [minLng - padding, minLat - padding], // Southwest
+            [maxLng + padding, maxLat + padding]  // Northeast
+        ];
+        
+        console.log(`🗺️ Fitting map to route bounds: ${vehicleId} → ${deliveryId}`);
+        
+        // Fit the map to show the entire route
+        this.map.fitBounds(bounds, {
+            padding: { top: 50, bottom: 50, left: 50, right: 50 },
+            duration: 2000,
+            maxZoom: 10
+        });
+    }
+
+    updateVehiclePopupForTracking(vehicleId) {
+        const actionsContainer = document.getElementById(`vehicle-actions-${vehicleId}`);
+        if (actionsContainer) {
+            actionsContainer.innerHTML = `
+                <button onclick="fleetCommand.clearTrackedRoute()" class="text-xs px-4 py-2 bg-red-500 hover:bg-red-600 border border-red-500 rounded text-white transition-colors">
+                    🛑 Stop Tracking
+                </button>
+                <button onclick="fleetCommand.toggleVehicleDetails('${vehicleId}')" class="text-xs px-4 py-2 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded text-gray-700 transition-colors">
+                    <span id="details-btn-${vehicleId}">Show Details</span>
+                </button>
+            `;
+        }
+    }
+
+    restoreVehiclePopupFromTracking(vehicleId) {
+        const actionsContainer = document.getElementById(`vehicle-actions-${vehicleId}`);
+        if (actionsContainer) {
+            actionsContainer.innerHTML = `
+                <button onclick="fleetCommand.trackVehicle('${vehicleId}')" class="text-xs px-4 py-2 bg-blue-500 hover:bg-blue-600 border border-blue-500 rounded text-white transition-colors">
+                    Track Vehicle
+                </button>
+                <button onclick="fleetCommand.toggleVehicleDetails('${vehicleId}')" class="text-xs px-4 py-2 bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded text-gray-700 transition-colors">
+                    <span id="details-btn-${vehicleId}">Show Details</span>
+                </button>
+            `;
+        }
+    }
+
+    addTrackedRouteToMap(sourceId, layerId, routeGeoJSON, vehicleId, deliveryId) {
+        try {
+            // Check if source already exists and remove it
+            if (this.map.getSource(sourceId)) {
+                if (this.map.getLayer(layerId)) {
+                    this.map.removeLayer(layerId);
+                }
+                this.map.removeSource(sourceId);
+            }
+            
+            // Add source
+            this.map.addSource(sourceId, {
+                type: 'geojson',
+                data: routeGeoJSON
+            });
+            
+            // Add layer with distinctive styling for tracked route
+            this.map.addLayer({
+                id: layerId,
+                type: 'line',
+                source: sourceId,
+                layout: {
+                    'line-join': 'round',
+                    'line-cap': 'round'
+                },
+                paint: {
+                    'line-color': '#3b82f6', // Blue color for tracked route
+                    'line-width': 4,
+                    'line-opacity': 0.8,
+                    'line-dasharray': [2, 2] // Dashed line to distinguish from regular routes
+                }
+            });
+            
+            // Add click handler for tracked route
+            this.map.on('click', layerId, (e) => {
+                const coordinates = e.lngLat;
+                new tt.Popup()
+                    .setLngLat(coordinates)
+                    .setHTML(`
+                        <div class="p-3">
+                            <h3 class="font-semibold text-slate-900 mb-2">Tracked Route</h3>
+                            <div class="space-y-1">
+                                <div><span class="text-slate-600">Vehicle:</span> ${vehicleId}</div>
+                                <div><span class="text-slate-600">Delivery:</span> ${deliveryId}</div>
+                                <div><span class="text-slate-600">Status:</span> <span class="text-blue-600">Tracking Active</span></div>
+                            </div>
+                        </div>
+                    `)
+                    .addTo(this.map);
+            });
+            
+            // Change cursor on hover
+            this.map.on('mouseenter', layerId, () => {
+                this.map.getCanvas().style.cursor = 'pointer';
+            });
+            
+            this.map.on('mouseleave', layerId, () => {
+                this.map.getCanvas().style.cursor = '';
+            });
+            
+            // Store tracked route info
+            this.trackedRoute = {
+                source: sourceId,
+                layer: layerId,
+                vehicleId: vehicleId,
+                deliveryId: deliveryId
+            };
+            
+            // Fit map to show the entire route
+            this.fitMapToRoute(routeGeoJSON, vehicleId, deliveryId);
+            
+            console.log(`✅ Tracked route added to map: ${vehicleId} → ${deliveryId}`);
+            
+        } catch (error) {
+            console.error('Error adding tracked route to map:', error);
         }
     }
 
@@ -1730,15 +2842,20 @@ class FleetCommandPro {
                 body: JSON.stringify({
                     query: `
                         match
-                        $assignment isa assignment (assigned-vehicle: $vehicle, assigned-employee: $employee);
+                        $assignment isa assignment (assigned-vehicle: $vehicle, assigned-employee: $employee, assigned-delivery: $delivery);
                         $vehicle has vehicle-id "${vehicleId}";
+                        $assignment has assigned-at $timestamp,
+                                   has assignment-status "active";
+                        $delivery has delivery-time $deliveryTime;
                         $employee has employee-name $name,
                                    has performance-rating $rating,
                                    has employee-role $role,
                                    has shift-schedule $schedule;
                         $cert_rel isa has-certification (certified-employee: $employee, held-certification: $cert);
                         $cert has certification-name $cert_name;
-                        select $employee, $name, $schedule, $rating, $role, $cert_name;
+                        select $employee, $name, $schedule, $rating, $role, $cert_name, $deliveryTime;
+                        sort $deliveryTime asc;
+                        limit 1;
                     `
                 })
             });
@@ -1771,6 +2888,83 @@ class FleetCommandPro {
         } catch (error) {
             this.showNotification(`Error fetching driver for vehicle ${vehicleId}`, 'error');
             return null;
+        }
+    }
+
+    async loadDriverDataForPopup(vehicleId) {
+        try {
+            // Get current driver data for this vehicle
+            const driverData = await this.getDriverForVehicle(vehicleId);
+            
+            // Find the popup elements to update
+            const popup = document.querySelector(`#popup-${vehicleId}`);
+            if (!popup) return;
+            
+            if (driverData) {
+                // Update driver name
+                const driverNameElement = popup.querySelector('.driver-name');
+                if (driverNameElement) {
+                    driverNameElement.textContent = driverData.name;
+                }
+                
+                // Update driver status
+                const driverStatusElement = popup.querySelector('.driver-status');
+                if (driverStatusElement) {
+                    driverStatusElement.textContent = driverData.status;
+                }
+                
+                // Update driver rating
+                const driverRatingElement = popup.querySelector('.driver-rating');
+                if (driverRatingElement) {
+                    driverRatingElement.textContent = `${driverData.rating}/5 ⭐`;
+                }
+                
+                // Update driver certifications
+                const driverCertsElement = popup.querySelector('.driver-certs');
+                if (driverCertsElement) {
+                    driverCertsElement.textContent = driverData.certifications;
+                }
+                
+                // Update call and message button references
+                const callButton = popup.querySelector(`[onclick*="showCallPanel('${vehicleId}'"]`);
+                if (callButton) {
+                    callButton.setAttribute('onclick', `fleetCommand.showCallPanel('${vehicleId}', '${driverData.name}')`);
+                }
+                
+                const messageButton = popup.querySelector(`[onclick*="showMessagePanel('${vehicleId}'"]`);
+                if (messageButton) {
+                    messageButton.setAttribute('onclick', `fleetCommand.showMessagePanel('${vehicleId}', '${driverData.name}')`);
+                }
+                
+                // Update call panel driver name
+                const callPanelDriverName = popup.querySelector(`#call-panel-${vehicleId} .text-sm.font-medium`);
+                if (callPanelDriverName) {
+                    callPanelDriverName.textContent = `Calling ${driverData.name}`;
+                }
+                
+                // Update message panel driver name
+                const messagePanelDriverName = popup.querySelector(`#message-panel-${vehicleId} .text-sm.font-medium`);
+                if (messagePanelDriverName) {
+                    messagePanelDriverName.textContent = `Message ${driverData.name}`;
+                }
+                
+            } else {
+                // No driver assigned - show placeholder data
+                const driverNameElement = popup.querySelector('.driver-name');
+                if (driverNameElement) driverNameElement.textContent = 'No Driver Assigned';
+                
+                const driverStatusElement = popup.querySelector('.driver-status');
+                if (driverStatusElement) driverStatusElement.textContent = 'unassigned';
+                
+                const driverRatingElement = popup.querySelector('.driver-rating');
+                if (driverRatingElement) driverRatingElement.textContent = 'N/A';
+                
+                const driverCertsElement = popup.querySelector('.driver-certs');
+                if (driverCertsElement) driverCertsElement.textContent = 'None';
+            }
+            
+        } catch (error) {
+            console.error(`Error loading driver data for vehicle ${vehicleId}:`, error);
         }
     }
 
@@ -1814,7 +3008,7 @@ class FleetCommandPro {
                     const destination = delivery.destination?.value || 'Unknown Destination';
                     const deliveryStatus = delivery.deliveryStatus?.value || 'Unknown';
                     
-                    // Update route information in the UI
+                    // Update route information in the UI - use actual route ID from delivery data
                     document.getElementById(`route-status-${vehicleId}`).textContent = routeId;
                     document.getElementById(`traffic-status-${vehicleId}`).textContent = `Status: ${deliveryStatus}`;
                     document.getElementById(`eta-${vehicleId}`).textContent = `${pickup} → ${destination}`;
@@ -1933,12 +3127,12 @@ class FleetCommandPro {
         if (tomtomPopup) tomtomPopup.style.width = detailsWidth;
     }
 
-    trackVehicle(vehicleId) {
+    async trackVehicle(vehicleId) {
         this.showNotification(`Started tracking vehicle ${vehicleId}`, 'success');
         
-        // In a real implementation, this would start real-time tracking
-        // For now, just center the map on the vehicle
+        // Center the map on the vehicle and display its route
         this.centerMapOnVehicle(vehicleId);
+        await this.displayVehicleRoute(vehicleId);
     }
     
     callDriver(vehicleId, driverName) {
@@ -2114,6 +3308,9 @@ class FleetCommandPro {
     updateDispatchView() {
         this.updateAvailableDrivers();
         this.updatePendingQueue();
+        // Delivery markers now only show when tracking a vehicle
+        // this.addDeliveryMarkers();
+        this.addAssignmentRoutes();
     }
     
     updateAvailableDrivers() {
@@ -2393,19 +3590,8 @@ class FleetCommandPro {
     }
     
     startRealTimeUpdates() {
-        // Update data every 30 seconds
-        this.updateIntervals.set('data', setInterval(() => {
-            this.loadAllData().then(() => this.updateUI());
-        }, 30000));
-        
-        // Update live activity every 5 seconds
-        this.updateIntervals.set('activity', setInterval(() => {
-            this.updateLiveActivity();
-        }, 5000));
-        
-        // Map marker updates disabled - should only update when real vehicle positions change
-        // TODO: Enable when real GPS tracking is integrated
-        console.log('🗺️ Map marker auto-updates disabled - awaiting real vehicle GPS data');
+        // Polling disabled - will use dog-realtime when implemented
+        console.log('🔄 Real-time polling disabled - awaiting dog-realtime integration');
     }
     
     setupDeliveryDetailsButton() {
@@ -2731,25 +3917,6 @@ class FleetCommandPro {
         }
     }
     
-    showNotification(message, type = 'info') {
-        // Simple notification system
-        const notification = document.createElement('div');
-        notification.className = `fixed top-4 right-4 px-4 py-2 rounded-lg text-white z-50 ${
-            type === 'success' ? 'bg-green-500' : 
-            type === 'error' ? 'bg-red-500' : 'bg-blue-500'
-        }`;
-        notification.textContent = message;
-        
-        document.body.appendChild(notification);
-        
-        // Auto-remove after 3 seconds
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.parentNode.removeChild(notification);
-            }
-        }, 3000);
-    }
-    
     isSameCity(pickup, delivery) {
         // Extract city names and compare
         const pickupParts = pickup.split(',');
@@ -2833,24 +4000,6 @@ class FleetCommandPro {
         }
     }
     
-    showNotification(message, type = 'info') {
-        const notification = document.createElement('div');
-        const colors = {
-            success: 'bg-green-500',
-            error: 'bg-red-500',
-            warning: 'bg-yellow-500',
-            info: 'bg-blue-500'
-        };
-        
-        notification.className = `${colors[type]} text-white px-6 py-3 rounded-lg shadow-lg animate-slide-up`;
-        notification.textContent = message;
-        
-        document.getElementById('notifications').appendChild(notification);
-        
-        setTimeout(() => {
-            notification.remove();
-        }, 4000);
-    }
     
     showLoading() {
         const overlay = document.getElementById('loadingOverlay');
@@ -2905,29 +4054,11 @@ async assignDeliveryToDriver(deliveryId, driverId) {
 }
 
 startRealTimeUpdates() {
-    // Update data every 30 seconds
-    this.updateIntervals.set('data', setInterval(() => {
-        this.loadAllData().then(() => this.updateUI());
-    }, 30000));
-    
-    // Update live activity every 5 seconds
-    this.updateIntervals.set('activity', setInterval(() => {
-        this.updateLiveActivity();
-    }, 5000));
-    
-    // Map marker updates disabled - should only update when real vehicle positions change
-    // TODO: Enable when real GPS tracking is integrated
-    console.log('🗺️ Map marker auto-updates disabled - awaiting real vehicle GPS data');
+    // Polling disabled - will use dog-realtime when implemented
+    console.log('🔄 Real-time polling disabled - awaiting dog-realtime integration');
 }
 
-showNotification(message, type = 'info') {
-    const notification = document.createElement('div');
-    const colors = {
-        success: 'bg-green-500',
-        error: 'bg-red-500',
-        warning: 'bg-yellow-500',
-        info: 'bg-blue-500'
-    };
+    updateDriversView() {
         console.log('Updating drivers view...');
     }
     
@@ -3580,7 +4711,7 @@ showNotification(message, type = 'info') {
         };
 
         // Create TypeDB assignment query with proper single 3-role assignment and put for idempotency
-        const assignmentQuery = `
+        const query = `
             match
             $vehicle isa vehicle, has vehicle-id "${assignmentData.vehicle_id}";
             $driver isa employee, has id "${assignmentData.driver_id}";
@@ -3614,7 +4745,7 @@ showNotification(message, type = 'info') {
                     'Content-Type': 'application/json',
                     'x-service-method': 'write'
                 },
-                body: JSON.stringify({ query: assignmentQuery })
+                body: JSON.stringify({ query: query })
             });
             
             if (response.ok) {
@@ -4852,20 +5983,6 @@ showNotification(message, type = 'info') {
     }
     
     
-    showNotification(message, type = 'info') {
-        const notification = document.createElement('div');
-        notification.className = `fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg text-white ${
-            type === 'success' ? 'bg-green-500' : 
-            type === 'error' ? 'bg-red-500' : 'bg-blue-500'
-        }`;
-        notification.textContent = message;
-        
-        document.body.appendChild(notification);
-        
-        setTimeout(() => {
-            notification.remove();
-        }, 3000);
-    }
     
 }
 
