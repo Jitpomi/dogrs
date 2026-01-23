@@ -22,13 +22,47 @@ It provides a clean core for building flexible, multi-tenant applications where 
 - **No stack lock-in**  
   DogRS keeps your core logic clean and portable.
 
-## 📦 Crates (Workspace)
+## 📦 Published Crates
 
-- dog-core → Framework-agnostic core (services, hooks, tenants, storage contracts)
-- dog-axum → Axum adapter for HTTP APIs
+All DogRS crates are now available on [crates.io](https://crates.io):
 
+### Core Framework
+- **[dog-core](https://crates.io/crates/dog-core)** `0.1.0` → Framework-agnostic core (services, hooks, tenants, storage contracts)
 
-More adapters coming soon.
+### Web Framework Adapters  
+- **[dog-axum](https://crates.io/crates/dog-axum)** `0.1.0` → Axum adapter for HTTP APIs with multipart uploads and middleware
+
+### Database Adapters
+- **[dog-typedb](https://crates.io/crates/dog-typedb)** `0.1.0` → TypeDB integration with query builders and adapters
+
+### Storage & Infrastructure
+- **[dog-blob](https://crates.io/crates/dog-blob)** `0.1.0` → Production-ready blob storage with S3 compatibility and streaming
+
+### Schema & Validation
+- **[dog-schema](https://crates.io/crates/dog-schema)** `0.1.0` → Schema definition and validation utilities
+- **[dog-schema-macros](https://crates.io/crates/dog-schema-macros)** `0.1.0` → Procedural macros for schema generation
+- **dog-schema-validator** `0.1.0` → Advanced validation (coming soon - rate limited)
+
+## 🚀 Quick Start
+
+Add DogRS crates to your project:
+
+```bash
+# Core framework
+cargo add dog-core
+
+# Web development with Axum
+cargo add dog-axum dog-core
+
+# TypeDB integration
+cargo add dog-typedb dog-core
+
+# Blob storage
+cargo add dog-blob
+
+# Schema validation
+cargo add dog-schema dog-schema-macros
+```
 
 ## 📚 Docs
 
