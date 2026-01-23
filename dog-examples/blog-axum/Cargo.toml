@@ -11,7 +11,7 @@ chrono = { version = "0.4.41", features = ["serde"] }
 dog-axum = "0.1.0"
 dog-core = { version = "0.1.0", features = ["serde", "adapters"] }
 dog-schema = "0.1.0"
-# dog-schema-validator = "0.1.0"  # Will be available after rate limit resets
+dog-schema-validator = { path = "../../dog-schema-validator" }
 futures = "0.3.31"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter"] }
