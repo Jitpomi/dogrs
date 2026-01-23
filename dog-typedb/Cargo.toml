@@ -18,7 +18,7 @@ component_type = "library"
 [dependencies]
 anyhow = "1.0.100"
 async-trait = "0.1.89"
-dog-core = { path = "../dog-core" }
+dog-core = "0.1.0"
 serde_json = "1.0.145"
 typedb-driver = "3.7.0"
 futures = "0.3"
