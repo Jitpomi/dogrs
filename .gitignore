@@ -16,6 +16,9 @@ Cargo.lock
 .idea/
 *.iml
 
+# Windsurf
+.windsurf/workflows
+
 # === FerrisUp ===
 .ferrisup/backup/
 .ferrisup/temp/
