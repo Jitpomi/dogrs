@@ -7,116 +7,144 @@
 
 # dog-core
 
-This template provides a foundation for creating a Rust library crate with a well-structured `lib.rs` file and testing infrastructure.
+[![Crates.io](https://img.shields.io/crates/v/dog-core.svg)](https://crates.io/crates/dog-core)
+[![Documentation](https://docs.rs/dog-core/badge.svg)](https://docs.rs/dog-core)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+
+**Core traits and utilities for the DogRS ecosystem - a modular Rust framework for building scalable applications**
+
+dog-core provides the foundational abstractions that power the DogRS framework: services, hooks, tenant contexts, and storage contracts. It's designed to keep your core logic clean and portable across different adapters and environments.
 
 ## Features
 
-- Library crate structure with documentation
-- Unit tests setup
-- Benchmarking with Criterion
-- Error handling with anyhow
-- Ready for publishing to crates.io
+- **Framework-agnostic core** - No coupling to specific web frameworks or databases
+- **Multi-tenant services** - Built-in tenant context for SaaS applications
+- **Service hooks** - Before/after/around/error pipelines for cross-cutting concerns
+- **Storage contracts** - Pluggable storage backends without vendor lock-in
+- **Async-first design** - Built for modern async Rust applications
 
-## Getting Started
+## Quick Start
 
-After generating your project with FerrisUp, follow these steps:
+Add to your `Cargo.toml`:
 
-1. Navigate to your project directory:
-   ```bash
-   cd dog-core
-   ```
-
-2. Run the tests:
-   ```bash
-   cargo test
-   ```
-
-3. Run benchmarks:
-   ```bash
-   cargo bench
-   ```
-
-4. Build the documentation:
-   ```bash
-   cargo doc --open
-   ```
-
-## Project Structure
-
-- `src/lib.rs`: Main library file with documentation and tests
-- `Cargo.toml`: Project configuration with development dependencies
-
-## Customization
-
-### Adding Modules
-
-As your library grows, consider organizing it into modules:
-
-```rust
-// In src/lib.rs
-pub mod utils;
-pub mod models;
-
-// Create src/utils.rs or src/utils/mod.rs
-// Create src/models.rs or src/models/mod.rs
+```toml
+[dependencies]
+dog-core = "0.1.0"
 ```
 
-### Documentation
-
-The template includes doc comments. Expand them to document your API:
+### Basic Service Example
 
 ```rust
-/// Performs an important calculation.
-///
-/// # Examples
-///
-/// ```
-/// let result = dog-core::calculate(42);
-/// assert_eq!(result, 84);
-/// ```
-///
-/// # Errors
-///
-/// Returns an error if the input is invalid.
-pub fn calculate(input: i32) -> Result<i32, Error> {
-    // Implementation
+use dog_core::{DogService, TenantContext, Result};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+struct CreateUserRequest {
+    name: String,
+    email: String,
+}
+
+#[derive(Serialize)]
+struct User {
+    id: u32,
+    name: String,
+    email: String,
+}
+
+struct UserService;
+
+#[async_trait]
+impl DogService<CreateUserRequest, ()> for UserService {
+    type Output = User;
+    
+    async fn create(&self, tenant: TenantContext, data: CreateUserRequest) -> Result<User> {
+        // Your business logic here
+        Ok(User {
+            id: 1,
+            name: data.name,
+            email: data.email,
+        })
+    }
 }
 ```
 
-### Publishing
+## Core Concepts
 
-Prepare your library for publishing:
+### Services
+Services implement your business logic through the `DogService` trait:
 
-1. Update `Cargo.toml` with metadata:
-   ```toml
-   [package]
-   name = "dog-core"
-   version = "0.1.0"
-   authors = ["Your Name <your.email@example.com>"]
-   edition = "2021"
-   description = "A brief description of your library"
-   repository = "https://github.com/yourusername/dog-core"
-   license = "MIT OR Apache-2.0"
-   keywords = ["keyword1", "keyword2"]
-   categories = ["category1", "category2"]
-   ```
+```rust
+#[async_trait]
+pub trait DogService<TData, TQuery> {
+    type Output;
+    
+    async fn create(&self, tenant: TenantContext, data: TData) -> Result<Self::Output>;
+    async fn read(&self, tenant: TenantContext, query: TQuery) -> Result<Self::Output>;
+    async fn update(&self, tenant: TenantContext, data: TData) -> Result<Self::Output>;
+    async fn delete(&self, tenant: TenantContext, query: TQuery) -> Result<()>;
+}
+```
 
-2. Publish to crates.io:
-   ```bash
-   cargo publish
-   ```
+### Tenant Context
+Multi-tenant applications get built-in tenant isolation:
 
-## Next Steps
+```rust
+let tenant = TenantContext::new("tenant-123")
+    .with_actor("user-456")
+    .with_trace_id("req-789");
 
-- Add your library's core functionality to `src/lib.rs`
-- Create additional modules as needed
-- Write comprehensive tests and examples
-- Set up CI/CD with GitHub Actions
-- Add a README.md with usage examples
+let result = service.create(tenant, request_data).await?;
+```
 
-## Resources
+### Storage Adapters
+Pluggable storage without vendor lock-in:
 
-- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
-- [Cargo Book: Publishing on crates.io](https://doc.rust-lang.org/cargo/reference/publishing.html)
-- [Rust Documentation Guidelines](https://doc.rust-lang.org/rustdoc/what-is-rustdoc.html)
-- [Criterion Benchmarking](https://bheisler.github.io/criterion.rs/book/)
+```rust
+use dog_core::{StorageAdapter, StorageResult};
+
+#[async_trait]
+impl StorageAdapter for MyDatabase {
+    async fn get(&self, tenant: &TenantContext, key: &str) -> StorageResult<Option<Vec<u8>>>;
+    async fn put(&self, tenant: &TenantContext, key: &str, value: Vec<u8>) -> StorageResult<()>;
+    async fn delete(&self, tenant: &TenantContext, key: &str) -> StorageResult<()>;
+}
+```
+
+## Architecture
+
+dog-core follows a clean separation of concerns:
+
+```
+┌─────────────────┐
+│   Your App      │  ← Business logic
+├─────────────────┤
+│   dog-axum      │  ← HTTP adapter
+│   dog-typedb    │  ← Database adapter  
+│   dog-blob      │  ← Storage adapter
+├─────────────────┤
+│   dog-core      │  ← Core abstractions
+└─────────────────┘
+```
+
+## Ecosystem
+
+dog-core works with these adapters:
+
+- **[dog-axum](https://crates.io/crates/dog-axum)** - Axum web framework integration
+- **[dog-typedb](https://crates.io/crates/dog-typedb)** - TypeDB database adapter
+- **[dog-blob](https://crates.io/crates/dog-blob)** - Blob storage infrastructure
+- **[dog-schema](https://crates.io/crates/dog-schema)** - Schema validation utilities
+
+## Examples
+
+See the `dog-examples/` directory for complete applications:
+
+- **music-blobs** - Media streaming service
+- **blog-axum** - REST API with CRUD operations  
+- **social-typedb** - Social network with TypeDB
+- **fleet-queue** - Fleet management with background jobs
+
+## License
+
+MIT OR Apache-2.0

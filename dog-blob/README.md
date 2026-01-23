@@ -35,9 +35,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-dog-blob = { path = "../dog-blob" }
-# For S3 support:
-# dog-blob = { path = "../dog-blob", features = ["s3"] }
+dog-blob = "0.1.0"
 ```
 
 ### 30-Second Example
