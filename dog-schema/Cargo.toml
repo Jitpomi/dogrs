@@ -2,6 +2,13 @@
 name = "dog-schema"
 version = "0.1.0"
 edition = "2021"
+description = "Schema definition and validation utilities for DogRS - JSON schema, validation, and type safety"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Jitpomi/dogrs"
+documentation = "https://docs.rs/dog-schema"
+keywords = ["schema", "validation", "json", "types"]
+categories = ["data-structures", "development-tools"]
+readme = "../README.md"
 
 [dependencies]
 dog-core = { path = "../dog-core", features = ["serde"] }

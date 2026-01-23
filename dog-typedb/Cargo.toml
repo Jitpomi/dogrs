@@ -2,8 +2,13 @@
 name = "dog-typedb"
 version = "0.1.0"
 edition = "2021"
-description = "TypeDB adapter utilities for DogRS"
+description = "TypeDB database integration for DogRS - adapters, utilities, and TypeQL query builders"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/Jitpomi/dogrs"
+documentation = "https://docs.rs/dog-typedb"
+keywords = ["typedb", "database", "graph", "adapter"]
+categories = ["database", "development-tools"]
+readme = "../README.md"
 
 [package.metadata]
 

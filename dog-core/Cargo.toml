@@ -2,8 +2,13 @@
 name = "dog-core"
 version = "0.1.0"
 edition = "2021"
-description = "A Rust library created with FerrisUp"
+description = "Core traits and utilities for the DogRS ecosystem - a modular Rust framework for building scalable applications"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/Jitpomi/dogrs"
+documentation = "https://docs.rs/dog-core"
+keywords = ["framework", "async", "traits", "core"]
+categories = ["development-tools", "asynchronous"]
+readme = "../README.md"
 
 [package.metadata]
 
