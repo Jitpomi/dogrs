@@ -41,7 +41,7 @@ All DogRS crates are now available on [crates.io](https://crates.io):
 ### Schema & Validation
 - **[dog-schema](https://crates.io/crates/dog-schema)** `0.1.0` → Schema definition and validation utilities
 - **[dog-schema-macros](https://crates.io/crates/dog-schema-macros)** `0.1.0` → Procedural macros for schema generation
-- **dog-schema-validator** `0.1.0` → Advanced validation (coming soon - rate limited)
+- **[dog-schema-validator](https://crates.io/crates/dog-schema-validator)** `0.1.0` → Advanced validation utilities with runtime constraints
 
 ## 🚀 Quick Start
 
@@ -61,7 +61,7 @@ cargo add dog-typedb dog-core
 cargo add dog-blob
 
 # Schema validation
-cargo add dog-schema dog-schema-macros
+cargo add dog-schema dog-schema-macros dog-schema-validator
 ```
 
 ## 📚 Docs
