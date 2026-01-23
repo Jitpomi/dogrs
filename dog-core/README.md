@@ -148,3 +148,11 @@ See the `dog-examples/` directory for complete applications:
 ## License
 
 MIT OR Apache-2.0
+
+---
+
+<div align="center">
+
+**Made by [Jitpomi](https://github.com/Jitpomi)**
+
+</div>

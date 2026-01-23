@@ -2,6 +2,7 @@
 name = "dog-schema-macros"
 version = "0.1.0"
 edition = "2021"
+authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Procedural macros for DogRS schema generation - derive macros for validation and serialization"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Jitpomi/dogrs"

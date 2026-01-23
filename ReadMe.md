@@ -73,4 +73,12 @@ cargo add dog-schema dog-schema-macros dog-schema-validator
 DogRS is in active development.  
 The goal is to build a simple but powerful foundation for real-world Rust applications without forcing a fixed stack.
 
+---
+
+<div align="center">
+
+**Made by [Jitpomi](https://github.com/Jitpomi)**
+
+</div>
+
 Inspiration from: [FeathersJS](https://feathersjs.com/) and [NestJS](https://nestjs.com/).
