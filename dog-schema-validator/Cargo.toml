@@ -11,7 +11,7 @@ categories = ["data-structures", "development-tools"]
 readme = "../README.md"
 
 [dependencies]
-# dog-schema = "0.1.0"  # Temporarily commented for publishing order
+dog-schema = "0.1.0"
 dog-core = { version = "0.1.0", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
