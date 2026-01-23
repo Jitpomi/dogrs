@@ -5,10 +5,10 @@ edition = "2021"
 
 [dependencies]
 # DogRS ecosystem
-dog-core = { path = "../../dog-core" }
-dog-axum = { path = "../../dog-axum" }
-dog-typedb = { path = "../../dog-typedb" }
-dog-blob = { path = "../../dog-blob" }
+dog-core = "0.1.0"
+dog-axum = "0.1.0"
+dog-typedb = "0.1.0"
+dog-blob = "0.1.0"
 
 # Web framework
 axum = { version = "0.8.8", features = ["multipart"] }

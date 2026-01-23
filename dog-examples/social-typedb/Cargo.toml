@@ -6,9 +6,9 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.100"
 async-trait = "0.1.89"
-dog-axum = { path = "../../dog-axum" }
-dog-core = { path = "../../dog-core", features = ["serde", "adapters"] }
-dog-typedb = { path = "../../dog-typedb" }
+dog-axum = "0.1.0"
+dog-core = { version = "0.1.0", features = ["serde", "adapters"] }
+dog-typedb = "0.1.0"
 futures = "0.3.31"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
