@@ -14,7 +14,7 @@ readme = "../README.md"
 [dependencies]
 dog-schema = "0.1.0"
 dog-core = { version = "0.1.0", features = ["serde"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
-validator = { version = "0.20.0", features = ["derive"] }
-anyhow = "1.0.100"
+serde = { version = "1.0.230", features = ["derive"] }
+serde_json = "1.0.146"
+validator = { version = "0.21.0", features = ["derive"] }
+anyhow = "1.0.101"
