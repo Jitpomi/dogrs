@@ -20,6 +20,7 @@ pub fn build() -> Result<AxumApp<Value, AuthDemoParams>> {
     let ax = ax
         .use_service("/messages", svcs.messages)
         .use_service("/users", svcs.users)
+        .use_service("/auth", svcs.auth_svc)
         .service("/health", || async { "ok" });
 
     Ok(ax)

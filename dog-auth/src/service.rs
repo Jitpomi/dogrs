@@ -80,10 +80,45 @@ where
 
     pub async fn get_payload(
         &self,
-        _auth_result: &AuthenticationResult,
+        auth_result: &AuthenticationResult,
         params: &AuthenticationParams,
     ) -> Result<Value> {
-        Ok(params.payload.clone().unwrap_or_else(|| json!({})))
+        let mut payload = params.payload.clone().unwrap_or_else(|| json!({}));
+
+        let cfg = self.configuration();
+        let entity_key = cfg.entity.clone();
+        let entity_id_claim = cfg
+            .entity_id_claim
+            .clone()
+            .unwrap_or_else(|| "sub".to_string());
+
+        // Feathers-like default: if entity attachment is configured, include the entity id in the JWT
+        // payload so the JwtStrategy can resolve and attach the entity on authenticated requests.
+        //
+        // We only set the claim if it isn't already provided by the caller.
+        let claim_exists = payload
+            .get(&entity_id_claim)
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+
+        if !claim_exists {
+            if let Some(entity_key) = entity_key {
+                if let Some(entity_id) = auth_result
+                    .get(&entity_key)
+                    .and_then(|e| e.get("id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    if let Some(map) = payload.as_object_mut() {
+                        map.insert(entity_id_claim, Value::String(entity_id));
+                    }
+                }
+            }
+        }
+
+        Ok(payload)
     }
 
     pub async fn create(

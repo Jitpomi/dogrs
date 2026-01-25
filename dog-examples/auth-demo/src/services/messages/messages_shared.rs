@@ -2,6 +2,9 @@ use dog_core::{ServiceCapabilities, ServiceMethodKind};
 use std::sync::Arc;
 
 use crate::services::AuthDemoParams;
+use dog_auth::hooks::AuthenticateHook;
+use dog_core::hooks::DogBeforeHook;
+use serde_json::Value;
 
 pub fn crud_capabilities() -> ServiceCapabilities {
     ServiceCapabilities::from_methods(vec![
@@ -17,14 +20,14 @@ pub fn crud_capabilities() -> ServiceCapabilities {
 pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, AuthDemoParams>) -> anyhow::Result<()> {
     super::messages_schema::register(app)?;
 
+    let jwt: Arc<dyn DogBeforeHook<Value, AuthDemoParams>> =
+        Arc::new(AuthenticateHook::from_app(app, vec!["jwt".to_string()])?);
+
     app.service("messages")?.hooks(|h| {
-        // Protect all message operations with JWT authentication
-        h.before_create(super::messages_hooks::authenticate("jwt"));
-        h.before_find(super::messages_hooks::authenticate("jwt"));
-        h.before_get(super::messages_hooks::authenticate("jwt"));
-        h.before_update(super::messages_hooks::authenticate("jwt"));
-        h.before_patch(super::messages_hooks::authenticate("jwt"));
-        h.before_remove(super::messages_hooks::authenticate("jwt"));
+        // Protect write operations with JWT authentication
+        h.before_create(Arc::clone(&jwt));
+        h.before_patch(Arc::clone(&jwt));
+        h.before_remove(Arc::clone(&jwt));
 
         h.before_create(Arc::new(super::messages_hooks::ValidateMessageAuthorExists));
         h.before_patch(Arc::new(super::messages_hooks::ValidateMessageAuthorExists));

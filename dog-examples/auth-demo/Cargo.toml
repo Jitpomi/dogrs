@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dog-core = { version = "0.1.0", features = ["serde", "adapters"] }
-dog-axum = "0.1.0"
-dog-schema = "0.1.0"
-dog-schema-validator = "0.1.0"
+dog-core = { path = "../../dog-core", features = ["serde", "adapters"] }
+dog-axum = { path = "../../dog-axum", features = ["auth"] }
+dog-auth = { path = "../../dog-auth" }
+dog-auth-local = { path = "../../dog-auth-local" }
+dog-schema = { path = "../../dog-schema" }
+dog-schema-validator = { path = "../../dog-schema-validator" }
 axum = { version = "0.8", features = ["macros", "json"] }
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

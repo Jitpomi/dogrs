@@ -1,8 +1,12 @@
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
+use std::sync::Arc;
 use anyhow::Result;
 use dog_core::{DogApp, DogService};
 use serde_json::Value;
+
+
+
+use crate::auth;
+use dog_auth::AuthenticationService;
 
 pub mod types;
 pub use types::AuthDemoParams;
@@ -10,16 +14,12 @@ pub use types::AuthDemoParams;
 pub mod adapters;
 pub mod messages;
 pub mod users;
-
-#[derive(Default)]
-pub struct AuthDemoState {
-    pub messages: Mutex<HashMap<String, Value>>,
-    pub users: Mutex<HashMap<String, Value>>,
-}
+pub mod authentication;
 
 pub struct AuthServices {
     pub messages: Arc<dyn DogService<Value, AuthDemoParams>>,
     pub users: Arc<dyn DogService<Value, AuthDemoParams>>,
+    pub auth_svc: Arc<dyn DogService<Value, AuthDemoParams>>,
 }
 
 pub fn configure(app: &DogApp<Value, AuthDemoParams>) -> Result<AuthServices> {
@@ -30,9 +30,19 @@ pub fn configure(app: &DogApp<Value, AuthDemoParams>) -> Result<AuthServices> {
 
     let users: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::new(users::UsersService::new());
     app.register_service("users", Arc::clone(&users));
-    users::users_shared::register_hooks(app)?;
 
-    Ok(AuthServices { messages, users })
+    let auth_core = AuthenticationService::from_app(app)
+        .ok_or_else(|| anyhow::anyhow!("AuthenticationService missing from app state; did you call AuthenticationService::install?"))?;
+    let local = auth::register_local(Arc::clone(&auth_core));
+
+    users::users_shared::register_hooks(app, local)?;
+
+    let auth_svc: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::new(authentication::AuthService::new(auth_core));
+    app.register_service("authentication", Arc::clone(&auth_svc));
+    authentication::authentication_shared::register_hooks(app)?;
+
+
+    Ok(AuthServices { messages, users, auth_svc })
 }
 
 

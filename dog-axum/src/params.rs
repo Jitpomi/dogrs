@@ -55,3 +55,18 @@ impl FromRestParams for () {
         
     }
 }
+
+#[cfg(feature = "auth")]
+impl FromRestParams for dog_auth::hooks::authenticate::AuthParams<RestParams> {
+    fn from_rest_params(params: RestParams) -> Self {
+        dog_auth::hooks::authenticate::AuthParams {
+            inner: params.clone(),
+            provider: Some(params.provider.clone()),
+            headers: params.headers.clone(),
+            authentication: None,
+            authenticated: false,
+            auth_result: None,
+            connection: None,
+        }
+    }
+}
