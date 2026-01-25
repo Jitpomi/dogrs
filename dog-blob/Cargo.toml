@@ -1,6 +1,6 @@
 [package]
 name = "dog-blob"
-version = "0.1.2"
+version = "0.1.4"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Production-ready blob storage infrastructure with streaming, multipart uploads, and range requests"

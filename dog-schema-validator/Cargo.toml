@@ -1,6 +1,6 @@
 [package]
 name = "dog-schema-validator"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Advanced validation utilities for DogRS schemas - runtime validation, constraints, and error handling"
@@ -12,8 +12,8 @@ categories = ["data-structures", "development-tools"]
 readme = "README.md"
 
 [dependencies]
-dog-schema = "0.1.3"
-dog-core = { version = "0.1.3", features = ["serde"] }
+dog-schema = "0.1.4"
+dog-core = { version = "0.1.4", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 validator = { version = "0.20.0", features = ["derive"] }

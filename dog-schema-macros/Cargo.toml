@@ -1,6 +1,6 @@
 [package]
 name = "dog-schema-macros"
-version = "0.1.2"
+version = "0.1.4"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Procedural macros for DogRS schema generation - derive macros for validation and serialization"
