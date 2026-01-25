@@ -14,7 +14,8 @@ members = [
     "dog-examples/fleet-queue",
     "dog-examples/auth-demo",
     "dog-auth",
-    "dog-auth-local"
+    "dog-auth-local",
+    "dog-auth-oauth"
 ]
 
 resolver = "2"

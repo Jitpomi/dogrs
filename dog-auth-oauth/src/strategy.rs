@@ -12,6 +12,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 #[async_trait]
+pub trait OAuthEntityResolver<P>: Send + Sync
+where
+    P: Clone + Send + Sync + 'static,
+{
+    async fn resolve_entity(
+        &self,
+        provider: &str,
+        profile: &Value,
+        ctx: &mut HookContext<Value, P>,
+    ) -> Result<Option<Value>>;
+}
+
+#[async_trait]
 pub trait OAuthProvider<P>: Send + Sync
 where
     P: Clone + Send + Sync + 'static,
@@ -44,6 +57,7 @@ where
 {
     pub default_provider: Option<String>,
     pub providers: HashMap<String, Arc<dyn OAuthProvider<P>>>,
+    pub entity_resolver: Option<Arc<dyn OAuthEntityResolver<P>>>,
 }
 
 impl<P> Default for OAuthStrategyOptions<P>
@@ -54,6 +68,7 @@ where
         Self {
             default_provider: None,
             providers: HashMap::new(),
+            entity_resolver: None,
         }
     }
 }
@@ -93,6 +108,11 @@ where
         self.options
             .providers
             .insert(provider.name().to_string(), provider);
+        self
+    }
+
+    pub fn with_entity_resolver(mut self, resolver: Arc<dyn OAuthEntityResolver<P>>) -> Self {
+        self.options.entity_resolver = Some(resolver);
         self
     }
 
@@ -244,20 +264,24 @@ where
 
         // If entity/service are configured and we have a profile, upsert the entity.
         let mut entity_out: Option<Value> = None;
-        if let (Some(service_name), Some(entity_key), Some(profile)) =
-            (cfg.service.clone(), cfg.entity.clone(), profile.as_ref())
-        {
-            let existing = self
-                .find_entity(ctx, &service_name, &req.provider, profile)
-                .await?;
-            let entity = if let Some(existing) = existing {
-                self.update_entity(ctx, &service_name, &existing, &req.provider, profile)
-                    .await?
-            } else {
-                self.create_entity(ctx, &service_name, &req.provider, profile)
-                    .await?
-            };
-            entity_out = Some(json!({ entity_key: entity }));
+        if let Some(profile) = profile.as_ref() {
+            if let (Some(entity_key), Some(resolver)) = (cfg.entity.clone(), self.options.entity_resolver.as_ref()) {
+                if let Some(entity) = resolver.resolve_entity(&req.provider, profile, ctx).await? {
+                    entity_out = Some(json!({ entity_key: entity }));
+                }
+            } else if let (Some(service_name), Some(entity_key)) = (cfg.service.clone(), cfg.entity.clone()) {
+                let existing = self
+                    .find_entity(ctx, &service_name, &req.provider, profile)
+                    .await?;
+                let entity = if let Some(existing) = existing {
+                    self.update_entity(ctx, &service_name, &existing, &req.provider, profile)
+                        .await?
+                } else {
+                    self.create_entity(ctx, &service_name, &req.provider, profile)
+                        .await?
+                };
+                entity_out = Some(json!({ entity_key: entity }));
+            }
         }
 
         let mut auth_obj = Map::new();
