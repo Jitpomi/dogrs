@@ -2,7 +2,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::Value;
 use typedb_driver::TypeDBDriver;
-use crate::{execute_typedb_query, TransactionType};
+use crate::execute_typedb_query;
 
 /// Trait for types that can provide TypeDB connection details
 pub trait TypeDBState {

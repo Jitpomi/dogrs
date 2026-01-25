@@ -92,14 +92,6 @@ pub fn analyze_query(query: &str) -> QueryAnalysis {
     };
 
     let returns_document_stream = has_fetch_stage(&q_lower);
-    
-    // Debug logging to understand what's happening
-    println!("DEBUG: Query analysis for: {}", query);
-    println!("DEBUG: Lowercase query: {}", q_lower);
-    println!("DEBUG: has_fetch_stage result: {}", returns_document_stream);
-    println!("DEBUG: Contains 'fetch': {}", q_lower.contains("fetch"));
-    println!("DEBUG: Contains 'fetch {{': {}", q_lower.contains("fetch {"));
-    println!("DEBUG: Contains 'fetch{{': {}", q_lower.contains("fetch{"));
 
     let has_sorting = contains_kw(&q_lower, "sort") || contains_kw(&q_lower, "order");
     let has_pagination = contains_kw(&q_lower, "limit") || contains_kw(&q_lower, "offset");
@@ -260,7 +252,7 @@ async fn typedb_answer_to_http_ok(
     match answer {
         typedb_driver::answer::QueryAnswer::Ok(_) => {
             println!("DEBUG: Processing Ok response");
-            return Ok(json!({
+            Ok(json!({
                 "ok": {
                     "queryType": query_type,
                     "answerType": "ok",
@@ -268,7 +260,7 @@ async fn typedb_answer_to_http_ok(
                     "query": query,
                     "warning": null
                 }
-            }));
+            }))
         }
         typedb_driver::answer::QueryAnswer::ConceptDocumentStream(_, mut stream) => {
             println!("DEBUG: Processing ConceptDocumentStream");
@@ -285,7 +277,7 @@ async fn typedb_answer_to_http_ok(
                 }
             }
 
-            return Ok(json!({
+            Ok(json!({
                 "ok": {
                     "queryType": query_type,
                     "answerType": "conceptDocuments",
@@ -293,7 +285,7 @@ async fn typedb_answer_to_http_ok(
                     "query": query,
                     "warning": if truncated { Some(format!("Answer limit reached ({}). Truncated.", max_answers)) } else { None }
                 }
-            }));
+            }))
         }
 
         typedb_driver::answer::QueryAnswer::ConceptRowStream(_, mut stream) => {
@@ -319,7 +311,7 @@ async fn typedb_answer_to_http_ok(
                 }
             }
 
-            return Ok(json!({
+            Ok(json!({
                 "ok": {
                     "queryType": query_type,
                     "answerType": "conceptRows",
@@ -327,25 +319,9 @@ async fn typedb_answer_to_http_ok(
                     "query": query,
                     "warning": if truncated { Some(format!("Answer limit reached ({}). Truncated.", max_answers)) } else { None }
                 }
-            }));
-        }
-
-        typedb_driver::answer::QueryAnswer::Ok(_) => {
-            println!("DEBUG: Processing Ok response");
-            return Ok(json!({
-                "ok": {
-                    "queryType": query_type,
-                    "answerType": "ok",
-                    "answers": [],
-                    "query": query,
-                    "warning": null
-                }
-            }));
+            }))
         }
     }
-
-    // Fallback for unexpected answer types
-    Err(anyhow::anyhow!("Unexpected QueryAnswer type for query: {}", query))
 }
 
 /// Formats a TypeDB Concept into a Studio-friendly JSON object.
@@ -411,12 +387,6 @@ fn format_concept(concept: &typedb_driver::concept::Concept) -> Result<Value> {
         Concept::Value(v) => Ok(json!({
             "kind": "value",
             "value": v.to_string()
-        })),
-
-        _ => Ok(json!({
-            "kind": "other",
-            "label": concept.get_label(),
-            "value": concept.to_string()
         })),
     }
 }
