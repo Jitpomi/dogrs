@@ -8,6 +8,7 @@ dog-core = { path = "../../dog-core", features = ["serde", "adapters"] }
 dog-axum = { path = "../../dog-axum", features = ["auth"] }
 dog-auth = { path = "../../dog-auth" }
 dog-auth-local = { path = "../../dog-auth-local" }
+dog-auth-oauth = { path = "../../dog-auth-oauth" }
 dog-schema = { path = "../../dog-schema" }
 dog-schema-validator = { path = "../../dog-schema-validator" }
 axum = { version = "0.8", features = ["macros", "json"] }
@@ -16,6 +17,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
 jsonwebtoken = "9.0"
+dotenvy = "0.15"
+oauth2 = { version = "4.4", default-features = false, features = ["reqwest", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"

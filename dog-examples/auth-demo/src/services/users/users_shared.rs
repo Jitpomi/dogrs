@@ -1,4 +1,5 @@
 use dog_core::{ServiceCapabilities, ServiceMethodKind};
+use anyhow::anyhow;
 use std::sync::Arc;
 
 use crate::services::AuthDemoParams;
@@ -21,9 +22,12 @@ pub fn crud_capabilities() -> ServiceCapabilities {
 
 pub fn register_hooks(
     app: &dog_core::DogApp<serde_json::Value, AuthDemoParams>,
-    local: Arc<LocalStrategy<AuthDemoParams>>,
 ) -> anyhow::Result<()> {
     super::users_schema::register(app)?;
+
+    let local = app
+        .get::<Arc<LocalStrategy<AuthDemoParams>>>("auth.local")
+        .ok_or_else(|| anyhow!("Missing auth.local in app config"))?;
 
     let jwt: Arc<dyn DogBeforeHook<Value, AuthDemoParams>> =
         Arc::new(AuthenticateHook::from_app(app, vec!["jwt".to_string()])?);

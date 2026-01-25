@@ -29,19 +29,15 @@ pub fn configure(app: &DogApp<Value, AuthDemoParams>) -> Result<AuthServices> {
 
     let users: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::new(users::UsersService::new());
     app.register_service("users", Arc::clone(&users));
+    users::users_shared::register_hooks(app)?;
 
+    // Register authentication service
     let auth_core = AuthenticationService::from_app(app)
-        .ok_or_else(|| anyhow::anyhow!("AuthenticationService missing from app state; did you call AuthenticationService::install?"))?;
-    let local = authentication::authentication_shared::register_local(Arc::clone(&auth_core));
-
-    users::users_shared::register_hooks(app, local)?;
-
+        .ok_or_else(|| anyhow::anyhow!("AuthenticationService missing from app state; did you call crate::auth::strategies(&dog_app) during startup?"))?;
     let auth_svc: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::new(authentication::AuthService::new(auth_core));
     app.register_service("authentication", Arc::clone(&auth_svc));
     authentication::authentication_shared::register_hooks(app)?;
 
-
     Ok(AuthServices { messages, users, auth_svc })
 }
-
 
