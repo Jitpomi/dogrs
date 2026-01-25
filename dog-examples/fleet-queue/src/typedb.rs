@@ -2,7 +2,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use dog_core::DogApp;
 use typedb_driver::{TypeDBDriver, Credentials, DriverOptions};
-use dog_typedb::{adapter::TypeDBState as TypeDBStateTrait, load_schema_from_file, execute_typedb_query, TransactionType};
+use dog_typedb::{adapter::TypeDBState as TypeDBStateTrait, load_schema_from_file, execute_typedb_query};
 use super::FleetParams;
 
 
@@ -92,7 +92,7 @@ impl TypeDBState {
         
         let mut redefined_count = 0;
         for redefine_query in &redefine_queries {
-            match execute_typedb_query(&state.driver, &state.database, redefine_query, TransactionType::Schema).await {
+            match execute_typedb_query(&state.driver, &state.database, redefine_query).await {
                 Ok(_) => {
                     println!("TypeDB function redefined with parameters successfully");
                     redefined_count += 1;
