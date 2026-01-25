@@ -30,6 +30,9 @@ Thumbs.db
 # === Logs ===
 *.log
 
+# === Env files ===
+*/.env
+
 # === Node.js ===
 node_modules/
 npm-debug.log*
