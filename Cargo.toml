@@ -12,6 +12,7 @@ members = [
     "dog-examples/blog-axum",
     "dog-examples/social-typedb", 
     "dog-examples/fleet-queue",
+    "dog-examples/auth-demo",
     
 ]
 

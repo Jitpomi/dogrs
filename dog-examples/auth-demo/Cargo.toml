@@ -1,0 +1,22 @@
+[package]
+name = "auth-demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dog-core = { version = "0.1.0", features = ["serde", "adapters"] }
+dog-axum = "0.1.0"
+dog-schema = "0.1.0"
+dog-schema-validator = "0.1.0"
+axum = { version = "0.8", features = ["macros", "json"] }
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+jsonwebtoken = "9.0"
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+validator = { version = "0.20.0", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
