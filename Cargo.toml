@@ -13,6 +13,7 @@ members = [
     "dog-examples/social-typedb", 
     "dog-examples/fleet-queue",
     "dog-examples/auth-demo",
+    "dog-auth",
     
 ]
 

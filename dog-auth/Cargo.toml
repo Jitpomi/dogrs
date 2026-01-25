@@ -1,0 +1,20 @@
+[package]
+name = "dog-auth"
+version = "0.1.0"
+edition = "2021"
+description = "Authentication system for DogRS framework"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/samsonssali/dogrs"
+keywords = ["authentication", "jwt", "dogrs", "framework"]
+categories = ["authentication", "web-programming"]
+
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+bcrypt = "0.18.0"
+dog-core = { path = "../dog-core" }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
