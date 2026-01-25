@@ -14,6 +14,11 @@ Core authentication module for DogRS, inspired by FeathersJS authentication whil
 - **Hooks**
   - `AuthenticateHook` for protecting service methods via before-hooks
   - Connection + event hook stubs to mirror Feathers-like flows
+- **`AuthServiceAdapter<P>`**
+  - A `DogService<Value, P>` adapter that exposes only:
+    - `create` (login)
+    - `remove` (logout)
+  - Designed to be mounted as an external `/auth` endpoint by server adapters (HTTP/WebSocket/etc.).
 
 ## Install
 
@@ -43,6 +48,12 @@ Key options:
   - `entity`: JSON key to attach the entity under (e.g. `"user"`)
   - `service`: service name used for entity loading (e.g. `"users"`)
   - `entity_id_claim`: JWT claim containing the entity id (defaults to `"sub"` if not set)
+
+JWT payload default:
+
+- When `entity` is configured, `AuthenticationService::create(...)` will automatically include the
+  authenticated entity's `id` in the JWT payload under `entity_id_claim` (default `"sub"`) unless
+  the caller already provided that claim.
 
 ## Basic usage
 
@@ -81,6 +92,24 @@ use dog_auth::hooks::{AuthenticateHook, AuthParams};
 
 // Construct from app state
 // let hook = AuthenticateHook::<AuthParams<MyParams>>::from_app(&app, vec!["jwt".into()])?;
+```
+
+### 3) Expose an external `/auth` endpoint with `AuthServiceAdapter`
+
+`AuthServiceAdapter<P>` is a thin wrapper around `AuthenticationService<P>` that implements
+`DogService<Value, P>` so it can be mounted by server adapters.
+
+```rust
+use std::sync::Arc;
+use dog_auth::{AuthServiceAdapter, AuthenticationService};
+use dog_core::{DogApp, DogService};
+use serde_json::Value;
+
+fn mount_auth<P: Send + Sync + Clone + 'static>(app: &DogApp<Value, P>) -> anyhow::Result<Arc<dyn DogService<Value, P>>> {
+    let auth = AuthenticationService::from_app(app)
+        .ok_or_else(|| anyhow::anyhow!("AuthenticationService missing from app state"))?;
+    Ok(Arc::new(AuthServiceAdapter::new(auth)))
+}
 ```
 
 ## Notes

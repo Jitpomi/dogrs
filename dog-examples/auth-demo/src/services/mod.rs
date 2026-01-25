@@ -5,7 +5,6 @@ use serde_json::Value;
 
 
 
-use crate::auth;
 use dog_auth::AuthenticationService;
 
 pub mod types;
@@ -33,7 +32,7 @@ pub fn configure(app: &DogApp<Value, AuthDemoParams>) -> Result<AuthServices> {
 
     let auth_core = AuthenticationService::from_app(app)
         .ok_or_else(|| anyhow::anyhow!("AuthenticationService missing from app state; did you call AuthenticationService::install?"))?;
-    let local = auth::register_local(Arc::clone(&auth_core));
+    let local = authentication::authentication_shared::register_local(Arc::clone(&auth_core));
 
     users::users_shared::register_hooks(app, local)?;
 

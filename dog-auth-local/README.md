@@ -41,6 +41,11 @@ fn register_local<P: Send + Clone + 'static>(auth: Arc<AuthenticationService<P>>
 }
 ```
 
+In many applications, you will also want to reuse the same `LocalStrategy` instance for hooks:
+
+- `HashPasswordHook::new("password", strategy)` uses `LocalStrategy::hash_password`, so it should
+  be constructed with the same options you use for authentication.
+
 ### Custom backends (TypeDB) via `LocalEntityResolver`
 
 If your `users` service does not implement `find` (e.g. TypeDB services using custom methods),
@@ -112,6 +117,8 @@ Authentication request shape (JSON):
   "password": "secret"
 }
 ```
+
+If your app uses `username` instead of `email`, configure `LocalStrategyOptions` accordingly.
 
 ## Hooks
 

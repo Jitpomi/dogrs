@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
 use crate::services::AuthDemoParams;
-
-use std::sync::Arc;
 use dog_auth::AuthenticationService;
 use dog_auth::core::AuthenticationStrategy;
 use dog_auth_local::{LocalStrategy, LocalStrategyOptions};

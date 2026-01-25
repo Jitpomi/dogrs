@@ -17,6 +17,24 @@ A high-level REST framework built on Axum that provides service-oriented archite
 - **Framework-safe patterns** - Memory-efficient handling of large files
 - **Tower ecosystem integration** - Full compatibility with Tower middleware
 
+## Optional integration features
+
+### `auth`
+
+Enable `dog-axum`'s `auth` feature to integrate with `dog-auth` hook params.
+
+This adds `FromRestParams` support for:
+
+- `dog_auth::hooks::authenticate::AuthParams<dog_axum::params::RestParams>`
+
+so application code can simply use:
+
+```rust
+pub type Params = dog_auth::hooks::authenticate::AuthParams<dog_axum::params::RestParams>;
+```
+
+without writing boilerplate conversion code.
+
 ## Quick Start
 
 ### 1. Basic REST Server
