@@ -1,0 +1,17 @@
+[package]
+name = "dog-auth-local"
+version = "0.1.0"
+edition = "2021"
+description = "Local (username/password) authentication strategy for DogRS"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+bcrypt = "0.18.0"
+dog-auth = { path = "../dog-auth" }
+dog-core = { path = "../dog-core" }
+serde_json = "1.0"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }

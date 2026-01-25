@@ -10,11 +10,11 @@ members = [
     "dog-schema-validator",
     "dog-examples/music-blobs",
     "dog-examples/blog-axum",
-    "dog-examples/social-typedb", 
+    "dog-examples/social-typedb",
     "dog-examples/fleet-queue",
     "dog-examples/auth-demo",
     "dog-auth",
-    
+    "dog-auth-local"
 ]
 
 resolver = "2"
