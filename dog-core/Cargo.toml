@@ -1,6 +1,6 @@
 [package]
 name = "dog-core"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Core traits and utilities for the DogRS ecosystem - a modular Rust framework for building scalable applications"
@@ -19,10 +19,10 @@ component_type = "library"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = "0.1.90"
-anyhow = "1.0.101"
-serde = { version = "1.0.230", features = ["derive"], optional = true }
-serde_json = { version = "1.0.146", optional = true }
+async-trait = "0.1.89"
+anyhow = "1.0.100"
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.145", optional = true }
 
 [features]
 default = []

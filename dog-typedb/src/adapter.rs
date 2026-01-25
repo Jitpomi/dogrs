@@ -31,16 +31,26 @@ impl TypeDBAdapter {
             .and_then(|q| q.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
 
-        execute_typedb_query(&self.driver, &self.database, query, TransactionType::Write).await
+        execute_typedb_query(&self.driver, &self.database, query).await
     }
 
     /// Execute a read query (match operations)
     pub async fn read(&self, data: Value) -> Result<Value> {
+        println!("=== TYPEDB ADAPTER READ START ===");
+        println!("Data: {:?}", data);
+        
         let query = data.get("query")
             .and_then(|q| q.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
 
-        execute_typedb_query(&self.driver, &self.database, query, TransactionType::Read).await
+        println!("=== EXTRACTED QUERY: {} ===", query);
+        println!("=== CALLING execute_typedb_query ===");
+
+        let result = execute_typedb_query(&self.driver, &self.database, query).await;
+        
+        println!("=== execute_typedb_query RESULT: {:?} ===", result.is_ok());
+        
+        result
     }
 
     /// Execute a schema query (define operations)
@@ -49,6 +59,6 @@ impl TypeDBAdapter {
             .and_then(|q| q.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
 
-        execute_typedb_query(&self.driver, &self.database, query, TransactionType::Schema).await
+        execute_typedb_query(&self.driver, &self.database, query).await
     }
 }

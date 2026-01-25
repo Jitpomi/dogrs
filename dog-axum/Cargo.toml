@@ -1,6 +1,6 @@
 [package]
 name = "dog-axum"
-version = "0.1.0"
+version = "0.1.3"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Axum web framework integration for DogRS - HTTP handlers, middleware, and web utilities"
@@ -20,25 +20,25 @@ component_type = "library"
 
 [dependencies]
 axum = { version = "0.8.8", features = ["macros", "json", "multipart"] }
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "fs", "io-util"] }
-tower = "0.5.3"
-base64 = "0.22.1"
-anyhow = "1.0.101"
-async-trait = "0.1.90"
-tracing = "0.1.42"
-tower-http = { version = "0.6.8", features = ["trace", "request-id"] }
-uuid = { version = "1.19.0", features = ["v4"] }
-serde = { version = "1.0.230", features = ["derive"] }
-serde_json = "1.0.146"
-dog-core = { version = "0.1.0", features = ["serde"] }
-multer = "3.2.0"
-futures = "0.3.32"
-bytes = "1.9.0"
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "fs", "io-util"] }
+tower = "0.5.2"
+base64 = "0.22"
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+tracing = "0.1.41"
+tower-http = { version = "0.6.6", features = ["trace", "request-id"] }
+uuid = { version = "1.18.1", features = ["v4"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+dog-core = { version = "0.1.2", features = ["serde"] }
+multer = "3.1.0"
+futures = "0.3.31"
+bytes = "1.8.0"
 
 [dev-dependencies]
-anyhow = "1.0.101"
-tower = "0.5.3"
-http-body-util = "0.1.4"
+anyhow = "1.0.100"
+tower = "0.5.2"
+http-body-util = "0.1.3"
 
 [lib]
 name = "dog_axum"

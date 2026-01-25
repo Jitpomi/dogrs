@@ -1,6 +1,6 @@
 [package]
 name = "dog-schema-macros"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Procedural macros for DogRS schema generation - derive macros for validation and serialization"
@@ -15,6 +15,6 @@ readme = "../README.md"
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1.0.102"
-quote = "1.0.42"
-syn = { version = "2.0", features = ["full", "extra-traits"] }
+proc-macro2 = "1.0.101"
+quote = "1.0.41"
+syn = { version = "1.0", features = ["full", "extra-traits"] }
