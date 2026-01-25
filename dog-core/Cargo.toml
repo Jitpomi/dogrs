@@ -1,6 +1,6 @@
 [package]
 name = "dog-core"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Core traits and utilities for the DogRS ecosystem - a modular Rust framework for building scalable applications"
@@ -9,7 +9,7 @@ repository = "https://github.com/Jitpomi/dogrs"
 documentation = "https://docs.rs/dog-core"
 keywords = ["framework", "async", "traits", "core"]
 categories = ["development-tools", "asynchronous"]
-readme = "../README.md"
+readme = "README.md"
 
 [package.metadata]
 

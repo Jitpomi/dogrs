@@ -118,11 +118,24 @@ dog-core follows a clean separation of concerns:
 ```
 ┌─────────────────┐
 │   Your App      │  ← Business logic
-├─────────────────┤
-│   dog-axum      │  ← HTTP adapter
-│   dog-typedb    │  ← Database adapter  
-│   dog-blob      │  ← Storage adapter
-├─────────────────┤
+└─────────────────┘
+         │
+    ┌────┼────┐
+    │    │    │
+    ▼    │    ▼
+┌─────────┐ ┌─────────────┐
+│dog-axum │ │dog-typedb   │  ← Adapters
+│(HTTP)   │ │(DB)         │
+└─────────┘ └─────────────┘
+         │
+         ▼
+┌─────────────────┐
+│   dog-blob      │  ← Object storage
+│   (Storage)     │
+└─────────────────┘
+         │
+         ▼
+┌─────────────────┐
 │   dog-core      │  ← Core abstractions
 └─────────────────┘
 ```
