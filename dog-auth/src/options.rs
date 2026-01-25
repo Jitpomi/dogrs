@@ -68,6 +68,16 @@ impl Default for TokenType {
 pub struct AuthOptions {
     /// Enabled authentication strategies
     pub strategies: Vec<AuthStrategy>,
+
+    /// Optional entity attachment configuration (Feathers-like)
+    ///
+    /// If `entity` is Some("user"), JWT strategy may attach `{ "user": <entity> }` to results.
+    pub entity: Option<String>,
+    /// Service name used to load the entity (e.g. "users")
+    pub service: Option<String>,
+    /// Claim name containing the entity id (defaults to "sub")
+    pub entity_id_claim: Option<String>,
+
     /// JWT-specific configuration
     pub jwt: JwtOptions,
     /// OAuth provider configurations
@@ -80,6 +90,9 @@ impl Default for AuthOptions {
     fn default() -> Self {
         Self {
             strategies: vec![AuthStrategy::Jwt],
+            entity: None,
+            service: None,
+            entity_id_claim: None,
             jwt: JwtOptions::default(),
             oauth_providers: HashMap::new(),
             api_key: ApiKeyOptions::default(),
@@ -92,6 +105,12 @@ impl AuthOptions {
     pub fn validate(&self) -> Result<(), String> {
         if self.strategies.is_empty() {
             return Err("At least one authentication strategy must be enabled".to_string());
+        }
+
+        if self.entity.is_some() {
+            if self.service.as_deref().unwrap_or("").trim().is_empty() {
+                return Err("Entity is configured but service is missing".to_string());
+            }
         }
         
         // Validate JWT configuration if JWT strategy is enabled
@@ -384,6 +403,9 @@ impl AuthOptionsBuilder {
             } else {
                 self.strategies
             },
+            entity: None,
+            service: None,
+            entity_id_claim: None,
             jwt: self.jwt.unwrap_or_default(),
             oauth_providers: self.oauth_providers,
             api_key: self.api_key.unwrap_or_default(),

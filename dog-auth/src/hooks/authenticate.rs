@@ -135,7 +135,7 @@ where
 
         let auth_result = self
             .auth_service
-            .authenticate(&auth_req, &auth_params, &self.strategies)
+            .authenticate(&auth_req, &auth_params, ctx, &self.strategies)
             .await?;
 
         ctx.params.set_auth_result(auth_result);

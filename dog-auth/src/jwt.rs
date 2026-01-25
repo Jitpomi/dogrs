@@ -5,7 +5,7 @@ use std::sync::{Arc, Weak};
 use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::errors::DogError;
-use dog_core::DogApp;
+use dog_core::HookContext;
 use serde_json::{json, Map, Value};
 
 use crate::core::{AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult, AuthenticationStrategy};
@@ -111,7 +111,7 @@ where
         &self,
         authentication: &AuthenticationRequest,
         params: &AuthenticationParams,
-        _app: &DogApp<Value, P>,
+        ctx: &mut HookContext<Value, P>,
     ) -> Result<AuthenticationResult> {
         let auth = self
             .auth
@@ -128,15 +128,41 @@ where
             .await
             .map_err(|e| DogError::not_authenticated(e.to_string()).into_anyhow())?;
 
+        let cfg = auth.configuration();
+        let entity_key = cfg.entity.clone();
+        let service_name = cfg.service.clone();
+        let entity_id_claim = cfg.entity_id_claim.clone().unwrap_or_else(|| "sub".to_string());
+
         let mut auth_obj = Map::new();
         auth_obj.insert("strategy".to_string(), Value::String(self.name.clone()));
         auth_obj.insert("accessToken".to_string(), Value::String(access_token.clone()));
         auth_obj.insert("payload".to_string(), payload.clone());
 
-        Ok(json!({
+        let mut out = json!({
             "accessToken": access_token,
             "authentication": Value::Object(auth_obj),
             "payload": payload
-        }))
+        });
+
+        // Optional: attach entity
+        if let (Some(entity_key), Some(service_name)) = (entity_key, service_name) {
+            let entity_id = out
+                .get("payload")
+                .and_then(|p| p.get(&entity_id_claim))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    DogError::not_authenticated("Could not resolve entity id from token").into_anyhow()
+                })?
+                .to_string();
+
+            let svc = ctx.services.service::<Value, P>(&service_name)?;
+            let entity = svc.get(&ctx.tenant, &entity_id, ctx.params.clone()).await?;
+
+            if let Some(map) = out.as_object_mut() {
+                map.insert(entity_key, entity);
+            }
+        }
+
+        Ok(out)
     }
 }

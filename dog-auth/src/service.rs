@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use dog_core::errors::DogError;
 use dog_core::DogApp;
+use dog_core::HookContext;
 use serde_json::{json, Value};
 
 use crate::core::{AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult, ConnectionEvent, JwtOverrides};
@@ -53,9 +54,10 @@ where
         &self,
         authentication: &AuthenticationRequest,
         params: &AuthenticationParams,
+        ctx: &mut HookContext<Value, P>,
         strategies: &[String],
     ) -> Result<AuthenticationResult> {
-        self.base.authenticate(authentication, params, strategies).await
+        self.base.authenticate(authentication, params, ctx, strategies).await
     }
 
     pub async fn setup_validate(&self) -> Result<()> {
@@ -88,6 +90,7 @@ where
         &self,
         authentication: &AuthenticationRequest,
         params: &AuthenticationParams,
+        ctx: &mut HookContext<Value, P>,
         strategies: &[String],
         jwt_overrides: Option<JwtOverrides>,
     ) -> Result<AuthenticationResult> {
@@ -98,7 +101,7 @@ where
             .into_anyhow());
         }
 
-        let auth_result = self.authenticate(authentication, params, strategies).await?;
+        let auth_result = self.authenticate(authentication, params, ctx, strategies).await?;
 
         if auth_result.get("accessToken").and_then(|v| v.as_str()).is_some() {
             return Ok(auth_result);
@@ -125,6 +128,7 @@ where
         &self,
         access_token: Option<&str>,
         params: &AuthenticationParams,
+        ctx: &mut HookContext<Value, P>,
         strategies: &[String],
     ) -> Result<AuthenticationResult> {
         let token = access_token
@@ -142,7 +146,7 @@ where
             data,
         };
 
-        self.authenticate(&auth_req, params, strategies).await
+        self.authenticate(&auth_req, params, ctx, strategies).await
     }
 
     pub async fn handle_connection(

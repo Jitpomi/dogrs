@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use dog_core::errors::DogError;
 use dog_core::DogApp;
+use dog_core::HookContext;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
@@ -198,7 +199,7 @@ where
         &self,
         authentication: &AuthenticationRequest,
         params: &AuthenticationParams,
-        app: &DogApp<Value, P>,
+        ctx: &mut HookContext<Value, P>,
     ) -> Result<AuthenticationResult>;
 }
 
@@ -283,6 +284,7 @@ where
         &self,
         authentication: &AuthenticationRequest,
         params: &AuthenticationParams,
+        ctx: &mut HookContext<Value, P>,
         allowed: &[String],
     ) -> Result<AuthenticationResult> {
         let Some(strategy) = authentication.strategy.as_deref() else {
@@ -302,7 +304,7 @@ where
                 .into_anyhow()
         })?;
 
-        strat.authenticate(authentication, params, &self.app).await
+        strat.authenticate(authentication, params, ctx).await
     }
 
     pub async fn setup(&self) {
