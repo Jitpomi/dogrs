@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::{
     extract::{OriginalUri, Path, Query, State},
     http::{HeaderMap, Request},
+    response::Redirect,
     routing,
     Json,
     Router,
@@ -19,12 +20,125 @@ use crate::{
 };
 
 
-fn tenant_from_headers(headers: &HeaderMap) -> TenantContext {
+pub fn tenant_from_headers(headers: &HeaderMap) -> TenantContext {
     headers
         .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
         .map(TenantContext::new)
         .unwrap_or_else(|| TenantContext::new("default"))
+}
+
+pub async fn call_custom<R, P>(
+    app: &DogApp<R, P>,
+    service_name: &str,
+    method: &'static str,
+    headers: &HeaderMap,
+    query: std::collections::HashMap<String, String>,
+    http_method: &'static str,
+    uri: &axum::http::Uri,
+    data: Option<R>,
+) -> Result<serde_json::Value, DogAxumError>
+where
+    R: Serialize + DeserializeOwned + Send + Sync + 'static,
+    P: FromRestParams + Send + Sync + Clone + 'static,
+{
+    let tenant = tenant_from_headers(headers);
+
+    let params = RestParams::from_parts("rest", headers, query, http_method, uri);
+    let params = P::from_rest_params(params);
+
+    let svc = app.service(service_name)?;
+    let res = svc.custom(tenant, method, data, params).await?;
+    Ok(serde_json::to_value(res).map_err(|e| anyhow::anyhow!(e))?)
+}
+
+pub async fn call_custom_json<R, P>(
+    app: &DogApp<R, P>,
+    service_name: &str,
+    method: &'static str,
+    headers: &HeaderMap,
+    query: std::collections::HashMap<String, String>,
+    http_method: &'static str,
+    uri: &axum::http::Uri,
+    data: Option<R>,
+) -> Result<axum::Json<serde_json::Value>, DogAxumError>
+where
+    R: Serialize + DeserializeOwned + Send + Sync + 'static,
+    P: FromRestParams + Send + Sync + Clone + 'static,
+{
+    Ok(Json(
+        call_custom(app, service_name, method, headers, query, http_method, uri, data).await?,
+    ))
+}
+
+pub async fn call_custom_redirect<R, P>(
+    app: &DogApp<R, P>,
+    service_name: &str,
+    method: &'static str,
+    headers: &HeaderMap,
+    query: std::collections::HashMap<String, String>,
+    http_method: &'static str,
+    uri: &axum::http::Uri,
+    data: Option<R>,
+    location_key: &'static str,
+) -> Result<Redirect, DogAxumError>
+where
+    R: Serialize + DeserializeOwned + Send + Sync + 'static,
+    P: FromRestParams + Send + Sync + Clone + 'static,
+{
+    let v = call_custom(app, service_name, method, headers, query, http_method, uri, data).await?;
+    let location = v
+        .get(location_key)
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| {
+            DogError::bad_request(&format!(
+                "Expected response to include '{}' string field",
+                location_key
+            ))
+            .into_anyhow()
+        })?;
+
+    Ok(Redirect::temporary(location))
+}
+
+pub fn query_to_map<T: Serialize>(query: &T) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(v) = serde_json::to_value(query) else {
+        return out;
+    };
+
+    let Some(obj) = v.as_object() else {
+        return out;
+    };
+
+    for (k, v) in obj {
+        let s = match v {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            serde_json::Value::Bool(b) => Some(b.to_string()),
+            _ => None,
+        };
+
+        if let Some(s) = s {
+            out.insert(k.clone(), s);
+        }
+    }
+
+    out
+}
+
+pub fn oauth_callback_capture<T: Serialize>(
+    provider: &'static str,
+    query: &T,
+) -> axum::Json<serde_json::Value> {
+    let q = serde_json::to_value(query).unwrap_or(serde_json::Value::Null);
+    let code = q.get("code").cloned().unwrap_or(serde_json::Value::Null);
+    let state = q.get("state").cloned().unwrap_or(serde_json::Value::Null);
+    Json(serde_json::json!({
+        "provider": provider,
+        "code": code,
+        "state": state,
+    }))
 }
 
 async fn handle_custom_method<R, P>(

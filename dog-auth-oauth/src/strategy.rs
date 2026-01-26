@@ -252,13 +252,19 @@ where
 
         if access_token.is_none() {
             if let (Some(code), Some(provider)) = (req.code.as_deref(), external.as_ref()) {
-                access_token = Some(provider.exchange_code(code, ctx).await?);
+                access_token = Some(match provider.exchange_code(code, ctx).await {
+                    Ok(t) => t,
+                    Err(e) => return Err(map_oauth_provider_error(e)),
+                });
             }
         }
 
         if profile.is_none() {
             if let (Some(token), Some(provider)) = (access_token.as_deref(), external.as_ref()) {
-                profile = provider.fetch_profile(token, ctx).await?;
+                profile = match provider.fetch_profile(token, ctx).await {
+                    Ok(p) => p,
+                    Err(e) => return Err(map_oauth_provider_error(e)),
+                };
             }
         }
 
@@ -314,4 +320,37 @@ where
 
         Ok(out)
     }
+}
+
+fn map_oauth_provider_error(e: anyhow::Error) -> anyhow::Error {
+    // We keep this provider-agnostic by inspecting error chain text.
+    // If we can identify a common OAuth failure, return a DogError::bad_request so HTTP adapters
+    // produce a clear 400 rather than a generic 500.
+    let mut hay = String::new();
+    for cause in e.chain() {
+        hay.push_str(&cause.to_string().to_lowercase());
+        hay.push('\n');
+    }
+
+    if hay.contains("invalid_grant")
+        || hay.contains("code was already redeemed")
+        || hay.contains("already been redeemed")
+        || hay.contains("authorization code") && hay.contains("already")
+    {
+        return DogError::bad_request("OAuth code is invalid/expired or already used").into_anyhow();
+    }
+
+    if hay.contains("redirect_uri_mismatch") || (hay.contains("redirect") && hay.contains("mismatch")) {
+        return DogError::bad_request("OAuth redirect_uri mismatch").into_anyhow();
+    }
+
+    if hay.contains("invalid_client") {
+        return DogError::bad_request("OAuth client configuration is invalid").into_anyhow();
+    }
+
+    if hay.contains("unauthorized_client") {
+        return DogError::bad_request("OAuth client is not authorized").into_anyhow();
+    }
+
+    e
 }
