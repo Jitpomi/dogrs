@@ -101,6 +101,34 @@ where
     Ok(Redirect::temporary(location))
 }
 
+pub async fn call_custom_redirect_location<R, P>(
+    app: &DogApp<R, P>,
+    service_name: &str,
+    method: &'static str,
+    headers: &HeaderMap,
+    query: std::collections::HashMap<String, String>,
+    http_method: &'static str,
+    uri: &axum::http::Uri,
+    data: Option<R>,
+) -> Result<Redirect, DogAxumError>
+where
+    R: Serialize + DeserializeOwned + Send + Sync + 'static,
+    P: FromRestParams + Send + Sync + Clone + 'static,
+{
+    call_custom_redirect(
+        app,
+        service_name,
+        method,
+        headers,
+        query,
+        http_method,
+        uri,
+        data,
+        "location",
+    )
+    .await
+}
+
 pub fn query_to_map<T: Serialize>(query: &T) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     let Ok(v) = serde_json::to_value(query) else {

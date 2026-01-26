@@ -24,7 +24,7 @@ pub async fn google_login_handler(
     headers: HeaderMap,
     OriginalUri(uri): OriginalUri,
 ) -> anyhow::Result<axum::response::Redirect> {
-    let res = rest::call_custom_redirect(
+    let res = rest::call_custom_redirect_location(
         app.as_ref(),
         "oauth",
         "google_login",
@@ -33,7 +33,6 @@ pub async fn google_login_handler(
         "GET",
         &uri,
         None,
-        "location",
     )
     .await
     .map_err(|e| e.0)?;
