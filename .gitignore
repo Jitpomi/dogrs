@@ -32,6 +32,7 @@ Thumbs.db
 
 # === Env files ===
 */.env
+dog-examples/auth-demo/.env
 
 # === Node.js ===
 node_modules/

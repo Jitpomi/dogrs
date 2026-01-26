@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
 
     let addr = format!("{host}:{port}");
 
-  
+    println!("[auth-demo] listening on http://{addr}");
 
     ax.listen(addr).await?;
 

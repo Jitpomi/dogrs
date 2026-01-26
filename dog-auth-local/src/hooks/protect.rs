@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use dog_core::hooks::DogAfterHook;
 use dog_core::{HookContext, HookResult};
 use serde_json::Value;
+use std::collections::HashSet;
 
 pub trait ProtectHookParams: Clone + Send + Sync {
     fn provider(&self) -> Option<&str>;
@@ -23,7 +24,10 @@ pub struct ProtectHook<P>
 where
     P: ProtectHookParams + 'static,
 {
-    fields: Vec<String>,
+    /// Path-based removal rules (supports dotted paths like "authentication.accessToken")
+    paths: Vec<String>,
+    /// Deep removal rules (remove matching keys anywhere in the JSON tree)
+    deep_fields: HashSet<String>,
     _phantom: std::marker::PhantomData<P>,
 }
 
@@ -33,7 +37,8 @@ where
 {
     pub fn new(fields: Vec<String>) -> Self {
         Self {
-            fields,
+            paths: fields,
+            deep_fields: HashSet::new(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -42,10 +47,40 @@ where
         Self::new(fields.iter().map(|s| s.to_string()).collect())
     }
 
-    fn strip_one(&self, mut v: Value) -> Value {
-        for f in &self.fields {
-            Self::remove_path(&mut v, f);
+    /// Remove the given keys anywhere in the JSON tree (deep recursive stripping).
+    ///
+    /// This is intentionally separate from `from_fields`, which preserves the original
+    /// dotted-path semantics for backward compatibility.
+    pub fn from_deep_fields(fields: &[&str]) -> Self {
+        let mut out = Self::new(vec![]);
+        out.deep_fields = fields.iter().map(|s| s.to_string()).collect();
+        out
+    }
+
+    /// Add dotted-path removal rules (e.g. "authentication.accessToken").
+    pub fn with_paths(mut self, paths: &[&str]) -> Self {
+        self.paths
+            .extend(paths.iter().map(|s| s.to_string()));
+        self
+    }
+
+    /// Add deep recursive removal rules (e.g. remove "password" anywhere).
+    pub fn with_deep_fields(mut self, fields: &[&str]) -> Self {
+        for f in fields {
+            self.deep_fields.insert(f.to_string());
         }
+        self
+    }
+
+    fn strip_one(&self, mut v: Value) -> Value {
+        for p in &self.paths {
+            Self::remove_path(&mut v, p);
+        }
+
+        if !self.deep_fields.is_empty() {
+            Self::remove_deep_fields(&mut v, &self.deep_fields);
+        }
+
         v
     }
 
@@ -80,6 +115,27 @@ where
             map.remove(last);
         }
     }
+
+    fn remove_deep_fields(v: &mut Value, fields: &HashSet<String>) {
+        match v {
+            Value::Object(map) => {
+                // Remove matching keys at this level
+                for f in fields {
+                    map.remove(f);
+                }
+                // Recurse into remaining values
+                for (_, child) in map.iter_mut() {
+                    Self::remove_deep_fields(child, fields);
+                }
+            }
+            Value::Array(items) => {
+                for child in items.iter_mut() {
+                    Self::remove_deep_fields(child, fields);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[async_trait]
@@ -88,11 +144,6 @@ where
     P: ProtectHookParams + Clone + Send + Sync + 'static,
 {
     async fn run(&self, ctx: &mut HookContext<Value, P>) -> Result<()> {
-        let provider = ctx.params.provider().unwrap_or("");
-        if provider.trim().is_empty() {
-            return Ok(());
-        }
-
         let Some(res) = ctx.result.take() else {
             return Ok(());
         };

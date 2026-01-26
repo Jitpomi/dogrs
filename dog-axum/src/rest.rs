@@ -43,23 +43,23 @@ where
     let capabilities = svc.inner().capabilities();
     
     // Check if any custom method with this name exists in capabilities
-    let method_supported = capabilities.allowed_methods.iter().any(|m| {
+    let method_name: Option<&'static str> = capabilities.allowed_methods.iter().find_map(|m| {
         match m {
-            ServiceMethodKind::Custom(name) => name.eq_ignore_ascii_case(method),
-            _ => false,
+            ServiceMethodKind::Custom(name) if name.eq_ignore_ascii_case(method) => Some(*name),
+            _ => None,
         }
     });
     
-    if !method_supported {
+    let Some(method_name) = method_name else {
         return Err(DogError::bad_request(&format!(
             "Service '{}' does not support custom method '{}'", 
             service_name, 
             method
         )).into_anyhow().into());
-    }
+    };
     
-    // Call the custom method handler
-    let result = svc.inner().custom(&tenant, method, data, params).await?;
+    // Call the custom method through the DogRS pipeline so hooks run
+    let result = svc.custom(tenant, method_name, data, params).await?;
     let json_result = serde_json::to_value(result).map_err(|e| anyhow::anyhow!(e))?;
     Ok(axum::Json(json_result))
 }

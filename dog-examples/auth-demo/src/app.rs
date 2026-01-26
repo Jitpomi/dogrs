@@ -6,6 +6,7 @@ use crate::services::AuthDemoParams;
 
 
 pub fn auth_app() -> Result<AxumApp<Value, AuthDemoParams>> {
+    dotenvy::from_filename("dog-examples/auth-demo/.env").ok();
     dotenvy::dotenv().ok();
 
     let dog_app: DogApp<Value, AuthDemoParams> = DogApp::new();

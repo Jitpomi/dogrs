@@ -14,11 +14,13 @@ pub mod adapters;
 pub mod messages;
 pub mod users;
 pub mod authentication;
+pub mod oauth;
 
 pub struct AuthServices {
     pub messages: Arc<dyn DogService<Value, AuthDemoParams>>,
     pub users: Arc<dyn DogService<Value, AuthDemoParams>>,
     pub auth_svc: Arc<dyn DogService<Value, AuthDemoParams>>,
+    pub oauth: Arc<dyn DogService<Value, AuthDemoParams>>,
 }
 
 pub fn configure(app: &DogApp<Value, AuthDemoParams>) -> Result<AuthServices> {
@@ -38,6 +40,12 @@ pub fn configure(app: &DogApp<Value, AuthDemoParams>) -> Result<AuthServices> {
     app.register_service("authentication", Arc::clone(&auth_svc));
     authentication::authentication_shared::register_hooks(app)?;
 
-    Ok(AuthServices { messages, users, auth_svc })
+    // Register oauth service
+    let oauth: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::new(oauth::OauthService::new(app.clone()));
+    app.register_service("oauth", Arc::clone(&oauth));
+    oauth::oauth_shared::register_hooks(app)?;
+
+
+    Ok(AuthServices { messages, users, auth_svc, oauth })
 }
 
