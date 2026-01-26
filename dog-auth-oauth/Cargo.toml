@@ -13,5 +13,11 @@ dog-core = { path = "../dog-core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+oauth2 = { version = "4.4", default-features = false, features = ["reqwest", "rustls-tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+
+[features]
+oauth2-client = ["dep:oauth2", "dep:reqwest"]
+
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
