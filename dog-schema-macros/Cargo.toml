@@ -1,6 +1,6 @@
 [package]
 name = "dog-schema-macros"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Procedural macros for DogRS schema generation - derive macros for validation and serialization"
@@ -9,7 +9,7 @@ repository = "https://github.com/Jitpomi/dogrs"
 documentation = "https://docs.rs/dog-schema-macros"
 keywords = ["macros", "proc-macro", "schema", "derive"]
 categories = ["development-tools::procedural-macro-helpers", "data-structures"]
-readme = "../README.md"
+readme = "../ReadMe.md"
 
 [lib]
 proc-macro = true

@@ -1,6 +1,6 @@
 [package]
 name = "dog-core"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Core traits and utilities for the DogRS ecosystem - a modular Rust framework for building scalable applications"
