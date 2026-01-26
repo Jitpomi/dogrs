@@ -98,8 +98,8 @@ pub async fn google_login_service_handler(
 
 pub async fn google_callback_service_capture_handler(
     Query(query): Query<OAuthCallbackQuery>,
-) -> anyhow::Result<axum::Json<Value>> {
-    Ok(rest::oauth_callback_capture("google_service", &query))
+) -> anyhow::Result<axum::Json<rest::OAuthCapture>> {
+    Ok(rest::oauth_callback_capture_typed("google_service", &query))
 }
 
 pub fn mount(mut ax: AxumApp<Value, AuthDemoParams>) -> AxumApp<Value, AuthDemoParams> {

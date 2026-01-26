@@ -169,6 +169,31 @@ pub fn oauth_callback_capture<T: Serialize>(
     }))
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OAuthCapture {
+    pub provider: String,
+    pub code: Option<String>,
+    pub state: Option<String>,
+}
+
+pub fn oauth_callback_capture_typed<T: Serialize>(
+    provider: impl Into<String>,
+    query: &T,
+) -> axum::Json<OAuthCapture> {
+    let provider = provider.into();
+    let q = serde_json::to_value(query).unwrap_or(serde_json::Value::Null);
+    let code = q
+        .get("code")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let state = q
+        .get("state")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Json(OAuthCapture { provider, code, state })
+}
+
 pub async fn call_custom_json_qd<R, P, Q, D>(
     app: &DogApp<R, P>,
     service_name: &str,
