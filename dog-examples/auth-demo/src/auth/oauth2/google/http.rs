@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use axum::extract::{OriginalUri, Query};
 use axum::http::HeaderMap;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use dog_axum::params::{FromRestParams, RestParams};
+use dog_axum::AxumApp;
 use serde_json::Value;
 
 use crate::services::AuthDemoParams;
@@ -116,4 +119,72 @@ pub async fn google_callback_service_capture_handler(
         "code": query.code,
         "state": query.state,
     })))
+}
+
+pub fn mount(mut ax: AxumApp<Value, AuthDemoParams>) -> AxumApp<Value, AuthDemoParams> {
+    let app_arc = Arc::clone(&ax.app);
+
+    ax = ax
+        .service(
+            "/oauth/google/login",
+            {
+                let app_arc = Arc::clone(&app_arc);
+                move |headers: HeaderMap, uri: OriginalUri| {
+                    let app_arc = Arc::clone(&app_arc);
+                    async move {
+                        let res: Response = match google_login_handler(app_arc, headers, uri).await {
+                            Ok(r) => r.into_response(),
+                            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                        };
+                        res
+                    }
+                }
+            },
+        )
+        .service(
+            "/oauth/google/login/service",
+            {
+                let app_arc = Arc::clone(&app_arc);
+                move || {
+                    let app_arc = Arc::clone(&app_arc);
+                    async move {
+                        let res: Response = match google_login_service_handler(app_arc).await {
+                            Ok(r) => r.into_response(),
+                            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                        };
+                        res
+                    }
+                }
+            },
+        )
+        .service(
+            "/oauth/google/callback",
+            {
+                let app_arc = Arc::clone(&app_arc);
+                move |headers: HeaderMap, Query(query): Query<OAuthCallbackQuery>, uri: OriginalUri| {
+                    let app_arc = Arc::clone(&app_arc);
+                    async move {
+                        let res: Response = match google_callback_handler(app_arc, headers, Query(query), uri).await {
+                            Ok(r) => r.into_response(),
+                            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                        };
+                        res
+                    }
+                }
+            },
+        )
+        .service(
+            "/oauth/google/callback/service",
+            {
+                move |Query(query): Query<OAuthCallbackQuery>| async move {
+                    let res: Response = match google_callback_service_capture_handler(Query(query)).await {
+                        Ok(r) => r.into_response(),
+                        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                    };
+                    res
+                }
+            },
+        );
+
+    ax
 }

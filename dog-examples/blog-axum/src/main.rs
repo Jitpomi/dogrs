@@ -6,7 +6,7 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let ax = blog_axum::build()?;
+    let ax = blog_axum::build().await?;
 
     let host = ax
         .app

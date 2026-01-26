@@ -8,7 +8,7 @@ async fn main() -> Result<()> {
         std::env::set_var("RUST_LOG", "info");
     }
 
-    let ax = auth_demo::build()?;
+    let ax = auth_demo::build().await?;
 
     let host = ax
         .app

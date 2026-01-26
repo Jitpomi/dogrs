@@ -27,16 +27,12 @@ impl MusicMultipartDefaults {
 }
 
 pub async fn build() -> anyhow::Result<AxumApp<Value, MusicParams>> {
-    let ax = app::music_app()?;
-    rustfs::RustFsState::setup_store(ax.app.as_ref()).await?;
+    let ax = app::music_app().await?;
 
     let state = ax
         .app
         .get::<Arc<rustfs::RustFsState>>("rustfs")
         .ok_or(anyhow::anyhow!("RustFsState not found"))?;
-
-    hooks::global_hooks(ax.app.as_ref());
-    channels::configure(ax.app.as_ref())?;
 
     let svcs = services::configure(ax.app.as_ref(), Arc::clone(&state))?;
 
