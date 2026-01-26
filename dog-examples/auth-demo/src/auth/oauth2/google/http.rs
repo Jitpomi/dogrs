@@ -47,24 +47,23 @@ pub async fn google_callback_handler(
     Query(query): Query<OAuthCallbackQuery>,
     OriginalUri(uri): OriginalUri,
 ) -> anyhow::Result<axum::Json<Value>> {
-    let q = rest::query_to_map(&query);
-
     let code = query
         .code
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("Missing ?code=..."))?;
 
-    let res = rest::call_custom_json(
+    let res = rest::call_custom_json_qd(
         app.as_ref(),
         "oauth",
         "google_callback",
         &headers,
-        q,
+        &query,
         "GET",
         &uri,
-        Some(serde_json::json!({
+        &serde_json::json!({
             "code": code,
             "state": query.state,
-        })),
+        }),
     )
     .await
     .map_err(|e| e.0)?;
