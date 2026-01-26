@@ -8,6 +8,7 @@
 pub mod app;
 pub mod middlewares;
 pub mod params;
+pub mod oauth;
 pub mod rest;
 pub mod state;
 mod error;
