@@ -46,6 +46,52 @@ dog-auth = { path = "../dog-auth" }
 dog-auth-oauth = { path = "../dog-auth-oauth" }
 ```
 
+### Optional features
+
+#### `oauth2-client`
+
+Enables a small, provider-agnostic helper built on the `oauth2` crate:
+
+- `OAuth2AuthorizationCodeProvider<P>`
+
+This lets you implement common OAuth2 authorization-code providers without wiring the `oauth2` client manually in every app.
+
+```toml
+[dependencies]
+dog-auth-oauth = { path = "../dog-auth-oauth", features = ["oauth2-client"] }
+```
+
+Example:
+
+```rust
+use std::sync::Arc;
+
+use dog_auth::AuthenticationService;
+use dog_auth_oauth::{OAuth2AuthorizationCodeProvider, OAuthStrategy, OAuthStrategyOptions};
+
+fn register_google_oauth<P: Clone + Send + Sync + 'static>(auth: Arc<AuthenticationService<P>>) -> anyhow::Result<()> {
+    let provider = OAuth2AuthorizationCodeProvider::<P>::new(
+        "google",
+        "client_id",
+        "client_secret",
+        "https://accounts.google.com/o/oauth2/v2/auth",
+        "https://oauth2.googleapis.com/token",
+        "http://localhost:3000/oauth/google/callback",
+        vec!["openid".to_string(), "email".to_string(), "profile".to_string()],
+        Some("https://openidconnect.googleapis.com/v1/userinfo".to_string()),
+    )?;
+
+    let mut opts: OAuthStrategyOptions<P> = OAuthStrategyOptions::default();
+    opts.default_provider = Some("google".to_string());
+    opts.providers.insert("google".to_string(), Arc::new(provider));
+
+    let strategy = OAuthStrategy::new(&auth.base).with_options(opts);
+    auth.register_strategy("oauth", Arc::new(strategy));
+
+    Ok(())
+}
+```
+
 ## Registering an OAuth provider
 
 ```rust

@@ -35,6 +35,25 @@ pub type Params = dog_auth::hooks::authenticate::AuthParams<dog_axum::params::Re
 
 without writing boilerplate conversion code.
 
+### OAuth DX helpers
+
+`dog-axum` includes small, provider-agnostic helpers that make it easier to expose OAuth flows over HTTP.
+
+REST helpers (in `dog_axum::rest`):
+
+- `call_custom_json` / `call_custom_redirect`
+- `call_custom_json_q` / `call_custom_json_qd`
+- `call_custom_redirect_q` / `call_custom_redirect_qd`
+- `call_custom_redirect_location` (defaults `location_key` to `"location"`)
+- `oauth_callback_capture_typed` (standard capture response for service-mode callback testing)
+
+Route builder (in `dog_axum::oauth`):
+
+- `OAuthRoutes`
+- `mount_oauth_routes`
+
+These helpers are intentionally policy-free: you provide the service name, custom method names, paths, and callback payload shape.
+
 ## Quick Start
 
 ### 1. Basic REST Server

@@ -32,6 +32,10 @@ All DogRS crates are now available on [crates.io](https://crates.io):
 ### Web Framework Adapters  
 - **[dog-axum](https://crates.io/crates/dog-axum)** `0.1.0` → Axum adapter for HTTP APIs with multipart uploads and middleware
 
+### Auth
+- **[dog-auth](https://crates.io/crates/dog-auth)** `0.1.0` → Authentication service + strategy registry (JWT issuance)
+- **[dog-auth-oauth](https://crates.io/crates/dog-auth-oauth)** `0.1.0` → Provider-agnostic OAuth strategy + orchestration
+
 ### Database Adapters
 - **[dog-typedb](https://crates.io/crates/dog-typedb)** `0.1.0` → TypeDB integration with query builders and adapters
 
@@ -67,6 +71,12 @@ cargo add dog-schema dog-schema-macros dog-schema-validator
 ## 📚 Docs
 
 - [Configuration](docs/configuration.md)
+
+## 🧪 Examples
+
+- `dog-examples/auth-demo` includes an end-to-end OAuth2 Google login flow.
+  - Uses `dog-auth-oauth` (enable `oauth2-client` feature for the reusable `oauth2` client helper)
+  - Exposes OAuth endpoints via `dog-axum`
 
 ## 🚧 Status
 
