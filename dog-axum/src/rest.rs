@@ -247,6 +247,28 @@ where
     call_custom_json(app, service_name, method, headers, q, http_method, uri, Some(body)).await
 }
 
+pub async fn call_custom_redirect_qd<R, P, Q, D>(
+    app: &DogApp<R, P>,
+    service_name: &str,
+    method: &'static str,
+    headers: &HeaderMap,
+    query: &Q,
+    http_method: &'static str,
+    uri: &axum::http::Uri,
+    data: &D,
+) -> Result<Redirect, DogAxumError>
+where
+    R: Serialize + DeserializeOwned + Send + Sync + 'static,
+    P: FromRestParams + Send + Sync + Clone + 'static,
+    Q: Serialize,
+    D: Serialize,
+{
+    let q = query_to_map(query);
+    let body: R = serde_json::from_value(serde_json::to_value(data).map_err(|e| anyhow::anyhow!(e))?)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    call_custom_redirect_location(app, service_name, method, headers, q, http_method, uri, Some(body)).await
+}
+
 async fn handle_custom_method<R, P>(
     service_name: &str,
     svc: &dog_core::app::ServiceHandle<R, P>,
