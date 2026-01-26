@@ -48,8 +48,39 @@ where
     let params = P::from_rest_params(params);
 
     let svc = app.service(service_name)?;
+
+    // Fail fast with a clear error if the service does not expose this custom method.
+    ensure_custom_method_supported(service_name, &svc, method)?;
+
     let res = svc.custom(tenant, method, data, params).await?;
     Ok(serde_json::to_value(res).map_err(|e| anyhow::anyhow!(e))?)
+}
+
+fn ensure_custom_method_supported<R, P>(
+    service_name: &str,
+    svc: &dog_core::app::ServiceHandle<R, P>,
+    method: &'static str,
+) -> Result<(), DogAxumError>
+where
+    R: Serialize + DeserializeOwned + Send + Sync + 'static,
+    P: FromRestParams + Send + Sync + Clone + 'static,
+{
+    let capabilities = svc.inner().capabilities();
+    let supported = capabilities.allowed_methods.iter().any(|m| match m {
+        ServiceMethodKind::Custom(name) => name.eq_ignore_ascii_case(method),
+        _ => false,
+    });
+
+    if supported {
+        Ok(())
+    } else {
+        Err(DogError::bad_request(&format!(
+            "Service '{}' does not support custom method '{}'",
+            service_name, method
+        ))
+        .into_anyhow()
+        .into())
+    }
 }
 
 pub async fn call_custom_json<R, P>(
