@@ -12,7 +12,7 @@ async fn json_body(res: axum::response::Response) -> Value {
 
 #[tokio::test]
 async fn health_ok() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     let res = ax
         .router
@@ -27,7 +27,7 @@ async fn health_ok() {
 
 #[tokio::test]
 async fn posts_create_missing_title_is_422() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     let res = ax
         .router
@@ -51,7 +51,7 @@ async fn posts_create_missing_title_is_422() {
 
 #[tokio::test]
 async fn posts_create_defaults_published_false_and_sets_request_id() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     let res = ax
         .router
@@ -77,7 +77,7 @@ async fn posts_create_defaults_published_false_and_sets_request_id() {
 
 #[tokio::test]
 async fn posts_find_respects_include_drafts_query_param() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     // draft
     let _ = ax
@@ -141,7 +141,7 @@ async fn posts_find_respects_include_drafts_query_param() {
 
 #[tokio::test]
 async fn posts_are_isolated_by_tenant() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     // Create a published post in tenant A
     let _ = ax
@@ -199,7 +199,7 @@ async fn posts_are_isolated_by_tenant() {
 
 #[tokio::test]
 async fn posts_create_with_invalid_author_id_is_422() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     let res = ax
         .router
@@ -224,7 +224,7 @@ async fn posts_create_with_invalid_author_id_is_422() {
 
 #[tokio::test]
 async fn posts_find_expand_author_embeds_author() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     // Create author
     let author_res = ax
@@ -286,7 +286,7 @@ async fn posts_find_expand_author_embeds_author() {
 
 #[tokio::test]
 async fn authors_on_delete_restrict_blocks_when_posts_reference() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     // Create author
     let author_res = ax
@@ -343,7 +343,7 @@ async fn authors_on_delete_restrict_blocks_when_posts_reference() {
 
 #[tokio::test]
 async fn authors_on_delete_cascade_removes_posts() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     let author_res = ax
         .router
@@ -406,7 +406,7 @@ async fn authors_on_delete_cascade_removes_posts() {
 
 #[tokio::test]
 async fn authors_on_delete_nullify_clears_author_id_on_posts() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     let author_res = ax
         .router
@@ -471,7 +471,7 @@ async fn authors_on_delete_nullify_clears_author_id_on_posts() {
 
 #[tokio::test]
 async fn authors_nested_validation_errors_have_world_class_paths() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     let res = ax
         .router
@@ -497,7 +497,7 @@ async fn authors_nested_validation_errors_have_world_class_paths() {
 
 #[tokio::test]
 async fn authors_create_missing_name_is_422() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     let res = ax
         .router
@@ -521,7 +521,7 @@ async fn authors_create_missing_name_is_422() {
 
 #[tokio::test]
 async fn authors_are_isolated_by_tenant() {
-    let ax = build().unwrap();
+    let ax = build().await.unwrap();
 
     let _ = ax
         .router
