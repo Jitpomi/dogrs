@@ -8,11 +8,12 @@ members = [
     "dog-schema",
     "dog-schema-macros",
     "dog-schema-validator",
-    "dog-examples/music-blobs",
-    "dog-examples/blog-axum",
-    "dog-examples/social-typedb",
-    "dog-examples/fleet-queue",
-    "dog-examples/auth-demo",
+    # Temporarily exclude examples during publishing
+    # "dog-examples/music-blobs",
+    # "dog-examples/blog-axum",
+    # "dog-examples/social-typedb",
+    # "dog-examples/fleet-queue",
+    # "dog-examples/auth-demo",
     "dog-auth",
     "dog-auth-local",
     "dog-auth-oauth"
