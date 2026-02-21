@@ -1,6 +1,6 @@
 [package]
 name = "dog-typedb"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "TypeDB database integration for DogRS - adapters, utilities, and TypeQL query builders"
