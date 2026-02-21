@@ -8,4 +8,4 @@ pub use service::{
     TypeDBService,
     TypeDBServiceHandlers,
 };
-pub use transactions::{execute_typedb_query, load_schema_from_file, TransactionType};
+pub use transactions::{execute_typedb_query, execute_read_transaction, load_schema_from_file, TransactionType};

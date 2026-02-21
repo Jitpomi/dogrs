@@ -35,6 +35,7 @@ impl TypeDBAdapter {
     }
 
     /// Execute a read query (match operations)
+    /// Forces TransactionType::Read - TypeDB will reject DELETE/INSERT operations
     pub async fn read(&self, data: Value) -> Result<Value> {
         println!("=== TYPEDB ADAPTER READ START ===");
         println!("Data: {:?}", data);
@@ -44,11 +45,11 @@ impl TypeDBAdapter {
             .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
 
         println!("=== EXTRACTED QUERY: {} ===", query);
-        println!("=== CALLING execute_typedb_query ===");
+        println!("=== FORCING TransactionType::Read ===");
 
-        let result = execute_typedb_query(&self.driver, &self.database, query).await;
+        let result = crate::transactions::execute_read_transaction(&self.driver, &self.database, query).await;
         
-        println!("=== execute_typedb_query RESULT: {:?} ===", result.is_ok());
+        println!("=== execute_read_transaction RESULT: {:?} ===", result.is_ok());
         
         result
     }

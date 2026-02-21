@@ -24,6 +24,21 @@ pub enum QueryType {
     Update,
 }
 
+impl QueryType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            QueryType::Define => "define",
+            QueryType::Undefine => "undefine",
+            QueryType::Redefine => "redefine",
+            QueryType::Match => "match",
+            QueryType::Fetch => "fetch",
+            QueryType::Insert => "insert",
+            QueryType::Delete => "delete",
+            QueryType::Update => "update",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct QueryAnalysis {
     pub primary_type: QueryType,
@@ -177,6 +192,35 @@ async fn execute_read_query(driver: &TypeDBDriver, database: &str, query: &str) 
         .query(query)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to execute read query: {}", e))?;
+
+    println!("=== TX.QUERY() COMPLETED - ABOUT TO CALL typedb_answer_to_http_ok ===");
+
+    // Consume answer while tx is alive
+    let res = typedb_answer_to_http_ok(answer, "read", query, 10_000).await;
+
+    println!("=== typedb_answer_to_http_ok RETURNED ===");
+
+    // read tx auto-closes on drop
+    res
+}
+
+/// Execute a query with forced read transaction type
+/// TypeDB will reject DELETE/INSERT operations with TransactionType::Read
+pub async fn execute_read_transaction(driver: &TypeDBDriver, database: &str, query: &str) -> Result<Value> {
+    println!("=== EXECUTE_READ_TRANSACTION START (FORCED READ) ===");
+    println!("Query: {}", query);
+    
+    let tx = driver
+        .transaction(database, typedb_driver::TransactionType::Read)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create read transaction: {}", e))?;
+
+    println!("=== READ TRANSACTION CREATED ===");
+
+    let answer = tx
+        .query(query)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to execute query with read transaction: {}", e))?;
 
     println!("=== TX.QUERY() COMPLETED - ABOUT TO CALL typedb_answer_to_http_ok ===");
 
