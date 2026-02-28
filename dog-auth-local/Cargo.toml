@@ -1,6 +1,6 @@
 [package]
 name = "dog-auth-local"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Local (username/password) authentication strategy for DogRS"
 license = "MIT OR Apache-2.0"
@@ -9,8 +9,8 @@ license = "MIT OR Apache-2.0"
 anyhow = "1.0"
 async-trait = "0.1"
 bcrypt = "0.18.0"
-dog-auth = { path = "../dog-auth", version = "0.1.6" }
-dog-core = { path = "../dog-core", version = "0.1.6" }
+dog-auth = { path = "../dog-auth", version = "0.1.7" }
+dog-core = { path = "../dog-core", version = "0.1.7" }
 serde_json = "1.0"
 
 [dev-dependencies]

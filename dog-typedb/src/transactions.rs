@@ -435,33 +435,70 @@ fn format_concept(concept: &typedb_driver::concept::Concept) -> Result<Value> {
     }
 }
 
-/// Loads TypeDB schema from a file
+/// Loads TypeDB schema from multiple files (schema.tql, functions.tql, etc.)
 pub async fn load_schema_from_file(
     driver: &TypeDBDriver,
     database: &str,
     schema_paths: &[&str],
 ) -> Result<Value> {
-    println!("Loading TypeDB schema from schema.tql file...");
+    println!("Loading TypeDB schema files...");
     
-    let mut schema_content = None;
-    for path in schema_paths {
-        println!("Checking schema path: {}", path);
-        if let Ok(content) = fs::read_to_string(path) {
-            println!("Found schema.tql at: {}", path);
-            schema_content = Some(content);
-            break;
+    let schema_files = ["schema.tql", "functions.tql"];
+    let mut loaded_files = Vec::new();
+    let mut responses = Vec::new();
+    
+    for file_name in &schema_files {
+        let mut file_content = None;
+        
+        // Try to find the file in any of the provided paths
+        for base_path in schema_paths {
+            let full_path = if base_path.ends_with(file_name) {
+                base_path.to_string()
+            } else {
+                format!("{}/{}", base_path.trim_end_matches('/'), file_name)
+            };
+            
+            println!("Checking for {} at: {}", file_name, full_path);
+            if let Ok(content) = fs::read_to_string(&full_path) {
+                println!("Found {} at: {}", file_name, full_path);
+                file_content = Some(content);
+                break;
+            }
+        }
+        
+        if let Some(content) = file_content {
+            println!("Loading {} ({} characters)...", file_name, content.len());
+            match execute_typedb_query(driver, database, &content).await {
+                Ok(response) => {
+                    println!("Successfully loaded {}", file_name);
+                    loaded_files.push(file_name.to_string());
+                    responses.push(response);
+                }
+                Err(e) => {
+                    println!("Warning: Failed to load {}: {}", file_name, e);
+                    // Continue with other files - some schema files might be optional
+                }
+            }
+        } else {
+            println!("File {} not found in any of the provided paths", file_name);
         }
     }
-
-    let schema_content = schema_content.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Failed to find schema.tql in any expected locations: {:?}",
+    
+    if loaded_files.is_empty() {
+        return Err(anyhow::anyhow!(
+            "No schema files (schema.tql, functions.tql) found in any expected locations: {:?}",
             schema_paths
-        )
-    })?;
-
-    let response = execute_typedb_query(driver, database, &schema_content).await?;
-
-    println!("TypeDB schema loaded successfully from schema.tql!");
-    Ok(response)
+        ));
+    }
+    
+    println!("TypeDB schema loading completed. Loaded files: {:?}", loaded_files);
+    
+    // Return the last successful response, or a summary
+    Ok(json!({
+        "ok": {
+            "message": format!("Successfully loaded {} schema files: {}", loaded_files.len(), loaded_files.join(", ")),
+            "loadedFiles": loaded_files,
+            "responses": responses
+        }
+    }))
 }

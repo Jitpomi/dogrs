@@ -1,6 +1,6 @@
 [package]
 name = "dog-auth"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Authentication system for DogRS framework"
 license = "MIT OR Apache-2.0"
@@ -23,7 +23,7 @@ anyhow = "1.0"
 async-trait = "0.1"
 bcrypt = "0.18.0"
 chrono = { version = "0.4", features = ["serde"] }
-dog-core = { path = "../dog-core", version = "0.1.6" }
+dog-core = { path = "../dog-core", version = "0.1.7" }
 humantime-serde = "1.1"
 # jsonwebtoken with configurable crypto backend via features
 jsonwebtoken = { version = "10.2.0", optional = true, default-features = false }
