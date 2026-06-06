@@ -18,3 +18,4 @@ anyhow = "1.0.100"
 
 # Re-export proc macros
 dog-schema-macros = { path = "../dog-schema-macros", version = "0.1.7" }
+async-trait = "0.1.89"

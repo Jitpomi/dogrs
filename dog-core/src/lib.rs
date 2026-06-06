@@ -10,7 +10,6 @@ pub mod service;
 pub mod tenant;
 pub mod events;
 pub mod errors;
-pub mod schema;
 
 #[cfg(feature = "adapters")]
 pub mod adapters;
@@ -25,4 +24,3 @@ pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};
 pub use tenant::{TenantContext, TenantId};
 pub use events::{DogEventHub, ServiceEventKind, ServiceEventData, method_to_standard_event, };
 pub use errors::{DogError, ErrorKind, DogResult};
-pub use schema::{HookMeta, ResolveData, Rules, SchemaHooksExt, ValidateData, WriteMethods};

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::{DogBeforeHook, HookContext, ServiceHooks, ServiceMethodKind};
+use dog_core::{DogBeforeHook, HookContext, ServiceHooks, ServiceMethodKind};
 
 /// Which write methods should a schema hook apply to?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,11 +45,11 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    pub tenant: crate::TenantContext,
-    pub method: crate::ServiceMethodKind,
+    pub tenant: dog_core::TenantContext,
+    pub method: dog_core::ServiceMethodKind,
     pub params: P,
-    pub services: crate::ServiceCaller<R, P>,
-    pub config: crate::DogConfigSnapshot,
+    pub services: dog_core::ServiceCaller<R, P>,
+    pub config: dog_core::DogConfigSnapshot,
 }
 
 impl<R, P> HookMeta<R, P>
@@ -57,7 +57,7 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    pub fn from_ctx(ctx: &crate::HookContext<R, P>) -> Self {
+    pub fn from_ctx(ctx: &dog_core::HookContext<R, P>) -> Self {
         Self {
             tenant: ctx.tenant.clone(),
             method: ctx.method.clone(),

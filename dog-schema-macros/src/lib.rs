@@ -286,7 +286,7 @@ fn gen_resolve_create(rules: &[FieldRule], _error_message: &LitStr) -> proc_macr
     });
 
     quote! {
-        pub fn resolve_create<P>(data: &mut serde_json::Value, _meta: &dog_core::schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        pub fn resolve_create<P>(data: &mut serde_json::Value, _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
         where
             P: Send + Clone + 'static,
         {
@@ -312,7 +312,7 @@ fn gen_validate_create(
         return quote! {
             pub fn validate_create<P>(
                 data: &serde_json::Value,
-                _meta: &dog_core::schema::HookMeta<serde_json::Value, P>,
+                _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>,
             ) -> anyhow::Result<()>
             where
                 P: Send + Clone + 'static,
@@ -405,7 +405,7 @@ fn gen_validate_create(
     });
 
     quote! {
-        pub fn validate_create<P>(data: &serde_json::Value, _meta: &dog_core::schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        pub fn validate_create<P>(data: &serde_json::Value, _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
         where
             P: Send + Clone + 'static,
         {
@@ -436,7 +436,7 @@ fn gen_validate_patch(
         return quote! {
             pub fn validate_patch<P>(
                 data: &serde_json::Value,
-                _meta: &dog_core::schema::HookMeta<serde_json::Value, P>,
+                _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>,
             ) -> anyhow::Result<()>
             where
                 P: Send + Clone + 'static,
@@ -502,7 +502,7 @@ fn gen_validate_patch(
     });
 
     quote! {
-        pub fn validate_patch<P>(data: &serde_json::Value, _meta: &dog_core::schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        pub fn validate_patch<P>(data: &serde_json::Value, _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
         where
             P: Send + Clone + 'static,
         {
@@ -540,7 +540,7 @@ fn gen_register_fn(service: &LitStr, has_patch: bool) -> proc_macro2::TokenStrea
         where
             P: Send + Clone + 'static,
         {
-            use dog_core::schema::SchemaHooksExt;
+            use dog_schema::hooks::SchemaHooksExt;
 
             app.service(#svc_lit)?.hooks(|h| {
                 h.schema(|s| {

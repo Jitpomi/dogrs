@@ -48,3 +48,4 @@ pub fn unprocessable(message: &str, errors: Value) -> anyhow::Error {
 pub fn schema_error(message: &str, msg: impl Into<String>) -> anyhow::Error {
     unprocessable(message, json!({"_schema": [msg.into()]}))
 }
+pub mod hooks;
