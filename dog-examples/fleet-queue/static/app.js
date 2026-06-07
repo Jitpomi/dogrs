@@ -170,6 +170,8 @@ class FleetCommandPro {
             // Add vehicle markers to map after data is loaded
             if (this.map) {
                 this.addVehicleMarkers();
+                this.addDeliveryMarkers();
+                this.addAssignmentRoutes();
             }
         } catch (error) {
             console.error('❌ Error loading fleet data:', error);
@@ -186,7 +188,7 @@ class FleetCommandPro {
                     'x-service-method': 'read'
                 },
                 body: JSON.stringify({
-                    query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has vehicle-status $status, has vehicle-icon $icon, has status-color $color, has gps-latitude $lat, has gps-longitude $lng, has capacity $capacity, has fuel-level $fuel, has maintenance-score $maintenance; $assignment isa assignment (assigned-vehicle: $v, assigned-employee: $employee), has assignment-status "active"; select $v, $id, $type, $status, $icon, $color, $lat, $lng, $capacity, $fuel, $maintenance; limit 50;'
+                    query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has vehicle-status $status, has vehicle-icon $icon, has status-color $color, has gps-latitude $lat, has gps-longitude $lng, has capacity $capacity, has fuel-level $fuel, has maintenance-score $maintenance; select $v, $id, $type, $status, $icon, $color, $lat, $lng, $capacity, $fuel, $maintenance; limit 50;'
                 })
             });
             const result = await response.json();
@@ -3383,8 +3385,8 @@ class FleetCommandPro {
     updateDispatchView() {
         this.updateAvailableDrivers();
         this.updatePendingQueue();
-        // Delivery markers now only show when tracking a vehicle
-        // this.addDeliveryMarkers();
+        // Delivery markers now show for all deliveries
+        this.addDeliveryMarkers();
         this.addAssignmentRoutes();
     }
     

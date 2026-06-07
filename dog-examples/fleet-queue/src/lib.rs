@@ -30,7 +30,16 @@ pub async fn build() -> anyhow::Result<AxumApp<Value, FleetParams>> {
 
     // Build the app (moves the builder)
     let dog_app = builder.build();
-    let mut ax = dog_axum::axum(dog_app.clone());
+    let mut ax = dog_axum::axum(dog_app.clone())
+        .use_service("/vehicles", _svcs.vehicles)
+        .use_service("/deliveries", _svcs.deliveries)
+        .use_service("/operations", _svcs.operations)
+        .use_service("/employees", _svcs.employees)
+        .use_service("/tomtom", _svcs.tomtom)
+        .use_service("/jobs", _svcs.jobs)
+        .use_service("/rules", _svcs.rules)
+        .use_service("/certifications", _svcs.certifications)
+        .service("/health", || async { "ok" });
 
     // Start background system with built app
     background_system.start(dog_app).await?;
