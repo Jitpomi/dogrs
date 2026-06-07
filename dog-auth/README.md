@@ -62,20 +62,24 @@ JWT payload default:
 ```rust
 use std::sync::Arc;
 use dog_auth::{AuthenticationService, AuthOptions};
-use dog_core::DogApp;
+use dog_core::DogAppBuilder;
 use serde_json::Value;
 
 // P is your params type
-fn setup_auth<P: Send + Clone + 'static>(app: DogApp<Value, P>) -> anyhow::Result<Arc<AuthenticationService<P>>> {
+fn setup_auth<P: Send + Clone + 'static>(builder: &mut DogAppBuilder<Value, P>) -> anyhow::Result<()> {
     let options = AuthOptions::default();
-    let auth = Arc::new(AuthenticationService::new(app.clone(), Some(options))?);
-
-    AuthenticationService::install(&app, auth.clone());
+    
+    // Create the auth builder
+    let mut auth_builder = AuthenticationService::builder(builder, Some(options))?;
 
     // Register strategies here (JWT + any from other crates)
-    // auth.register_strategy("jwt", Arc::new(JwtStrategy::new(&auth.base)));
+    // auth_builder.register_strategy("jwt", Arc::new(JwtStrategy::new()));
 
-    Ok(auth)
+    // Build and install the auth service into the DogAppBuilder
+    let auth = Arc::new(AuthenticationService::new(Arc::new(auth_builder.build())));
+    AuthenticationService::install(builder, auth);
+
+    Ok(())
 }
 ```
 
@@ -90,8 +94,8 @@ fn setup_auth<P: Send + Clone + 'static>(app: DogApp<Value, P>) -> anyhow::Resul
 ```rust
 use dog_auth::hooks::{AuthenticateHook, AuthParams};
 
-// Construct from app state
-// let hook = AuthenticateHook::<AuthParams<MyParams>>::from_app(&app, vec!["jwt".into()])?;
+// Construct hook
+// let hook = AuthenticateHook::<AuthParams<MyParams>>::new(vec!["jwt".into()]);
 ```
 
 ### 3) Expose an external `/auth` endpoint with `AuthServiceAdapter`
@@ -102,13 +106,13 @@ use dog_auth::hooks::{AuthenticateHook, AuthParams};
 ```rust
 use std::sync::Arc;
 use dog_auth::{AuthServiceAdapter, AuthenticationService};
-use dog_core::{DogApp, DogService};
+use dog_core::{DogAppBuilder, DogService};
 use serde_json::Value;
 
-fn mount_auth<P: Send + Sync + Clone + 'static>(app: &DogApp<Value, P>) -> anyhow::Result<Arc<dyn DogService<Value, P>>> {
-    let auth = AuthenticationService::from_app(app)
-        .ok_or_else(|| anyhow::anyhow!("AuthenticationService missing from app state"))?;
-    Ok(Arc::new(AuthServiceAdapter::new(auth)))
+fn mount_auth<P: Send + Sync + Clone + 'static>(builder: &mut DogAppBuilder<Value, P>, auth: Arc<AuthenticationService<P>>) -> anyhow::Result<()> {
+    let adapter = Arc::new(AuthServiceAdapter::new(auth));
+    builder.register_service("auth", adapter);
+    Ok(())
 }
 ```
 
