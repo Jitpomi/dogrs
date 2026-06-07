@@ -8,10 +8,10 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
-bcrypt = "0.18.0"
+bcrypt = "0.19.1"
 dog-auth = { path = "../dog-auth", version = "0.1.7" }
 dog-core = { path = "../dog-core", version = "0.1.7" }
 serde_json = "1.0"
 
 [dev-dependencies]
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
