@@ -91,15 +91,13 @@ where
             async move {
                 rest::call_custom_redirect_location::<Value, P>(
                     app_arc.as_ref(),
-                    rest::CustomCallContext {
-                        service_name,
-                        method,
-                        headers: &headers,
-                        query: Default::default(),
-                        http_method,
-                        uri: &uri,
-                        data: None,
-                    },
+                    service_name,
+                    method,
+                    &headers,
+                    Default::default(),
+                    http_method,
+                    &uri,
+                    None,
                 )
                 .await
             }
@@ -119,15 +117,13 @@ where
                 let data = (payload)(&query);
                 rest::call_custom_json_qd::<Value, P, Q, Value>(
                     app_arc.as_ref(),
-                    rest::CustomCallContextQd {
-                        service_name,
-                        method,
-                        headers: &headers,
-                        query: &query,
-                        http_method,
-                        uri: &uri,
-                        data: &data,
-                    },
+                    service_name,
+                    method,
+                    &headers,
+                    &query,
+                    http_method,
+                    &uri,
+                    &data,
                 )
                 .await
             }

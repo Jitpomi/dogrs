@@ -20,7 +20,8 @@ pub enum AuthStrategy {
 }
 
 /// JWT signing algorithms
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub enum JwtAlgorithm {
     /// HMAC using SHA-256
     #[default]
@@ -41,8 +42,11 @@ pub enum JwtAlgorithm {
     ES384,
 }
 
+
+
 /// Token type for JWT claims
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub enum TokenType {
     /// Access token for API requests
     #[default]
@@ -52,6 +56,8 @@ pub enum TokenType {
     /// Identity token containing user information
     Identity,
 }
+
+
 
 /// Main authentication configuration
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
