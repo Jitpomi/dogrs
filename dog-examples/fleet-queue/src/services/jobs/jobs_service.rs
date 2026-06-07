@@ -44,13 +44,8 @@ impl DogService<Value, FleetParams> for JobsService {
                     DogError::new(ErrorKind::GeneralError, e.to_string()).into_anyhow()
                 })
             }
-            "stats" => {
+            "stats" | "queue_status" => {
                 self.adapter.get_stats().await.map_err(|e| {
-                    DogError::new(ErrorKind::GeneralError, e.to_string()).into_anyhow()
-                })
-            }
-            "queue_status" => {
-                self.adapter.get_queue_status().await.map_err(|e| {
                     DogError::new(ErrorKind::GeneralError, e.to_string()).into_anyhow()
                 })
             }

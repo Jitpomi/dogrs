@@ -39,22 +39,23 @@ impl Job for ComplianceMonitoringJob {
             .service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
 
-        // Simple compliance monitoring record - TypeDB functions handle all business logic
-        let monitoring_record = serde_json::json!({
-            "employee_id": self.employee_id,
-            "monitoring_type": self.monitoring_type,
-            "shift_start_time": self.shift_start_time,
-            "monitoring_timestamp": chrono::Utc::now().to_rfc3339()
+        let event_id = format!("comply-{}-{}", self.employee_id, chrono::Utc::now().timestamp_millis());
+        let event_time = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let query = serde_json::json!({
+            "operation-id": &event_id,
+            "status": "completed",
+            "query": format!(
+                "insert $e isa operation-event, has id \"{id}\", has operation-id \"{id}\", has job-type \"compliance_monitoring\", has event-status \"completed\", has event-time {ts};",
+                id = event_id,
+                ts = event_time
+            )
         });
 
         operations_service
-            .create(tenant_ctx, monitoring_record, params)
+            .custom(tenant_ctx, "write", Some(query), params)
             .await
-            .map_err(|e| JobError::Retryable(format!("Failed to record monitoring: {}", e)))?;
+            .map_err(|e| JobError::Retryable(format!("Failed to record compliance event: {}", e)))?;
 
-        Ok(format!(
-            "Compliance monitoring completed for employee: {}",
-            self.employee_id
-        ))
+        Ok(format!("Compliance event recorded for employee: {}", self.employee_id))
     }
 }

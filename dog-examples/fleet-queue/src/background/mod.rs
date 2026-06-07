@@ -114,12 +114,12 @@ impl BackgroundSystem {
             "workers": self.worker_handles.lock().unwrap().len(),
             "backend": "memory",
             "registered_jobs": [
-                "gps_tracking",
-                "employee_assignment",
-                "route_rebalancing",
-                "sla_monitoring",
-                "maintenance_scheduling",
-                "compliance_monitoring"
+                GPSTrackingJob::JOB_TYPE,
+                EmployeeAssignmentJob::JOB_TYPE,
+                RouteRebalancingJob::JOB_TYPE,
+                SLAMonitoringJob::JOB_TYPE,
+                MaintenanceSchedulingJob::JOB_TYPE,
+                ComplianceMonitoringJob::JOB_TYPE,
             ]
         }))
     }

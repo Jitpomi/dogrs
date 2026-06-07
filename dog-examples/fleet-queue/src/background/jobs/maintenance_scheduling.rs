@@ -46,24 +46,23 @@ impl Job for MaintenanceSchedulingJob {
             .service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
 
-        // Simple maintenance check record - TypeDB functions handle all business logic
-        let maintenance_check = serde_json::json!({
-            "vehicle_id": self.vehicle_id,
-            "maintenance_type": self.maintenance_type,
-            "current_mileage": self.current_mileage,
-            "check_timestamp": chrono::Utc::now().to_rfc3339()
+        let event_id = format!("maint-{}-{}", self.vehicle_id, chrono::Utc::now().timestamp_millis());
+        let event_time = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let query = serde_json::json!({
+            "operation-id": &event_id,
+            "status": "completed",
+            "query": format!(
+                "insert $e isa operation-event, has id \"{id}\", has operation-id \"{id}\", has job-type \"maintenance_scheduling\", has event-status \"completed\", has event-time {ts};",
+                id = event_id,
+                ts = event_time
+            )
         });
 
         operations_service
-            .create(tenant_ctx, maintenance_check, params)
+            .custom(tenant_ctx, "write", Some(query), params)
             .await
-            .map_err(|e| {
-                JobError::Retryable(format!("Failed to record maintenance check: {}", e))
-            })?;
+            .map_err(|e| JobError::Retryable(format!("Failed to record maintenance event: {}", e)))?;
 
-        Ok(format!(
-            "Maintenance check completed for vehicle: {}",
-            self.vehicle_id
-        ))
+        Ok(format!("Maintenance event recorded for vehicle: {}", self.vehicle_id))
     }
 }
