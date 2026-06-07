@@ -24,7 +24,7 @@ pub fn configure(
     app: &dog_core::DogApp<serde_json::Value, SocialParams>,
     state: Arc<TypeDBState>,
 ) -> anyhow::Result<SocialServices> {
- 
+
     let persons: Arc<dyn DogService<serde_json::Value, SocialParams>> = Arc::new(persons::PersonsService::new(Arc::clone(&state)));
     app.register_service("persons", Arc::clone(&persons));
     persons::persons_shared::register_hooks(app)?;
@@ -41,7 +41,7 @@ pub fn configure(
     let comments: Arc<dyn DogService<serde_json::Value, SocialParams>> = Arc::new(comments::CommentsService::new(Arc::clone(&state)));
     app.register_service("comments", Arc::clone(&comments));
 
-    Ok(SocialServices { 
+    Ok(SocialServices {
         persons,
         organizations,
         groups,
