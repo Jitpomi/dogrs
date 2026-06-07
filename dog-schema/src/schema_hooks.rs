@@ -19,11 +19,17 @@ mod private {
 }
 
 /// Which write methods should a schema hook apply to?
+///
+/// # Note on `AllWrites`
+/// `AllWrites` covers **Create, Patch, and Update only**. `Remove` is
+/// intentionally excluded — it carries no request body to validate or resolve.
+/// `Get` and `Find` are excluded because they are read-only operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteMethods {
     Create,
     Patch,
     Update,
+    /// Matches Create, Patch, and Update. Does **not** include Remove.
     AllWrites,
 }
 
@@ -36,7 +42,7 @@ impl WriteMethods {
                 ServiceMethodKind::Create | ServiceMethodKind::Patch | ServiceMethodKind::Update
             ),
             WriteMethods::Create => matches!(method, ServiceMethodKind::Create),
-            WriteMethods::Patch => matches!(method, ServiceMethodKind::Patch),
+            WriteMethods::Patch  => matches!(method, ServiceMethodKind::Patch),
             WriteMethods::Update => matches!(method, ServiceMethodKind::Update),
         }
     }
@@ -68,7 +74,7 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    pub fn from_ctx(ctx: &dog_core::HookContext<R, P>) -> Self {
+    pub(crate) fn from_ctx(ctx: &dog_core::HookContext<R, P>) -> Self {
         Self {
             tenant: ctx.tenant.clone(),
             method: ctx.method.clone(),
@@ -76,6 +82,25 @@ where
             services: ctx.services.clone(),
             config: ctx.config.clone(),
         }
+    }
+}
+
+// ── Shared implementation detail ─────────────────────────────────────────────
+//
+// `HookBase` holds the `WriteMethods` filter and the method-gating check that
+// is identical between `ValidateData` and `ResolveData`.
+struct HookBase {
+    methods: WriteMethods,
+}
+
+impl HookBase {
+    fn new(methods: WriteMethods) -> Self {
+        Self { methods }
+    }
+
+    #[inline]
+    fn matches(&self, method: &ServiceMethodKind) -> bool {
+        self.methods.matches(method)
     }
 }
 
@@ -95,7 +120,7 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    methods: WriteMethods,
+    base: HookBase,
     validator: ValidateFn<R, P>,
 }
 
@@ -108,13 +133,13 @@ where
         validator: impl Fn(&R, &HookMeta<R, P>) -> Result<()> + Send + Sync + 'static,
     ) -> Self {
         Self {
-            methods: WriteMethods::AllWrites,
+            base: HookBase::new(WriteMethods::AllWrites),
             validator: Arc::new(validator),
         }
     }
 
     pub fn with_methods(mut self, methods: WriteMethods) -> Self {
-        self.methods = methods;
+        self.base.methods = methods;
         self
     }
 }
@@ -126,7 +151,7 @@ where
     P: Send + Clone + 'static,
 {
     async fn run(&self, ctx: &mut HookContext<R, P>) -> Result<()> {
-        if !self.methods.matches(&ctx.method) {
+        if !self.base.matches(&ctx.method) {
             return Ok(());
         }
 
@@ -151,7 +176,7 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    methods: WriteMethods,
+    base: HookBase,
     resolver: ResolveFn<R, P>,
 }
 
@@ -164,13 +189,13 @@ where
         resolver: impl Fn(&mut R, &HookMeta<R, P>) -> Result<()> + Send + Sync + 'static,
     ) -> Self {
         Self {
-            methods: WriteMethods::AllWrites,
+            base: HookBase::new(WriteMethods::AllWrites),
             resolver: Arc::new(resolver),
         }
     }
 
     pub fn with_methods(mut self, methods: WriteMethods) -> Self {
-        self.methods = methods;
+        self.base.methods = methods;
         self
     }
 }
@@ -182,7 +207,7 @@ where
     P: Send + Clone + 'static,
 {
     async fn run(&self, ctx: &mut HookContext<R, P>) -> Result<()> {
-        if !self.methods.matches(&ctx.method) {
+        if !self.base.matches(&ctx.method) {
             return Ok(());
         }
 
@@ -569,7 +594,7 @@ mod tests {
 
     #[tokio::test]
     async fn schema_builder_registers_hook_and_fires_on_correct_method() {
-        use std::sync::{Arc, Mutex};
+        use std::sync::Mutex;
 
         let called = Arc::new(Mutex::new(false));
         let called_clone = Arc::clone(&called);
