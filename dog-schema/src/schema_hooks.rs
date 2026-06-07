@@ -48,6 +48,13 @@ where
     pub tenant: dog_core::TenantContext,
     pub method: dog_core::ServiceMethodKind,
     pub params: P,
+    /// Access to other services at validation time.
+    ///
+    /// # Warning
+    /// Calling other services from inside a validator can create hidden coupling,
+    /// N+1 query problems, and circular hook pipelines — exactly the anti-patterns
+    /// described in `dog-core`'s hook documentation. Prefer expressing cross-entity
+    /// constraints inside the service implementation rather than in schema hooks.
     pub services: dog_core::ServiceCaller<R, P>,
     pub config: dog_core::DogConfigSnapshot,
 }
@@ -74,7 +81,11 @@ pub(crate) type ValidateFn<R, P> =
 pub(crate) type ResolveFn<R, P> =
     Arc<dyn Fn(&mut R, &HookMeta<R, P>) -> Result<()> + Send + Sync + 'static>;
 
-/// Validate `ctx.data` for create/patch/update. (Feathers `validateData`)
+/// Validate `ctx.data` for write methods (create / patch / update).
+///
+/// The validator closure is **synchronous**. If your validation requires
+/// an async operation (e.g. a DB uniqueness check), implement
+/// [`dog_core::DogBeforeHook`] directly instead.
 pub struct ValidateData<R, P>
 where
     R: Send + 'static,
@@ -126,7 +137,11 @@ where
     }
 }
 
-/// Resolve/mutate `ctx.data` for create/patch/update. (Feathers `resolveData`)
+/// Resolve/mutate `ctx.data` for write methods (create / patch / update).
+///
+/// The resolver closure is **synchronous**. If your resolution requires
+/// an async operation (e.g. enriching data from the DB), implement
+/// [`dog_core::DogBeforeHook`] directly instead.
 pub struct ResolveData<R, P>
 where
     R: Send + 'static,
@@ -199,8 +214,10 @@ impl Rules {
         self
     }
 
+    /// Fails if `v`, after trimming whitespace, has fewer than `n` characters.
+    /// Consistent with [`Self::non_empty`] which also trims before checking.
     pub fn min_len(mut self, field: &str, v: &str, n: usize) -> Self {
-        if v.chars().count() < n {
+        if v.trim().chars().count() < n {
             self.errors
                 .push(anyhow::anyhow!("'{field}' must be at least {n} chars"));
         }
@@ -365,6 +382,16 @@ mod tests {
         assert!(msg.contains("at least 10 chars"));
     }
 
+    #[test]
+    fn min_len_trims_whitespace_before_counting() {
+        // spaces-only string should fail min_len just like non_empty fails it
+        let err = Rules::new().min_len("name", "   ", 2).check().unwrap_err();
+        assert!(err.to_string().contains("at least 2 chars"));
+
+        // real chars pass
+        assert!(Rules::new().min_len("name", "  hi  ", 2).check().is_ok());
+    }
+
     // ── WriteMethods ───────────────────────────────────────────────────────
 
     #[test]
@@ -467,5 +494,68 @@ mod tests {
         let mut ctx = make_ctx(ServiceMethodKind::Create, None);
         let err = hook.run(&mut ctx).await.unwrap_err();
         assert!(err.to_string().contains("ResolveData requires ctx.data"));
+    }
+
+    // ── SchemaBuilder / SchemaHooksExt ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn schema_builder_registers_hook_and_fires_on_correct_method() {
+        use std::sync::{Arc, Mutex};
+
+        let called = Arc::new(Mutex::new(false));
+        let called_clone = Arc::clone(&called);
+
+        let mut hooks: ServiceHooks<String, ()> = ServiceHooks::new();
+        hooks.schema(|s| {
+            s.on_create().validate(move |_, _| {
+                *called_clone.lock().unwrap() = true;
+                Ok(())
+            });
+        });
+
+        // One hook should be registered in before_all
+        assert_eq!(hooks.before_all.len(), 1);
+
+        // Hook fires on Create and marks the flag
+        let mut ctx = make_ctx(ServiceMethodKind::Create, Some("test".to_string()));
+        hooks.before_all[0].run(&mut ctx).await.unwrap();
+        assert!(*called.lock().unwrap(), "validator was not called on Create");
+    }
+
+    #[tokio::test]
+    async fn schema_builder_on_create_does_not_fire_on_patch() {
+        let mut hooks: ServiceHooks<String, ()> = ServiceHooks::new();
+        hooks.schema(|s| {
+            s.on_create()
+                .validate(|_, _| anyhow::bail!("should not fire on Patch"));
+        });
+
+        // Hook registered
+        assert_eq!(hooks.before_all.len(), 1);
+
+        // Does NOT fire on Patch
+        let mut ctx = make_ctx(ServiceMethodKind::Patch, Some("data".to_string()));
+        assert!(hooks.before_all[0].run(&mut ctx).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn schema_builder_resets_methods_between_calls() {
+        // After on_create().validate(), the next validate() should scope to AllWrites
+        let mut hooks: ServiceHooks<String, ()> = ServiceHooks::new();
+        hooks.schema(|s| {
+            s.on_create().validate(|_, _| Ok(())); // scoped to Create, resets
+            s.validate(|_, _| anyhow::bail!("all-writes hook"));
+        });
+
+        assert_eq!(hooks.before_all.len(), 2);
+
+        // Second hook (all-writes) fires on Patch
+        let mut ctx = make_ctx(ServiceMethodKind::Patch, Some("data".to_string()));
+        let err = hooks.before_all[1].run(&mut ctx).await.unwrap_err();
+        assert!(err.to_string().contains("all-writes hook"));
+
+        // First hook (create-only) does NOT fire on Patch
+        let mut ctx2 = make_ctx(ServiceMethodKind::Patch, Some("data".to_string()));
+        assert!(hooks.before_all[0].run(&mut ctx2).await.is_ok());
     }
 }
