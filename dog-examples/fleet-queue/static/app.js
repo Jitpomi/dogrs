@@ -24,6 +24,9 @@ class FleetCommandPro {
         // Real-time update intervals
         this.updateIntervals = new Map();
         
+        // Track whether routes have been drawn to avoid duplicate API calls
+        this.routesDrawn = false;
+        
         this.init();
     }
     
@@ -168,11 +171,11 @@ class FleetCommandPro {
             ]);
             
             
-            // Add vehicle markers to map after data is loaded
+            // Add vehicle/delivery markers after data is loaded
+            // Assignment routes are drawn in updateDispatchView() once the map is ready
             if (this.map) {
                 this.addVehicleMarkers();
                 this.addDeliveryMarkers();
-                this.addAssignmentRoutes();
             }
         } catch (error) {
             console.error('❌ Error loading fleet data:', error);
@@ -3352,7 +3355,11 @@ class FleetCommandPro {
         this.updateAvailableDrivers();
         this.updatePendingQueue();
         this.addDeliveryMarkers();
-        // addAssignmentRoutes is called once during loadAllData — do not repeat here
+        // Draw assignment routes once — map is ready by the time updateUI() fires
+        if (!this.routesDrawn) {
+            this.routesDrawn = true;
+            this.addAssignmentRoutes();
+        }
     }
     
     updateAvailableDrivers() {
