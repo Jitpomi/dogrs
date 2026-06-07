@@ -59,8 +59,7 @@ where
 
     /// Add dotted-path removal rules (e.g. "authentication.accessToken").
     pub fn with_paths(mut self, paths: &[&str]) -> Self {
-        self.paths
-            .extend(paths.iter().map(|s| s.to_string()));
+        self.paths.extend(paths.iter().map(|s| s.to_string()));
         self
     }
 
@@ -152,7 +151,11 @@ where
             HookResult::One(v) => {
                 // Also support the Feathers paginated shape { data: [...] }
                 if let Some(data) = v.get("data").and_then(|d| d.as_array()) {
-                    let stripped: Vec<Value> = data.clone().into_iter().map(|x| self.strip_one(x)).collect();
+                    let stripped: Vec<Value> = data
+                        .clone()
+                        .into_iter()
+                        .map(|x| self.strip_one(x))
+                        .collect();
                     let mut out = v;
                     if let Some(map) = out.as_object_mut() {
                         map.insert("data".to_string(), Value::Array(stripped));
@@ -162,7 +165,9 @@ where
                     HookResult::One(self.strip_one(v))
                 }
             }
-            HookResult::Many(vs) => HookResult::Many(vs.into_iter().map(|v| self.strip_one(v)).collect()),
+            HookResult::Many(vs) => {
+                HookResult::Many(vs.into_iter().map(|v| self.strip_one(v)).collect())
+            }
         });
 
         Ok(())

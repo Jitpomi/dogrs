@@ -18,8 +18,10 @@ pub fn capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, MusicParams>) -> Result<()> {
-    app.service("music")?.hooks(|h| {
+pub fn register_hooks(
+    app: &mut dog_core::DogAppBuilder<serde_json::Value, MusicParams>,
+) -> Result<()> {
+    app.service_hooks("music", |h| {
         h.before_all(Arc::new(super::music_hooks::ProcessMulterParams));
     });
 

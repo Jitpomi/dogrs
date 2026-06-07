@@ -5,13 +5,13 @@ use serde::{Deserialize, Serialize};
 pub enum JobPriority {
     /// Low priority jobs (processed last)
     Low = 1,
-    
+
     /// Normal priority jobs (default)
     Normal = 2,
-    
+
     /// High priority jobs (processed first)
     High = 3,
-    
+
     /// Critical priority jobs (processed immediately)
     Critical = 4,
 }

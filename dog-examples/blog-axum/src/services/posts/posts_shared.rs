@@ -14,15 +14,20 @@ pub fn crud_capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, BlogParams>) -> anyhow::Result<()> {
+pub fn register_hooks(
+    app: &mut dog_core::DogAppBuilder<serde_json::Value, BlogParams>,
+) -> anyhow::Result<()> {
     super::posts_schema::register(app)?;
 
-    app.service("posts")?.hooks(|h| {
+    app.service_hooks("posts", |h| {
         h.before_create(Arc::new(super::posts_hooks::ValidatePostAuthorExists));
         h.before_patch(Arc::new(super::posts_hooks::ValidatePostAuthorExists));
 
         h.after_find(Arc::new(super::posts_hooks::ExpandPostAuthor));
-        h.after(ServiceMethodKind::Get, Arc::new(super::posts_hooks::ExpandPostAuthor));
+        h.after(
+            ServiceMethodKind::Get,
+            Arc::new(super::posts_hooks::ExpandPostAuthor),
+        );
 
         h.after_all(Arc::new(super::posts_hooks::NormalizePostsResult));
     });

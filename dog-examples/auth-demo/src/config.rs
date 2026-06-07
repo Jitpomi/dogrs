@@ -15,7 +15,6 @@ pub fn config(builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>) -> R
     // External API Configuration
     configure_external_apis(builder)?;
 
-
     Ok(())
 }
 
@@ -59,7 +58,9 @@ fn configure_auth(builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>) 
 }
 
 /// Configure external API integrations
-fn configure_external_apis(builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>) -> Result<()> {
+fn configure_external_apis(
+    builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>,
+) -> Result<()> {
     // Configure Google OAuth
     let google_client_id = env::var("GOOGLE_CLIENT_ID")
         .unwrap_or_default()

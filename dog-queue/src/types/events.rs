@@ -14,14 +14,14 @@ pub enum JobEvent {
         job_type: String,
         at: DateTime<Utc>,
     },
-    
+
     /// Job was leased by a worker
     Leased {
         job_id: JobId,
         lease_until: DateTime<Utc>,
         at: DateTime<Utc>,
     },
-    
+
     /// Job is being retried
     Retrying {
         job_id: JobId,
@@ -29,25 +29,19 @@ pub enum JobEvent {
         error: String,
         at: DateTime<Utc>,
     },
-    
+
     /// Job completed successfully
-    Completed {
-        job_id: JobId,
-        at: DateTime<Utc>,
-    },
-    
+    Completed { job_id: JobId, at: DateTime<Utc> },
+
     /// Job failed permanently
     Failed {
         job_id: JobId,
         error: String,
         at: DateTime<Utc>,
     },
-    
+
     /// Job was canceled
-    Canceled {
-        job_id: JobId,
-        at: DateTime<Utc>,
-    },
+    Canceled { job_id: JobId, at: DateTime<Utc> },
 }
 
 impl JobEvent {

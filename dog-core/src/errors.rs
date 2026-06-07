@@ -20,22 +20,22 @@ pub type DogResult<T> = std::result::Result<T, AnyError>;
 /// Feathers-ish error class names + status codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorKind {
-    BadRequest,         // 400
-    NotAuthenticated,   // 401
-    Forbidden,          // 403
-    NotFound,           // 404
-    MethodNotAllowed,   // 405
-    NotAcceptable,      // 406
-    Timeout,            // 408
-    Conflict,           // 409
-    Gone,               // 410
-    LengthRequired,     // 411
-    Unprocessable,      // 422
-    TooManyRequests,    // 429
-    GeneralError,       // 500
-    NotImplemented,     // 501
-    BadGateway,         // 502
-    Unavailable,        // 503
+    BadRequest,       // 400
+    NotAuthenticated, // 401
+    Forbidden,        // 403
+    NotFound,         // 404
+    MethodNotAllowed, // 405
+    NotAcceptable,    // 406
+    Timeout,          // 408
+    Conflict,         // 409
+    Gone,             // 410
+    LengthRequired,   // 411
+    Unprocessable,    // 422
+    TooManyRequests,  // 429
+    GeneralError,     // 500
+    NotImplemented,   // 501
+    BadGateway,       // 502
+    Unavailable,      // 503
 }
 
 impl ErrorKind {
@@ -183,7 +183,9 @@ impl DogError {
     pub fn normalize(err: AnyError) -> DogError {
         match err.downcast::<DogError>() {
             Ok(dog) => dog,
-            Err(other) => DogError::new(ErrorKind::GeneralError, other.to_string()).with_source(other),
+            Err(other) => {
+                DogError::new(ErrorKind::GeneralError, other.to_string()).with_source(other)
+            }
         }
     }
 

@@ -2,14 +2,16 @@
 
 use std::marker::PhantomData;
 
-
 use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::errors::DogError;
 use dog_core::HookContext;
 use serde_json::{json, Map, Value};
 
-use crate::core::{AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult, AuthenticationStrategy};
+use crate::core::{
+    AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult,
+    AuthenticationStrategy,
+};
 
 #[derive(Clone, Debug)]
 pub struct JwtStrategyOptions {
@@ -30,7 +32,6 @@ pub struct JwtStrategy<P>
 where
     P: Send + Clone + 'static,
 {
-
     name: String,
     options: JwtStrategyOptions,
     _marker: PhantomData<fn() -> P>,
@@ -58,7 +59,10 @@ where
         self
     }
 
-    fn parse_from_headers(&self, headers: &std::collections::HashMap<String, String>) -> Option<String> {
+    fn parse_from_headers(
+        &self,
+        headers: &std::collections::HashMap<String, String>,
+    ) -> Option<String> {
         let hv = headers
             .get(&self.options.header)
             .or_else(|| headers.get(&self.options.header.to_lowercase()))
@@ -116,7 +120,6 @@ where
         ctx: &mut HookContext<Value, P>,
         auth: &AuthenticationBase<P>,
     ) -> Result<AuthenticationResult> {
-
         let access_token = self
             .parse_from_request(authentication)
             .or_else(|| self.parse_from_headers(&params.headers))
@@ -130,11 +133,17 @@ where
         let cfg = auth.configuration();
         let entity_key = cfg.entity.clone();
         let service_name = cfg.service.clone();
-        let entity_id_claim = cfg.entity_id_claim.clone().unwrap_or_else(|| "sub".to_string());
+        let entity_id_claim = cfg
+            .entity_id_claim
+            .clone()
+            .unwrap_or_else(|| "sub".to_string());
 
         let mut auth_obj = Map::new();
         auth_obj.insert("strategy".to_string(), Value::String(self.name.clone()));
-        auth_obj.insert("accessToken".to_string(), Value::String(access_token.clone()));
+        auth_obj.insert(
+            "accessToken".to_string(),
+            Value::String(access_token.clone()),
+        );
         auth_obj.insert("payload".to_string(), payload.clone());
 
         let mut out = json!({
@@ -150,7 +159,8 @@ where
                 .and_then(|p| p.get(&entity_id_claim))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    DogError::not_authenticated("Could not resolve entity id from token").into_anyhow()
+                    DogError::not_authenticated("Could not resolve entity id from token")
+                        .into_anyhow()
                 })?
                 .to_string();
 

@@ -1,6 +1,6 @@
 use crate::services::AuthDemoParams;
-use std::sync::Arc;
 use dog_auth_local::hooks::ProtectHook;
+use std::sync::Arc;
 
 pub fn crud_capabilities() -> dog_core::ServiceCapabilities {
     use dog_core::ServiceMethodKind;

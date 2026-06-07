@@ -8,37 +8,32 @@ use super::JobPriority;
 pub struct JobMessage {
     /// Job type identifier for dispatch
     pub job_type: String,
-    
+
     /// Serialized job payload (opaque bytes)
     pub payload_bytes: Vec<u8>,
-    
+
     /// Codec used for serialization
     pub codec: String,
-    
+
     /// Target queue name
     pub queue: String,
-    
+
     /// Job priority for ordering
     pub priority: JobPriority,
-    
+
     /// Maximum retry attempts
     pub max_retries: u32,
-    
+
     /// When the job should be eligible for processing
     pub run_at: DateTime<Utc>,
-    
+
     /// Optional idempotency key (scoped by tenant/queue/job_type)
     pub idempotency_key: Option<String>,
 }
 
 impl JobMessage {
     /// Create a new job message
-    pub fn new(
-        job_type: String,
-        payload_bytes: Vec<u8>,
-        codec: String,
-        queue: String,
-    ) -> Self {
+    pub fn new(job_type: String, payload_bytes: Vec<u8>, codec: String, queue: String) -> Self {
         Self {
             job_type,
             payload_bytes,

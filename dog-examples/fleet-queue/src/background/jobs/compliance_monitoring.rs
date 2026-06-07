@@ -1,8 +1,8 @@
+use crate::services::FleetParams;
 use async_trait::async_trait;
+use dog_core::tenant::TenantContext;
 use dog_queue::prelude::*;
 use serde::{Deserialize, Serialize};
-use dog_core::tenant::TenantContext;
-use crate::services::FleetParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComplianceMonitoringJob {
@@ -13,20 +13,19 @@ pub struct ComplianceMonitoringJob {
 
 impl ComplianceMonitoringJob {
     pub fn new(employee_id: String, monitoring_type: String, shift_start_time: String) -> Self {
-        Self { 
-            employee_id, 
-            monitoring_type, 
-            shift_start_time 
+        Self {
+            employee_id,
+            monitoring_type,
+            shift_start_time,
         }
     }
 }
-
 
 #[async_trait]
 impl Job for ComplianceMonitoringJob {
     type Context = crate::background::FleetContext;
     type Result = String;
-    
+
     const JOB_TYPE: &'static str = "compliance_monitoring";
     const PRIORITY: JobPriority = JobPriority::High;
     const MAX_RETRIES: u32 = 3;
@@ -34,8 +33,10 @@ impl Job for ComplianceMonitoringJob {
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
         let tenant_ctx = TenantContext::new(ctx.tenant_id.clone());
         let params = FleetParams::default();
-        
-        let operations_service = ctx.app.app.service("operations")
+
+        let operations_service = ctx
+            .app
+            .service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
 
         // Simple compliance monitoring record - TypeDB functions handle all business logic
@@ -51,6 +52,9 @@ impl Job for ComplianceMonitoringJob {
             .await
             .map_err(|e| JobError::Retryable(format!("Failed to record monitoring: {}", e)))?;
 
-        Ok(format!("Compliance monitoring completed for employee: {}", self.employee_id))
+        Ok(format!(
+            "Compliance monitoring completed for employee: {}",
+            self.employee_id
+        ))
     }
 }

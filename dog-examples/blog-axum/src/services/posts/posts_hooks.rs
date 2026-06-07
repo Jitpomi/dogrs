@@ -50,8 +50,10 @@ impl DogBeforeHook<Value, BlogParams> for ValidatePostAuthorExists {
         }
 
         // Ensure the author exists in this tenant.
-        let authors = ctx.services.service::<Value, BlogParams>("authors")?;
-        let res = authors.get(&ctx.tenant, author_id, ctx.params.clone()).await;
+        let authors = ctx.services.service("authors")?;
+        let res = authors
+            .get(&ctx.tenant, author_id, ctx.params.clone())
+            .await;
         if res.is_err() {
             return Err(DogError::unprocessable("Posts schema validation failed")
                 .with_errors(json!({"author_id": ["author not found"]}))
@@ -69,10 +71,7 @@ fn should_expand_author(ctx: &HookContext<Value, BlogParams>) -> bool {
             return false;
         }
 
-        return expand
-            .split(',')
-            .map(|s| s.trim())
-            .any(|s| s == "author");
+        return expand.split(',').map(|s| s.trim()).any(|s| s == "author");
     }
 
     ctx.config
@@ -89,8 +88,11 @@ async fn expand_one_author(ctx: &HookContext<Value, BlogParams>, mut v: Value) -
         return Ok(Value::Object(obj.clone()));
     };
 
-    let authors = ctx.services.service::<Value, BlogParams>("authors")?;
-    if let Ok(author) = authors.get(&ctx.tenant, author_id, ctx.params.clone()).await {
+    let authors = ctx.services.service("authors")?;
+    if let Ok(author) = authors
+        .get(&ctx.tenant, author_id, ctx.params.clone())
+        .await
+    {
         obj.insert("author".to_string(), author);
     }
 
@@ -138,23 +140,18 @@ fn bool_or(v: Option<&Value>, default: bool) -> bool {
 fn normalize_one(v: Value, default_body: &str) -> Value {
     let obj = v.as_object().cloned().unwrap_or_default();
 
-    let id = non_empty_string(obj.get("id"))
-        .unwrap_or_else(|| format!("post:{}", Uuid::new_v4()));
+    let id = non_empty_string(obj.get("id")).unwrap_or_else(|| format!("post:{}", Uuid::new_v4()));
 
-    let title = non_empty_string(obj.get("title"))
-        .unwrap_or_else(|| "Untitled".to_string());
-    let body = non_empty_string(obj.get("body"))
-        .unwrap_or_else(|| default_body.to_string());
+    let title = non_empty_string(obj.get("title")).unwrap_or_else(|| "Untitled".to_string());
+    let body = non_empty_string(obj.get("body")).unwrap_or_else(|| default_body.to_string());
     let published = bool_or(obj.get("published"), false);
 
     let author_id = non_empty_string(obj.get("author_id"));
     let author = obj.get("author").cloned();
 
     let ts = now_ts();
-    let created_at = non_empty_string(obj.get("createdAt"))
-        .unwrap_or_else(|| ts.clone());
-    let updated_at = non_empty_string(obj.get("updatedAt"))
-        .unwrap_or_else(|| ts.clone());
+    let created_at = non_empty_string(obj.get("createdAt")).unwrap_or_else(|| ts.clone());
+    let updated_at = non_empty_string(obj.get("updatedAt")).unwrap_or_else(|| ts.clone());
 
     let mut out = json!({
         "id": id,

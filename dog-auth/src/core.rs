@@ -143,15 +143,21 @@ impl JwtProvider for JsonwebtokenProvider {
         })?;
 
         let mut header = Header::new(Self::algorithm(jwt.algorithm.clone()));
-        header.typ = Some(match token_type {
-            TokenType::Access => "access",
-            TokenType::Refresh => "refresh",
-            TokenType::Identity => "identity",
-        }
-        .to_string());
+        header.typ = Some(
+            match token_type {
+                TokenType::Access => "access",
+                TokenType::Refresh => "refresh",
+                TokenType::Identity => "identity",
+            }
+            .to_string(),
+        );
 
-        encode(&header, &claims, &EncodingKey::from_secret(secret.as_bytes()))
-            .map_err(|e| DogError::not_authenticated(e.to_string()).into_anyhow())
+        encode(
+            &header,
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .map_err(|e| DogError::not_authenticated(e.to_string()).into_anyhow())
     }
 
     fn verify(
@@ -217,9 +223,13 @@ impl<P> AuthenticationBuilder<P>
 where
     P: Send + Clone + 'static,
 {
-    pub fn new(builder: &mut dog_core::DogAppBuilder<Value, P>, config_key: impl Into<String>, options: Option<AuthOptions>) -> Result<Self> {
+    pub fn new(
+        builder: &mut dog_core::DogAppBuilder<Value, P>,
+        config_key: impl Into<String>,
+        options: Option<AuthOptions>,
+    ) -> Result<Self> {
         let opts = Arc::new(options.unwrap_or_default());
-        
+
         builder.set(config_key.into(), opts.clone());
 
         let jwt: Arc<dyn JwtProvider> = {
@@ -240,7 +250,11 @@ where
         })
     }
 
-    pub fn register(&mut self, name: impl Into<String>, strategy: Arc<dyn AuthenticationStrategy<P>>) {
+    pub fn register(
+        &mut self,
+        name: impl Into<String>,
+        strategy: Arc<dyn AuthenticationStrategy<P>>,
+    ) {
         self.strategies.insert(name.into(), strategy);
     }
 
@@ -266,23 +280,20 @@ impl<P> AuthenticationBase<P>
 where
     P: Send + Clone + 'static,
 {
-    pub fn builder(builder: &mut dog_core::DogAppBuilder<Value, P>, config_key: impl Into<String>, options: Option<AuthOptions>) -> Result<AuthenticationBuilder<P>> {
+    pub fn builder(
+        builder: &mut dog_core::DogAppBuilder<Value, P>,
+        config_key: impl Into<String>,
+        options: Option<AuthOptions>,
+    ) -> Result<AuthenticationBuilder<P>> {
         AuthenticationBuilder::new(builder, config_key, options)
     }
-
-
 
     pub fn configuration(&self) -> AuthOptions {
         (*self.options).clone()
     }
 
-
-
     pub fn strategy_names(&self) -> Vec<String> {
-        self.strategies
-            .keys()
-            .cloned()
-            .collect()
+        self.strategies.keys().cloned().collect()
     }
 
     pub fn get_strategy(&self, name: &str) -> Option<Arc<dyn AuthenticationStrategy<P>>> {
@@ -297,7 +308,8 @@ where
         allowed: &[String],
     ) -> Result<AuthenticationResult> {
         let _strategy = authentication.strategy.as_deref().ok_or_else(|| {
-            DogError::not_authenticated("Invalid authentication information (no `strategy` set)").into_anyhow()
+            DogError::not_authenticated("Invalid authentication information (no `strategy` set)")
+                .into_anyhow()
         })?;
 
         let strategy_name = authentication.strategy.as_deref().ok_or_else(|| {
@@ -313,32 +325,51 @@ where
         }
 
         let strategy = self.strategies.get(strategy_name).ok_or_else(|| {
-            DogError::not_authenticated(&format!("Unknown authentication strategy: {strategy_name}")).into_anyhow()
+            DogError::not_authenticated(&format!(
+                "Unknown authentication strategy: {strategy_name}"
+            ))
+            .into_anyhow()
         })?;
-        
-        strategy.authenticate(authentication, params, ctx, self).await
+
+        strategy
+            .authenticate(authentication, params, ctx, self)
+            .await
     }
 
-    pub async fn setup(&self) {
-    }
+    pub async fn setup(&self) {}
 
     pub fn is_ready(&self) -> bool {
         true
     }
 
-    pub async fn create_access_token(&self, payload: Value, overrides: Option<JwtOverrides>) -> Result<String> {
-        self.create_token(payload, overrides, TokenType::Access).await
+    pub async fn create_access_token(
+        &self,
+        payload: Value,
+        overrides: Option<JwtOverrides>,
+    ) -> Result<String> {
+        self.create_token(payload, overrides, TokenType::Access)
+            .await
     }
 
-    pub async fn create_refresh_token(&self, payload: Value, overrides: Option<JwtOverrides>) -> Result<String> {
-        self.create_token(payload, overrides, TokenType::Refresh).await
+    pub async fn create_refresh_token(
+        &self,
+        payload: Value,
+        overrides: Option<JwtOverrides>,
+    ) -> Result<String> {
+        self.create_token(payload, overrides, TokenType::Refresh)
+            .await
     }
 
     pub async fn verify_access_token(&self, token: &str) -> Result<Value> {
         self.verify_token(token, None).await
     }
 
-    async fn create_token(&self, payload: Value, overrides: Option<JwtOverrides>, default_type: TokenType) -> Result<String> {
+    async fn create_token(
+        &self,
+        payload: Value,
+        overrides: Option<JwtOverrides>,
+        default_type: TokenType,
+    ) -> Result<String> {
         let cfg = self.configuration();
         let jwt = cfg.jwt;
 

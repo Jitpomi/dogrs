@@ -1,29 +1,32 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{JobId, LeaseToken, JobMessage};
+use super::{JobId, JobMessage, LeaseToken};
 
 /// Job status lifecycle
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum JobStatus {
     /// Job is queued and waiting to be processed
     Enqueued,
-    
+
     /// Job is scheduled for future execution
     Scheduled,
-    
+
     /// Job is currently being processed by a worker
     Processing { lease_until: DateTime<Utc> },
-    
+
     /// Job failed and is waiting to be retried
     Retrying { retry_at: DateTime<Utc> },
-    
+
     /// Job completed successfully
     Completed { completed_at: DateTime<Utc> },
-    
+
     /// Job failed permanently (max retries exceeded or permanent error)
-    Failed { failed_at: DateTime<Utc>, error: String },
-    
+    Failed {
+        failed_at: DateTime<Utc>,
+        error: String,
+    },
+
     /// Job was canceled
     Canceled { canceled_at: DateTime<Utc> },
 }
@@ -70,31 +73,31 @@ impl JobStatus {
 pub struct JobRecord {
     /// Unique job identifier
     pub job_id: JobId,
-    
+
     /// Tenant identifier for isolation
     pub tenant_id: String,
-    
+
     /// Immutable job message data
     pub message: JobMessage,
-    
+
     /// Current job status
     pub status: JobStatus,
-    
+
     /// Current attempt number (starts at 0)
     pub attempt: u32,
-    
+
     /// When the job was created
     pub created_at: DateTime<Utc>,
-    
+
     /// When the job was last updated
     pub updated_at: DateTime<Utc>,
-    
+
     /// Last error message (if any)
     pub last_error: Option<String>,
-    
+
     /// Current lease token (if processing)
     pub lease_token: Option<LeaseToken>,
-    
+
     /// When the current lease expires (if processing)
     pub lease_until: Option<DateTime<Utc>>,
 }
@@ -158,7 +161,9 @@ impl JobRecord {
 
     /// Complete the job successfully
     pub fn complete(&mut self) {
-        self.status = JobStatus::Completed { completed_at: Utc::now() };
+        self.status = JobStatus::Completed {
+            completed_at: Utc::now(),
+        };
         self.lease_token = None;
         self.lease_until = None;
         self.updated_at = Utc::now();
@@ -166,7 +171,10 @@ impl JobRecord {
 
     /// Fail the job permanently
     pub fn fail(&mut self, error: String) {
-        self.status = JobStatus::Failed { failed_at: Utc::now(), error: error.clone() };
+        self.status = JobStatus::Failed {
+            failed_at: Utc::now(),
+            error: error.clone(),
+        };
         self.last_error = Some(error);
         self.lease_token = None;
         self.lease_until = None;
@@ -184,7 +192,9 @@ impl JobRecord {
 
     /// Cancel the job
     pub fn cancel(&mut self) {
-        self.status = JobStatus::Canceled { canceled_at: Utc::now() };
+        self.status = JobStatus::Canceled {
+            canceled_at: Utc::now(),
+        };
         self.lease_token = None;
         self.lease_until = None;
         self.updated_at = Utc::now();
@@ -196,10 +206,10 @@ impl JobRecord {
 pub struct LeasedJob {
     /// The job record
     pub record: JobRecord,
-    
+
     /// Lease token for acknowledgment
     pub lease_token: LeaseToken,
-    
+
     /// When the lease expires
     pub lease_until: DateTime<Utc>,
 }

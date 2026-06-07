@@ -1,8 +1,8 @@
+use crate::services::FleetParams;
 use async_trait::async_trait;
+use dog_core::tenant::TenantContext;
 use dog_queue::prelude::*;
 use serde::{Deserialize, Serialize};
-use dog_core::tenant::TenantContext;
-use crate::services::FleetParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaintenanceSchedulingJob {
@@ -13,22 +13,26 @@ pub struct MaintenanceSchedulingJob {
 }
 
 impl MaintenanceSchedulingJob {
-    pub fn new(vehicle_id: String, maintenance_type: String, current_mileage: i32, maintenance_threshold: i32) -> Self {
-        Self { 
-            vehicle_id, 
-            maintenance_type, 
-            current_mileage, 
-            maintenance_threshold 
+    pub fn new(
+        vehicle_id: String,
+        maintenance_type: String,
+        current_mileage: i32,
+        maintenance_threshold: i32,
+    ) -> Self {
+        Self {
+            vehicle_id,
+            maintenance_type,
+            current_mileage,
+            maintenance_threshold,
         }
     }
 }
-
 
 #[async_trait]
 impl Job for MaintenanceSchedulingJob {
     type Context = crate::background::FleetContext;
     type Result = String;
-    
+
     const JOB_TYPE: &'static str = "maintenance_scheduling";
     const PRIORITY: JobPriority = JobPriority::Normal;
     const MAX_RETRIES: u32 = 3;
@@ -36,8 +40,10 @@ impl Job for MaintenanceSchedulingJob {
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
         let tenant_ctx = TenantContext::new(ctx.tenant_id.clone());
         let params = FleetParams::default();
-        
-        let operations_service = ctx.app.app.service("operations")
+
+        let operations_service = ctx
+            .app
+            .service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
 
         // Simple maintenance check record - TypeDB functions handle all business logic
@@ -51,8 +57,13 @@ impl Job for MaintenanceSchedulingJob {
         operations_service
             .create(tenant_ctx, maintenance_check, params)
             .await
-            .map_err(|e| JobError::Retryable(format!("Failed to record maintenance check: {}", e)))?;
+            .map_err(|e| {
+                JobError::Retryable(format!("Failed to record maintenance check: {}", e))
+            })?;
 
-        Ok(format!("Maintenance check completed for vehicle: {}", self.vehicle_id))
+        Ok(format!(
+            "Maintenance check completed for vehicle: {}",
+            self.vehicle_id
+        ))
     }
 }

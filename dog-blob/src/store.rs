@@ -1,6 +1,6 @@
+use crate::{BlobResult, ByteRange, ByteStream, UploadId};
 use async_trait::async_trait;
 use chrono::Datelike;
-use crate::{BlobResult, ByteRange, ByteStream, UploadId};
 
 /// Information about a stored blob
 #[derive(Debug, Clone)]
@@ -25,22 +25,22 @@ pub struct BlobMetadata {
     pub year: Option<u32>,
     pub duration: Option<u32>, // seconds
     pub bitrate: Option<u32>,
-    
+
     // Visual metadata
     pub thumbnail_url: Option<String>,
     pub album_art_url: Option<String>,
-    
+
     // Location metadata
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub location_name: Option<String>,
-    
+
     // Technical metadata
     pub mime_type: Option<String>,
     pub encoding: Option<String>,
     pub sample_rate: Option<u32>,
     pub channels: Option<u32>,
-    
+
     // Custom attributes
     pub custom: std::collections::HashMap<String, String>,
 }
@@ -71,11 +71,7 @@ pub trait BlobStore: Send + Sync {
     }
 
     /// Get a blob as a stream, optionally with range support
-    async fn get(
-        &self,
-        key: &str,
-        range: Option<ByteRange>,
-    ) -> BlobResult<GetResult>;
+    async fn get(&self, key: &str, range: Option<ByteRange>) -> BlobResult<GetResult>;
 
     /// Get blob metadata without content
     async fn head(&self, key: &str) -> BlobResult<ObjectHead>;
@@ -97,11 +93,7 @@ pub trait BlobStore: Send + Sync {
 #[async_trait]
 pub trait MultipartBlobStore: BlobStore {
     /// Initialize a multipart upload
-    async fn init_multipart(
-        &self,
-        key: &str,
-        content_type: Option<&str>,
-    ) -> BlobResult<UploadId>;
+    async fn init_multipart(&self, key: &str, content_type: Option<&str>) -> BlobResult<UploadId>;
 
     /// Upload a part
     async fn put_part(
@@ -227,7 +219,12 @@ impl StoreCapabilities {
 /// Strategy for generating blob keys
 pub trait BlobKeyStrategy: Send + Sync {
     /// Generate a key for a blob
-    fn object_key(&self, tenant_id: &str, blob_id: &str, hints: &std::collections::BTreeMap<String, String>) -> String;
+    fn object_key(
+        &self,
+        tenant_id: &str,
+        blob_id: &str,
+        hints: &std::collections::BTreeMap<String, String>,
+    ) -> String;
 
     /// Generate a key for a derived asset
     fn derived_key(&self, original_key: &str, kind: &str) -> String;
@@ -241,19 +238,25 @@ pub trait BlobKeyStrategy: Send + Sync {
 pub struct DefaultKeyStrategy;
 
 impl BlobKeyStrategy for DefaultKeyStrategy {
-    fn object_key(&self, tenant_id: &str, blob_id: &str, _hints: &std::collections::BTreeMap<String, String>) -> String {
+    fn object_key(
+        &self,
+        tenant_id: &str,
+        blob_id: &str,
+        _hints: &std::collections::BTreeMap<String, String>,
+    ) -> String {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        
-        let dt = chrono::DateTime::from_timestamp(now as i64, 0)
-            .unwrap_or_else(|| chrono::Utc::now());
-        
-        format!("{}/{:04}/{:02}/{}", 
-            tenant_id, 
-            dt.year(), 
-            dt.month(), 
+
+        let dt =
+            chrono::DateTime::from_timestamp(now as i64, 0).unwrap_or_else(|| chrono::Utc::now());
+
+        format!(
+            "{}/{:04}/{:02}/{}",
+            tenant_id,
+            dt.year(),
+            dt.month(),
             blob_id
         )
     }
@@ -263,6 +266,9 @@ impl BlobKeyStrategy for DefaultKeyStrategy {
     }
 
     fn staging_key(&self, tenant_id: &str, upload_id: &str, part_number: u32) -> String {
-        format!("__uploads/{}/{}/part-{:06}", tenant_id, upload_id, part_number)
+        format!(
+            "__uploads/{}/{}/part-{:06}",
+            tenant_id, upload_id, part_number
+        )
     }
 }

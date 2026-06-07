@@ -10,7 +10,11 @@ pub struct LogAround;
 
 #[async_trait]
 impl DogAroundHook<serde_json::Value, SocialParams> for LogAround {
-    async fn run(&self, ctx: &mut HookContext<serde_json::Value, SocialParams>, next: Next<serde_json::Value, SocialParams>) -> Result<()> {
+    async fn run(
+        &self,
+        ctx: &mut HookContext<serde_json::Value, SocialParams>,
+        next: Next<serde_json::Value, SocialParams>,
+    ) -> Result<()> {
         let provider = ctx.params.provider.clone();
         let path = ctx.params.path.clone();
         let method = ctx.params.method.clone();
@@ -38,9 +42,12 @@ impl DogAfterHook<serde_json::Value, SocialParams> for LogAfter {
     }
 }
 
-pub fn global_hooks(app: &dog_core::DogApp<serde_json::Value, SocialParams>) {
+pub fn global_hooks(
+    app: &mut dog_core::DogAppBuilder<serde_json::Value, SocialParams>,
+) -> Result<()> {
     app.hooks(|h| {
         h.around_all(Arc::new(LogAround));
         h.after_all(Arc::new(LogAfter));
     });
+    Ok(())
 }

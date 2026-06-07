@@ -4,23 +4,24 @@
 
 pub mod app;
 pub mod config;
+pub mod errors;
+pub mod events;
 pub mod hooks;
 pub mod registry;
 pub mod service;
 pub mod tenant;
-pub mod events;
-pub mod errors;
 
 #[cfg(feature = "adapters")]
 pub mod adapters;
 
-pub use app::{DogApp, DogAppBuilder, ServiceCaller, ServiceHandle, ServiceBuilderHandle};
-pub use config::{DogConfig, DogConfigSnapshot };
+pub use app::{DogApp, DogAppBuilder, ServiceBuilderHandle, ServiceCaller, ServiceHandle};
+pub use config::{DogConfig, DogConfigSnapshot};
+pub use errors::{DogError, DogResult, ErrorKind};
+pub use events::{method_to_standard_event, DogEventHub, ServiceEventData, ServiceEventKind};
 pub use hooks::{
-    DogAfterHook, DogAroundHook, DogBeforeHook, DogErrorHook, HookContext, Next, ServiceHooks, HookResult,
+    DogAfterHook, DogAroundHook, DogBeforeHook, DogErrorHook, HookContext, HookResult, Next,
+    ServiceHooks,
 };
 pub use registry::DogServiceRegistry;
 pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};
 pub use tenant::{TenantContext, TenantId};
-pub use events::{DogEventHub, ServiceEventKind, ServiceEventData, method_to_standard_event, };
-pub use errors::{DogError, ErrorKind, DogResult};

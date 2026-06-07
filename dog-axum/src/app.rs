@@ -173,12 +173,18 @@ where
         self
     }
 
-    pub fn use_service_with<L>(mut self, path: &'static str, _service: Arc<dyn DogService<R, P>>, middleware: L) -> Self
+    pub fn use_service_with<L>(
+        mut self,
+        path: &'static str,
+        _service: Arc<dyn DogService<R, P>>,
+        middleware: L,
+    ) -> Self
     where
         R: Serialize + DeserializeOwned,
         P: FromRestParams,
         L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
-        L::Service: tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
+        L::Service:
+            tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
         <L::Service as tower::Service<Request<Body>>>::Future: Send,
         <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
     {
@@ -197,12 +203,14 @@ where
     pub fn use_middleware<L>(mut self, layer: L) -> Self
     where
         L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
-        L::Service: tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
+        L::Service:
+            tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
         <L::Service as tower::Service<Request<Body>>>::Future: Send,
         <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
     {
         // Store middleware to be applied to next service
-        self.pending_middleware.push(Box::new(move |router| router.layer(layer.clone())));
+        self.pending_middleware
+            .push(Box::new(move |router| router.layer(layer.clone())));
         self
     }
 

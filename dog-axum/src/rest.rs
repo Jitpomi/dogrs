@@ -1,16 +1,14 @@
 use std::sync::Arc;
 
 use axum::{
+    body::Body,
     extract::{OriginalUri, Path, Query, State},
     http::{HeaderMap, Request},
     response::Redirect,
-    routing,
-    Json,
-    Router,
-    body::Body,
+    routing, Json, Router,
 };
-use dog_core::{tenant::TenantContext, DogApp, ServiceMethodKind};
 use dog_core::errors::DogError;
+use dog_core::{tenant::TenantContext, DogApp, ServiceMethodKind};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -18,7 +16,6 @@ use crate::{
     params::{FromRestParams, RestParams},
     DogAxumError, DogAxumState,
 };
-
 
 pub fn tenant_from_headers(headers: &HeaderMap) -> TenantContext {
     headers
@@ -98,7 +95,17 @@ where
     P: FromRestParams + Send + Sync + Clone + 'static,
 {
     Ok(Json(
-        call_custom(app, service_name, method, headers, query, http_method, uri, data).await?,
+        call_custom(
+            app,
+            service_name,
+            method,
+            headers,
+            query,
+            http_method,
+            uri,
+            data,
+        )
+        .await?,
     ))
 }
 
@@ -117,7 +124,17 @@ where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
     P: FromRestParams + Send + Sync + Clone + 'static,
 {
-    let v = call_custom(app, service_name, method, headers, query, http_method, uri, data).await?;
+    let v = call_custom(
+        app,
+        service_name,
+        method,
+        headers,
+        query,
+        http_method,
+        uri,
+        data,
+    )
+    .await?;
     let location = v
         .get(location_key)
         .and_then(|x| x.as_str())
@@ -222,7 +239,11 @@ pub fn oauth_callback_capture_typed<T: Serialize>(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    Json(OAuthCapture { provider, code, state })
+    Json(OAuthCapture {
+        provider,
+        code,
+        state,
+    })
 }
 
 pub async fn call_custom_json_qd<R, P, Q, D>(
@@ -242,9 +263,20 @@ where
     D: Serialize,
 {
     let q = query_to_map(query);
-    let body: R = serde_json::from_value(serde_json::to_value(data).map_err(|e| anyhow::anyhow!(e))?)
-        .map_err(|e| anyhow::anyhow!(e))?;
-    call_custom_json(app, service_name, method, headers, q, http_method, uri, Some(body)).await
+    let body: R =
+        serde_json::from_value(serde_json::to_value(data).map_err(|e| anyhow::anyhow!(e))?)
+            .map_err(|e| anyhow::anyhow!(e))?;
+    call_custom_json(
+        app,
+        service_name,
+        method,
+        headers,
+        q,
+        http_method,
+        uri,
+        Some(body),
+    )
+    .await
 }
 
 pub async fn call_custom_redirect_qd<R, P, Q, D>(
@@ -264,9 +296,20 @@ where
     D: Serialize,
 {
     let q = query_to_map(query);
-    let body: R = serde_json::from_value(serde_json::to_value(data).map_err(|e| anyhow::anyhow!(e))?)
-        .map_err(|e| anyhow::anyhow!(e))?;
-    call_custom_redirect_location(app, service_name, method, headers, q, http_method, uri, Some(body)).await
+    let body: R =
+        serde_json::from_value(serde_json::to_value(data).map_err(|e| anyhow::anyhow!(e))?)
+            .map_err(|e| anyhow::anyhow!(e))?;
+    call_custom_redirect_location(
+        app,
+        service_name,
+        method,
+        headers,
+        q,
+        http_method,
+        uri,
+        Some(body),
+    )
+    .await
 }
 
 pub async fn call_custom_json_q<R, P, Q>(
@@ -284,7 +327,17 @@ where
     Q: Serialize,
 {
     let q = query_to_map(query);
-    call_custom_json(app, service_name, method, headers, q, http_method, uri, None).await
+    call_custom_json(
+        app,
+        service_name,
+        method,
+        headers,
+        q,
+        http_method,
+        uri,
+        None,
+    )
+    .await
 }
 
 pub async fn call_custom_redirect_q<R, P, Q>(
@@ -302,7 +355,17 @@ where
     Q: Serialize,
 {
     let q = query_to_map(query);
-    call_custom_redirect_location(app, service_name, method, headers, q, http_method, uri, None).await
+    call_custom_redirect_location(
+        app,
+        service_name,
+        method,
+        headers,
+        q,
+        http_method,
+        uri,
+        None,
+    )
+    .await
 }
 
 async fn handle_custom_method<R, P>(
@@ -319,23 +382,23 @@ where
 {
     // Check if the service declares this custom method in its capabilities
     let capabilities = svc.inner().capabilities();
-    
+
     // Check if any custom method with this name exists in capabilities
-    let method_name: Option<&'static str> = capabilities.allowed_methods.iter().find_map(|m| {
-        match m {
+    let method_name: Option<&'static str> =
+        capabilities.allowed_methods.iter().find_map(|m| match m {
             ServiceMethodKind::Custom(name) if name.eq_ignore_ascii_case(method) => Some(*name),
             _ => None,
-        }
-    });
-    
+        });
+
     let Some(method_name) = method_name else {
         return Err(DogError::bad_request(&format!(
-            "Service '{}' does not support custom method '{}'", 
-            service_name, 
-            method
-        )).into_anyhow().into());
+            "Service '{}' does not support custom method '{}'",
+            service_name, method
+        ))
+        .into_anyhow()
+        .into());
     };
-    
+
     // Call the custom method through the DogRS pipeline so hooks run
     let result = svc.custom(tenant, method_name, data, params).await?;
     let json_result = serde_json::to_value(result).map_err(|e| anyhow::anyhow!(e))?;
@@ -364,14 +427,27 @@ where
                     let params = P::from_rest_params(params);
 
                     let svc = state.app.service(&service_name)?;
-                    
+
                     // Check for custom method header
-                    if let Some(custom_method) = headers.get("x-service-method").and_then(|h| h.to_str().ok()) {
-                        return handle_custom_method(&service_name, &svc, custom_method, tenant, None, params).await;
+                    if let Some(custom_method) = headers
+                        .get("x-service-method")
+                        .and_then(|h| h.to_str().ok())
+                    {
+                        return handle_custom_method(
+                            &service_name,
+                            &svc,
+                            custom_method,
+                            tenant,
+                            None,
+                            params,
+                        )
+                        .await;
                     }
-                    
+
                     let res = svc.find(tenant, params).await?;
-                    Ok::<_, DogAxumError>(Json(serde_json::to_value(res).map_err(|e| anyhow::anyhow!(e))?))
+                    Ok::<_, DogAxumError>(Json(
+                        serde_json::to_value(res).map_err(|e| anyhow::anyhow!(e))?,
+                    ))
                 }
             })
             .post({
@@ -384,9 +460,10 @@ where
                     let tenant = tenant_from_headers(&headers);
 
                     // Use clean Json extractor - multipart is handled by middleware
-                    let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024).await // 10MB limit for JSON
+                    let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
+                        .await // 10MB limit for JSON
                         .map_err(|e| anyhow::anyhow!("Failed to read request body: {}", e))?;
-                    
+
                     let data: R = serde_json::from_slice(&body_bytes)
                         .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
 
@@ -394,14 +471,27 @@ where
                     let params = P::from_rest_params(params);
 
                     let svc = state.app.service(&service_name)?;
-                    
+
                     // Check for custom method header
-                    if let Some(custom_method) = headers.get("x-service-method").and_then(|h| h.to_str().ok()) {
-                        return handle_custom_method(&service_name, &svc, custom_method, tenant, Some(data), params).await;
+                    if let Some(custom_method) = headers
+                        .get("x-service-method")
+                        .and_then(|h| h.to_str().ok())
+                    {
+                        return handle_custom_method(
+                            &service_name,
+                            &svc,
+                            custom_method,
+                            tenant,
+                            Some(data),
+                            params,
+                        )
+                        .await;
                     }
-                    
+
                     let res = svc.create(tenant, data, params).await?;
-                    Ok::<_, DogAxumError>(Json(serde_json::to_value(res).map_err(|e| anyhow::anyhow!(e))?))
+                    Ok::<_, DogAxumError>(Json(
+                        serde_json::to_value(res).map_err(|e| anyhow::anyhow!(e))?,
+                    ))
                 }
             }),
         )

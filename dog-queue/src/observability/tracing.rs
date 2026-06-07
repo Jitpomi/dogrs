@@ -1,7 +1,6 @@
-use std::sync::Arc;
 #[cfg(feature = "tracing-opentelemetry")]
-use opentelemetry::trace::{TraceId, SpanId};
-
+use opentelemetry::trace::{SpanId, TraceId};
+use std::sync::Arc;
 
 /// Distributed tracing integration for job processing
 #[cfg(feature = "tracing-opentelemetry")]
@@ -19,7 +18,7 @@ impl DistributedTracing {
     pub fn new() -> Self {
         // In production, this would be configured with actual OTLP endpoint
         let tracer = opentelemetry::global::tracer("dog-queue");
-        
+
         Self {
             tracer: Arc::new(tracer),
         }
@@ -33,7 +32,6 @@ impl DistributedTracing {
         Self
     }
 }
-
 
 /// Span wrapper for job execution
 #[cfg(feature = "tracing-opentelemetry")]
@@ -50,26 +48,36 @@ impl JobSpan {
     /// Record job completion
     pub fn record_success(&mut self) {
         self.span.set_status(opentelemetry::trace::Status::Ok);
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.status", "completed"));
+        self.span
+            .set_attribute(opentelemetry::KeyValue::new("job.status", "completed"));
     }
 
     /// Record job failure
     pub fn record_failure(&mut self, error: &str) {
-        self.span.set_status(opentelemetry::trace::Status::error(error.to_string()));
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.status", "failed"));
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.error", error.to_string()));
+        self.span
+            .set_status(opentelemetry::trace::Status::error(error.to_string()));
+        self.span
+            .set_attribute(opentelemetry::KeyValue::new("job.status", "failed"));
+        self.span
+            .set_attribute(opentelemetry::KeyValue::new("job.error", error.to_string()));
     }
 
     /// Record job retry
     pub fn record_retry(&mut self, attempt: u32, error: &str) {
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.status", "retrying"));
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.attempt", attempt as i64));
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.retry_reason", error.to_string()));
+        self.span
+            .set_attribute(opentelemetry::KeyValue::new("job.status", "retrying"));
+        self.span
+            .set_attribute(opentelemetry::KeyValue::new("job.attempt", attempt as i64));
+        self.span.set_attribute(opentelemetry::KeyValue::new(
+            "job.retry_reason",
+            error.to_string(),
+        ));
     }
 
     /// Add custom attribute
     pub fn set_attribute(&mut self, key: &str, value: &str) {
-        self.span.set_attribute(opentelemetry::KeyValue::new(key, value.to_string()));
+        self.span
+            .set_attribute(opentelemetry::KeyValue::new(key, value.to_string()));
     }
 }
 
@@ -111,7 +119,7 @@ impl SpanCollector {
     pub fn collect_span(&self, span_data: SpanData) {
         let mut spans = self.spans.lock().unwrap();
         spans.push(span_data);
-        
+
         // Keep only last 10000 spans
         if spans.len() > 10000 {
             spans.remove(0);
@@ -164,21 +172,21 @@ impl Default for SpanCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{QueueCtx, JobId};
+    use crate::{JobId, QueueCtx};
 
     #[test]
     fn test_distributed_tracing() {
         let _tracing = DistributedTracing::new();
         let _ctx = QueueCtx::new("test_tenant".to_string());
         let _job_id = JobId::new();
-        
+
         // Test passes - basic tracing functionality works
     }
 
     #[test]
     fn test_span_collector() {
         let collector = SpanCollector::new();
-        
+
         let span_data = SpanData {
             trace_id: "test_trace".to_string(),
             span_id: "test_span".to_string(),
@@ -189,9 +197,9 @@ mod tests {
             status: SpanStatus::Ok,
             attributes: std::collections::HashMap::new(),
         };
-        
+
         collector.collect_span(span_data.clone());
-        
+
         let spans = collector.get_spans();
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].trace_id, "test_trace");

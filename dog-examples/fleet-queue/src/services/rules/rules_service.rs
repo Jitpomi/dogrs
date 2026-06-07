@@ -1,14 +1,14 @@
-use std::sync::Arc;
+use super::rules_shared;
+use crate::services::FleetParams;
+use crate::typedb::TypeDBState;
 use anyhow::Result;
 use async_trait::async_trait;
+use dog_core::errors::{DogError, ErrorKind};
 use dog_core::tenant::TenantContext;
 use dog_core::{DogService, ServiceCapabilities};
-use dog_core::errors::{DogError, ErrorKind};
-use serde_json::Value;
-use crate::typedb::TypeDBState;
-use crate::services::FleetParams;
 use dog_typedb::TypeDBAdapter;
-use super::rules_shared;
+use serde_json::Value;
+use std::sync::Arc;
 
 pub struct RulesService {
     adapter: TypeDBAdapter,
@@ -38,7 +38,11 @@ impl DogService<Value, FleetParams> for RulesService {
         match method {
             "read" => self.adapter.read(data.unwrap()).await,
             "write" => self.adapter.write(data.unwrap()).await,
-            _ => Err(DogError::new(ErrorKind::MethodNotAllowed, format!("Unknown method: {}", method)).into_anyhow())
+            _ => Err(DogError::new(
+                ErrorKind::MethodNotAllowed,
+                format!("Unknown method: {}", method),
+            )
+            .into_anyhow()),
         }
     }
 }

@@ -21,24 +21,24 @@ struct MusicMultipartDefaults;
 impl MusicMultipartDefaults {
     const MAX_FILE_SIZE_MB: usize = 200;
     const MAX_TOTAL_SIZE_MB: usize = 500;
-    const ALLOWED_TYPES: &'static str = "audio/mpeg,audio/wav,audio/flac,audio/aac,audio/ogg,application/octet-stream";
+    const ALLOWED_TYPES: &'static str =
+        "audio/mpeg,audio/wav,audio/flac,audio/aac,audio/ogg,application/octet-stream";
     const INCLUDE_METADATA: bool = true;
     const FILE_ENCODING: &'static str = "base64";
 }
 
 pub async fn build() -> anyhow::Result<AxumApp<Value, MusicParams>> {
-    let ax = app::music_app().await?;
+    let mut builder = app::build_builder().await?;
 
-    let state = ax
-        .app
+    let state = builder
         .get::<Arc<rustfs::RustFsState>>("rustfs")
         .ok_or(anyhow::anyhow!("RustFsState not found"))?;
 
-    let svcs = services::configure(ax.app.as_ref(), Arc::clone(&state))?;
+    let svcs = services::configure(&mut builder, Arc::clone(&state))?;
 
     let config = multipart_config();
-  
-    let mut ax = ax
+
+    let mut ax = dog_axum::axum(builder.build())
         .use_service_with("/music", svcs.music, MultipartToJson::with_config(config))
         .service("/health", || async { "ok" });
 

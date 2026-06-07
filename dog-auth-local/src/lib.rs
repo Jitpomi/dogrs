@@ -1,6 +1,5 @@
-pub mod strategy;
 pub mod hooks;
+pub mod strategy;
 
-pub use strategy::*;
 pub use hooks::*;
-
+pub use strategy::*;

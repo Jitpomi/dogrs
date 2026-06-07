@@ -33,9 +33,12 @@ impl DogAfterHook<serde_json::Value, MusicParams> for LogAfter {
     }
 }
 
-pub fn global_hooks(app: &dog_core::DogApp<serde_json::Value, MusicParams>) {
+pub fn global_hooks(
+    app: &mut dog_core::DogAppBuilder<serde_json::Value, MusicParams>,
+) -> Result<()> {
     app.hooks(|h| {
         h.around_all(Arc::new(LogAround));
         h.after_all(Arc::new(LogAfter));
     });
+    Ok(())
 }

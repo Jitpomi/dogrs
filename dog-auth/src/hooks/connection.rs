@@ -37,7 +37,10 @@ where
     P: ConnectionHookParams + 'static,
 {
     pub fn new(auth_service: Arc<AuthenticationService<P>>, event: ConnectionEvent) -> Self {
-        Self { auth_service, event }
+        Self {
+            auth_service,
+            event,
+        }
     }
 }
 
@@ -57,7 +60,9 @@ where
 
         let auth_result: AuthenticationResult = match result {
             dog_core::HookResult::One(v) => v.clone(),
-            dog_core::HookResult::Many(vs) => serde_json::to_value(vs).map_err(|e| anyhow::anyhow!(e))?,
+            dog_core::HookResult::Many(vs) => {
+                serde_json::to_value(vs).map_err(|e| anyhow::anyhow!(e))?
+            }
         };
 
         self.auth_service

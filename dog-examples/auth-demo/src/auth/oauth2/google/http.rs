@@ -8,7 +8,6 @@ use serde_json::Value;
 
 use crate::services::AuthDemoParams;
 
-
 use super::providers;
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -34,8 +33,6 @@ fn service_redirect_uri(app: &dog_core::DogApp<Value, AuthDemoParams>) -> anyhow
 pub async fn google_login_service_handler(
     app: Arc<dog_core::DogApp<Value, AuthDemoParams>>,
 ) -> anyhow::Result<axum::response::Redirect> {
-
-
     let config = app.config_snapshot();
     let redirect_uri = service_redirect_uri(app.as_ref())?;
     let location = providers::authorize_url_for_redirect(&config, &redirect_uri)?;
@@ -63,19 +60,16 @@ pub fn mount(ax: AxumApp<Value, AuthDemoParams>) -> AxumApp<Value, AuthDemoParam
     let ax = oauth::mount_oauth_routes::<AuthDemoParams, OAuthCallbackQuery, _>(ax, routes);
 
     let app_arc = Arc::clone(&ax.app);
-    ax.service(
-        "/oauth/google/login/service",
-        {
-            move || {
-                let app_arc = Arc::clone(&app_arc);
-                async move {
-                    let res: Response = match google_login_service_handler(app_arc).await {
-                        Ok(r) => r.into_response(),
-                        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-                    };
-                    res
-                }
+    ax.service("/oauth/google/login/service", {
+        move || {
+            let app_arc = Arc::clone(&app_arc);
+            async move {
+                let res: Response = match google_login_service_handler(app_arc).await {
+                    Ok(r) => r.into_response(),
+                    Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                };
+                res
             }
-        },
-    )
+        }
+    })
 }

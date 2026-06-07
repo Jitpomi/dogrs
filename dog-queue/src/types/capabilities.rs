@@ -5,22 +5,22 @@ use serde::{Deserialize, Serialize};
 pub struct QueueCapabilities {
     /// Support for delayed job execution (run_at > now)
     pub delayed: bool,
-    
+
     /// Support for scheduled job execution at specific times
     pub scheduled_at: bool,
-    
+
     /// Support for job cancellation
     pub cancel: bool,
-    
+
     /// Support for lease extension (heartbeat)
     pub lease_extend: bool,
-    
+
     /// Support for job priority ordering
     pub priority: bool,
-    
+
     /// Support for idempotency keys
     pub idempotency: bool,
-    
+
     /// Support for dead letter queue
     pub dead_letter_queue: bool,
 }
@@ -83,15 +83,29 @@ impl QueueCapabilities {
     /// Get list of supported features
     pub fn supported_features(&self) -> Vec<&'static str> {
         let mut features = Vec::new();
-        
-        if self.delayed { features.push("delayed"); }
-        if self.scheduled_at { features.push("scheduled_at"); }
-        if self.cancel { features.push("cancel"); }
-        if self.lease_extend { features.push("lease_extend"); }
-        if self.priority { features.push("priority"); }
-        if self.idempotency { features.push("idempotency"); }
-        if self.dead_letter_queue { features.push("dead_letter_queue"); }
-        
+
+        if self.delayed {
+            features.push("delayed");
+        }
+        if self.scheduled_at {
+            features.push("scheduled_at");
+        }
+        if self.cancel {
+            features.push("cancel");
+        }
+        if self.lease_extend {
+            features.push("lease_extend");
+        }
+        if self.priority {
+            features.push("priority");
+        }
+        if self.idempotency {
+            features.push("idempotency");
+        }
+        if self.dead_letter_queue {
+            features.push("dead_letter_queue");
+        }
+
         features
     }
 }

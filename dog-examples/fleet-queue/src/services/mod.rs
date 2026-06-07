@@ -1,20 +1,19 @@
 pub mod types;
 pub use types::FleetParams;
 
-
 use std::sync::Arc;
 
-use dog_core::DogService;
 use crate::typedb::TypeDBState;
+use dog_core::DogService;
 
-pub mod vehicles;
-pub mod deliveries;
-pub mod operations;
-pub mod employees;
-pub mod tomtom;
-pub mod jobs;
-pub mod rules;
 pub mod certifications;
+pub mod deliveries;
+pub mod employees;
+pub mod jobs;
+pub mod operations;
+pub mod rules;
+pub mod tomtom;
+pub mod vehicles;
 
 pub struct FleetServices {
     pub vehicles: Arc<dyn DogService<serde_json::Value, FleetParams>>,
@@ -28,43 +27,50 @@ pub struct FleetServices {
 }
 
 pub fn configure(
-    app: &dog_core::DogApp<serde_json::Value, FleetParams>,
+    app: &mut dog_core::DogAppBuilder<serde_json::Value, FleetParams>,
     state: Arc<TypeDBState>,
+    background_system: Arc<crate::background::BackgroundSystem>,
 ) -> anyhow::Result<FleetServices> {
-
-    let vehicles: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(vehicles::VehiclesService::new(Arc::clone(&state)));
+    let vehicles: Arc<dyn DogService<serde_json::Value, FleetParams>> =
+        Arc::new(vehicles::VehiclesService::new(Arc::clone(&state)));
     app.register_service("vehicles", Arc::clone(&vehicles));
     vehicles::vehicles_shared::register_hooks(app)?;
 
-    let deliveries: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(deliveries::DeliveriesService::new(Arc::clone(&state)));
+    let deliveries: Arc<dyn DogService<serde_json::Value, FleetParams>> =
+        Arc::new(deliveries::DeliveriesService::new(Arc::clone(&state)));
     app.register_service("deliveries", Arc::clone(&deliveries));
     deliveries::deliveries_shared::register_hooks(app)?;
 
-    let operations: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(operations::OperationsService::new(Arc::clone(&state)));
+    let operations: Arc<dyn DogService<serde_json::Value, FleetParams>> =
+        Arc::new(operations::OperationsService::new(Arc::clone(&state)));
     app.register_service("operations", Arc::clone(&operations));
     operations::operations_shared::register_hooks(app)?;
 
-    let employees: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(employees::EmployeesService::new(Arc::clone(&state)));
+    let employees: Arc<dyn DogService<serde_json::Value, FleetParams>> =
+        Arc::new(employees::EmployeesService::new(Arc::clone(&state)));
     app.register_service("employees", Arc::clone(&employees));
     employees::employees_shared::register_hooks(app)?;
 
-    let tomtom: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(tomtom::TomTomService::new(app)?);
+    let tomtom: Arc<dyn DogService<serde_json::Value, FleetParams>> =
+        Arc::new(tomtom::TomTomService::new(app)?);
     app.register_service("tomtom", Arc::clone(&tomtom));
     tomtom::tomtom_shared::register_hooks(app)?;
 
-    let jobs: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(jobs::JobsService::new(app)?);
+    let jobs: Arc<dyn DogService<serde_json::Value, FleetParams>> =
+        Arc::new(jobs::JobsService::new(background_system)?);
     app.register_service("jobs", Arc::clone(&jobs));
     jobs::jobs_shared::register_hooks(app)?;
-    
-    let rules: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(rules::RulesService::new(Arc::clone(&state)));
+
+    let rules: Arc<dyn DogService<serde_json::Value, FleetParams>> =
+        Arc::new(rules::RulesService::new(Arc::clone(&state)));
     app.register_service("rules", Arc::clone(&rules));
     rules::rules_shared::register_hooks(app)?;
 
-
-    let certifications: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(certifications::CertificationsService::new(Arc::clone(&state)));
+    let certifications: Arc<dyn DogService<serde_json::Value, FleetParams>> = Arc::new(
+        certifications::CertificationsService::new(Arc::clone(&state)),
+    );
     app.register_service("certifications", Arc::clone(&certifications));
     certifications::certifications_shared::register_hooks(app)?;
-
 
     Ok(FleetServices {
         vehicles,

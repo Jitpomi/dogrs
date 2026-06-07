@@ -69,7 +69,9 @@ where
 
         let auth_result: AuthenticationResult = match result {
             dog_core::HookResult::One(v) => v.clone(),
-            dog_core::HookResult::Many(vs) => serde_json::to_value(vs).map_err(|e| anyhow::anyhow!(e))?,
+            dog_core::HookResult::Many(vs) => {
+                serde_json::to_value(vs).map_err(|e| anyhow::anyhow!(e))?
+            }
         };
 
         // Emit on the app event hub. This is transport-agnostic; adapters can choose how to publish.

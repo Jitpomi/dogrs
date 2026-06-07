@@ -8,9 +8,12 @@ use dog_core::DogApp;
 use dog_core::HookContext;
 use serde_json::{json, Value};
 
-use crate::core::{AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult, ConnectionEvent, JwtOverrides};
-use crate::options::AuthOptions;
+use crate::core::{
+    AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult,
+    ConnectionEvent, JwtOverrides,
+};
 use crate::hooks::authenticate::AuthenticateHookParams;
+use crate::options::AuthOptions;
 
 pub const AUTHENTICATION_KEY: &str = "authentication";
 pub const AUTHENTICATION_OPTIONS_KEY: &str = "authentication.options";
@@ -26,7 +29,10 @@ impl<P> AuthenticationService<P>
 where
     P: Send + Clone + 'static,
 {
-    pub fn builder(builder: &mut dog_core::DogAppBuilder<Value, P>, options: Option<AuthOptions>) -> Result<crate::core::AuthenticationBuilder<P>> {
+    pub fn builder(
+        builder: &mut dog_core::DogAppBuilder<Value, P>,
+        options: Option<AuthOptions>,
+    ) -> Result<crate::core::AuthenticationBuilder<P>> {
         crate::core::AuthenticationBuilder::new(builder, AUTHENTICATION_OPTIONS_KEY, options)
     }
 
@@ -34,12 +40,20 @@ where
         Self { base }
     }
 
-    pub fn install(builder: &mut dog_core::DogAppBuilder<Value, P>, auth: Arc<AuthenticationService<P>>) -> Arc<crate::service_adapter::AuthServiceAdapter<P>>
+    pub fn install(
+        builder: &mut dog_core::DogAppBuilder<Value, P>,
+        auth: Arc<AuthenticationService<P>>,
+    ) -> Arc<crate::service_adapter::AuthServiceAdapter<P>>
     where
         P: AuthenticateHookParams,
     {
-        let svc = Arc::new(crate::service_adapter::AuthServiceAdapter::new(auth.clone()));
-        builder.register_service(AUTHENTICATION_KEY, Arc::clone(&svc) as Arc<dyn dog_core::DogService<Value, P>>);
+        let svc = Arc::new(crate::service_adapter::AuthServiceAdapter::new(
+            auth.clone(),
+        ));
+        builder.register_service(
+            AUTHENTICATION_KEY,
+            Arc::clone(&svc) as Arc<dyn dog_core::DogService<Value, P>>,
+        );
         svc
     }
 
@@ -51,8 +65,6 @@ where
         self.base.configuration()
     }
 
-
-
     pub async fn authenticate(
         &self,
         authentication: &AuthenticationRequest,
@@ -60,13 +72,14 @@ where
         ctx: &mut HookContext<Value, P>,
         strategies: &[String],
     ) -> Result<AuthenticationResult> {
-        self.base.authenticate(authentication, params, ctx, strategies).await
+        self.base
+            .authenticate(authentication, params, ctx, strategies)
+            .await
     }
 
     pub async fn setup_validate(&self) -> Result<()> {
         let cfg = self.configuration();
-        cfg.validate()
-            .map_err(|e| anyhow::anyhow!(e))?;
+        cfg.validate().map_err(|e| anyhow::anyhow!(e))?;
 
         // Basic, Feathers-like sanity check: if JWT is enabled, a secret must be present.
         // (Later, RSA/ECDSA key support can satisfy this instead.)
@@ -139,15 +152,24 @@ where
             .into_anyhow());
         }
 
-        let auth_result = self.authenticate(authentication, params, ctx, strategies).await?;
+        let auth_result = self
+            .authenticate(authentication, params, ctx, strategies)
+            .await?;
 
-        if auth_result.get("accessToken").and_then(|v| v.as_str()).is_some() {
+        if auth_result
+            .get("accessToken")
+            .and_then(|v| v.as_str())
+            .is_some()
+        {
             return Ok(auth_result);
         }
 
         // Minimal Feathers-like behavior: sign the `params.payload` (or empty) as the JWT payload.
         let payload = self.get_payload(&auth_result, params).await?;
-        let access_token = self.base.create_access_token(payload, jwt_overrides).await?;
+        let access_token = self
+            .base
+            .create_access_token(payload, jwt_overrides)
+            .await?;
 
         let mut out = match auth_result {
             Value::Object(m) => m,
@@ -171,9 +193,7 @@ where
     ) -> Result<AuthenticationResult> {
         let token = access_token
             .map(|s| s.to_string())
-            .or_else(|| {
-                crate::core::extract_bearer_token(&params.headers)
-            })
+            .or_else(|| crate::core::extract_bearer_token(&params.headers))
             .ok_or_else(|| DogError::not_authenticated("Invalid access token").into_anyhow())?;
 
         // Default "logout" behavior: verify (authenticate) the access token.

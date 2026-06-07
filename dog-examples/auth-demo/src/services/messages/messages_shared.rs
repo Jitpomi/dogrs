@@ -36,7 +36,10 @@ pub fn register_hooks(
         h.before_patch(Arc::new(super::messages_hooks::ValidateMessageAuthorExists));
 
         h.after_find(Arc::new(super::messages_hooks::ExpandMessageAuthor));
-        h.after(ServiceMethodKind::Get, Arc::new(super::messages_hooks::ExpandMessageAuthor));
+        h.after(
+            ServiceMethodKind::Get,
+            Arc::new(super::messages_hooks::ExpandMessageAuthor),
+        );
 
         h.after_all(Arc::new(super::messages_hooks::NormalizeMessagesResult));
     });

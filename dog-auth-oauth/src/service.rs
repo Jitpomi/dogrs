@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use dog_auth::core::{AuthenticationParams, AuthenticationRequest, AuthenticationResult, JwtOverrides};
+use dog_auth::core::{
+    AuthenticationParams, AuthenticationRequest, AuthenticationResult, JwtOverrides,
+};
 use dog_auth::service::AuthenticationService;
 use dog_core::errors::DogError;
 use dog_core::HookContext;
@@ -96,11 +98,17 @@ where
         };
 
         match result {
-            Ok(auth_result) => Ok(OAuthCallbackResponse { auth_result, location }),
+            Ok(auth_result) => Ok(OAuthCallbackResponse {
+                auth_result,
+                location,
+            }),
             Err(e) => {
                 // We keep this transport-agnostic: adapters can map OAuthError.location to headers.
                 let msg = e.to_string();
-                Err(anyhow::anyhow!(OAuthError { message: msg, location }))
+                Err(anyhow::anyhow!(OAuthError {
+                    message: msg,
+                    location
+                }))
             }
         }
     }

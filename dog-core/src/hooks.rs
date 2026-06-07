@@ -134,8 +134,6 @@
 //! a Feathers-like runtime lookup experience.
 //!
 
-
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -253,7 +251,6 @@ where
     }
 }
 
-
 #[async_trait]
 pub trait DogBeforeHook<R, P>: Send + Sync
 where
@@ -289,7 +286,6 @@ where
 {
     async fn run(&self, ctx: &mut HookContext<R, P>, next: Next<R, P>) -> Result<()>;
 }
-
 
 /// Feathers-style hooks container:
 ///

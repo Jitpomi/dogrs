@@ -7,8 +7,11 @@ mod security_tests {
     fn test_query_analysis_detects_delete_operations() {
         let delete_query = "match $u isa user-account, has id \"user-eve\"; delete $u;";
         let analysis = analyze_query(delete_query);
-        
-        assert!(matches!(analysis.transaction_type, dog_typedb::TransactionType::Write));
+
+        assert!(matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Write
+        ));
         assert_eq!(analysis.primary_type.as_str(), "match");
     }
 
@@ -16,8 +19,11 @@ mod security_tests {
     fn test_query_analysis_detects_insert_operations() {
         let insert_query = "insert $u isa user-account, has id \"new-user\";";
         let analysis = analyze_query(insert_query);
-        
-        assert!(matches!(analysis.transaction_type, dog_typedb::TransactionType::Write));
+
+        assert!(matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Write
+        ));
         assert_eq!(analysis.primary_type.as_str(), "insert");
     }
 
@@ -25,8 +31,11 @@ mod security_tests {
     fn test_query_analysis_allows_read_operations() {
         let read_query = "match $u isa user-account; limit 10;";
         let analysis = analyze_query(read_query);
-        
-        assert!(matches!(analysis.transaction_type, dog_typedb::TransactionType::Read));
+
+        assert!(matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Read
+        ));
         assert_eq!(analysis.primary_type.as_str(), "match");
     }
 
@@ -34,8 +43,11 @@ mod security_tests {
     fn test_query_analysis_detects_schema_operations() {
         let schema_query = "define user-account sub entity, has id;";
         let analysis = analyze_query(schema_query);
-        
-        assert!(matches!(analysis.transaction_type, dog_typedb::TransactionType::Schema));
+
+        assert!(matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Schema
+        ));
         assert_eq!(analysis.primary_type.as_str(), "define");
     }
 
@@ -43,17 +55,23 @@ mod security_tests {
     async fn test_adapter_read_rejects_delete_operations() {
         // This test would require a real TypeDB connection, so we'll test the logic
         // by directly calling the query analysis that the adapter uses
-        
+
         let delete_query_data = json!({
             "query": "match $u isa user-account, has id \"user-eve\"; delete $u;"
         });
-        
+
         let query = delete_query_data.get("query").unwrap().as_str().unwrap();
         let analysis = analyze_query(query);
-        
+
         // Verify that the security check would fail
-        assert!(!matches!(analysis.transaction_type, dog_typedb::TransactionType::Read));
-        assert!(matches!(analysis.transaction_type, dog_typedb::TransactionType::Write));
+        assert!(!matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Read
+        ));
+        assert!(matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Write
+        ));
     }
 
     #[tokio::test]
@@ -61,13 +79,19 @@ mod security_tests {
         let insert_query_data = json!({
             "query": "insert $u isa user-account, has id \"malicious-user\";"
         });
-        
+
         let query = insert_query_data.get("query").unwrap().as_str().unwrap();
         let analysis = analyze_query(query);
-        
+
         // Verify that the security check would fail
-        assert!(!matches!(analysis.transaction_type, dog_typedb::TransactionType::Read));
-        assert!(matches!(analysis.transaction_type, dog_typedb::TransactionType::Write));
+        assert!(!matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Read
+        ));
+        assert!(matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Write
+        ));
     }
 
     #[tokio::test]
@@ -75,12 +99,15 @@ mod security_tests {
         let read_query_data = json!({
             "query": "match $u isa user-account; limit 10;"
         });
-        
+
         let query = read_query_data.get("query").unwrap().as_str().unwrap();
         let analysis = analyze_query(query);
-        
+
         // Verify that the security check would pass
-        assert!(matches!(analysis.transaction_type, dog_typedb::TransactionType::Read));
+        assert!(matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Read
+        ));
     }
 
     #[test]
@@ -91,9 +118,12 @@ mod security_tests {
                 $id == "target-user";
             delete $u;
         "#;
-        
+
         let analysis = analyze_query(complex_query);
-        assert!(matches!(analysis.transaction_type, dog_typedb::TransactionType::Write));
+        assert!(matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Write
+        ));
     }
 
     #[test]
@@ -106,9 +136,12 @@ mod security_tests {
                 "id": $id
             };
         "#;
-        
+
         let analysis = analyze_query(fetch_query);
-        assert!(matches!(analysis.transaction_type, dog_typedb::TransactionType::Read));
+        assert!(matches!(
+            analysis.transaction_type,
+            dog_typedb::TransactionType::Read
+        ));
         assert!(analysis.returns_document_stream);
     }
 }

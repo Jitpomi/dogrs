@@ -1,17 +1,17 @@
-use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::tenant::TenantContext;
 use dog_core::{DogService, ServiceCapabilities};
 use serde_json::{json, Map, Value};
+use std::sync::Arc;
 
+use crate::services::AuthDemoParams;
 use dog_auth::core::AuthenticationParams;
 use dog_auth::AuthenticationService;
 use dog_auth_oauth::OAuthService;
 use dog_core::HookContext;
 use dog_core::ServiceCaller;
 use dog_core::ServiceMethodKind;
-use crate::services::AuthDemoParams;
 
 use super::oauth_shared;
 
@@ -35,14 +35,22 @@ impl DogService<Value, AuthDemoParams> for OauthService {
     ) -> Result<Value> {
         match method {
             "google_login" => {
-                let app = self.app.get().ok_or_else(|| anyhow::anyhow!("DogApp not setup"))?;
+                let app = self
+                    .app
+                    .get()
+                    .ok_or_else(|| anyhow::anyhow!("DogApp not setup"))?;
                 let url = app
                     .get::<String>("oauth.google.authorize_url")
-                    .ok_or_else(|| anyhow::anyhow!("Missing oauth.google.authorize_url in app config"))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Missing oauth.google.authorize_url in app config")
+                    })?;
                 Ok(json!({ "location": url }))
             }
             "google_callback" => {
-                let app = self.app.get().ok_or_else(|| anyhow::anyhow!("DogApp not setup"))?;
+                let app = self
+                    .app
+                    .get()
+                    .ok_or_else(|| anyhow::anyhow!("DogApp not setup"))?;
                 let auth = Arc::clone(&self.auth);
 
                 let provider = data
@@ -82,7 +90,6 @@ impl DogService<Value, AuthDemoParams> for OauthService {
                 payload.insert("provider".to_string(), Value::String(provider.to_string()));
                 payload.insert("code".to_string(), Value::String(code.to_string()));
 
-
                 let res = OAuthService::new(auth)
                     .authenticate_callback("oauth", payload, &auth_params, &mut hook_ctx, None)
                     .await?;
@@ -96,7 +103,7 @@ impl DogService<Value, AuthDemoParams> for OauthService {
 
 impl OauthService {
     pub fn new(auth: Arc<AuthenticationService<AuthDemoParams>>) -> Self {
-        Self { 
+        Self {
             auth,
             app: std::sync::OnceLock::new(),
         }

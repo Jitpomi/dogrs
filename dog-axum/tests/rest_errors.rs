@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::Request;
 use axum::http::HeaderValue;
+use axum::http::Request;
 use dog_axum::axum;
 use dog_core::errors::DogError;
 use dog_core::tenant::TenantContext;
@@ -19,7 +19,12 @@ impl DogService<Value, ()> for UnprocessableOnCreate {
         ServiceCapabilities::from_methods(vec![ServiceMethodKind::Create])
     }
 
-    async fn create(&self, _ctx: &TenantContext, _data: Value, _params: ()) -> anyhow::Result<Value> {
+    async fn create(
+        &self,
+        _ctx: &TenantContext,
+        _data: Value,
+        _params: (),
+    ) -> anyhow::Result<Value> {
         Err(DogError::unprocessable("Invalid")
             .with_errors(json!({"title": ["required"]}))
             .into_anyhow())
@@ -34,7 +39,12 @@ impl DogService<Value, ()> for BoomOnCreate {
         ServiceCapabilities::from_methods(vec![ServiceMethodKind::Create])
     }
 
-    async fn create(&self, _ctx: &TenantContext, _data: Value, _params: ()) -> anyhow::Result<Value> {
+    async fn create(
+        &self,
+        _ctx: &TenantContext,
+        _data: Value,
+        _params: (),
+    ) -> anyhow::Result<Value> {
         Err(anyhow::anyhow!("boom"))
     }
 }

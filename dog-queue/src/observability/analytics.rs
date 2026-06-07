@@ -1,9 +1,9 @@
+use chrono::Utc;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::debug;
-use chrono::Utc;
 
-use crate::{QueueCtx, JobId, JobEvent};
+use crate::{JobEvent, JobId, QueueCtx};
 
 /// Production-grade observability layer
 #[derive(Clone)]
@@ -16,7 +16,7 @@ impl ObservabilityLayer {
     /// Create new observability layer
     pub fn new() -> Self {
         let (event_broadcaster, _) = broadcast::channel(10000);
-        
+
         Self {
             event_broadcaster,
             metrics: Arc::new(super::LiveMetrics::new()),
@@ -32,7 +32,7 @@ impl ObservabilityLayer {
             job_type: job_type.to_string(),
             at: Utc::now(),
         };
-        
+
         let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_enqueued(job_type);
         debug!("Recorded job enqueued: {} ({})", job_id, job_type);
@@ -44,7 +44,7 @@ impl ObservabilityLayer {
             job_id: job_id.clone(),
             at: Utc::now(),
         };
-        
+
         let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_completed(job_type);
         debug!("Recorded job completed: {} ({})", job_id, job_type);
@@ -57,7 +57,7 @@ impl ObservabilityLayer {
             error: "Job execution failed".to_string(),
             at: Utc::now(),
         };
-        
+
         let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_failed(job_type);
         debug!("Recorded job failed: {} ({})", job_id, job_type);
@@ -72,7 +72,7 @@ impl ObservabilityLayer {
             error: "Job failed, retrying".to_string(),
             at: Utc::now(),
         };
-        
+
         let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_retried(job_type);
         debug!("Recorded job retrying: {} ({})", job_id, job_type);
@@ -109,7 +109,7 @@ impl PerformanceAnalytics {
     pub fn job_processing_rate(&self) -> f64 {
         let completed = self.observability.metrics.jobs_completed() as f64;
         let failed = self.observability.metrics.jobs_failed() as f64;
-        
+
         // Simple rate calculation - in production this would be time-windowed
         completed + failed
     }
@@ -119,7 +119,7 @@ impl PerformanceAnalytics {
         let completed = self.observability.metrics.jobs_completed() as f64;
         let failed = self.observability.metrics.jobs_failed() as f64;
         let total = completed + failed;
-        
+
         if total == 0.0 {
             100.0
         } else {
@@ -131,7 +131,7 @@ impl PerformanceAnalytics {
     pub fn retry_rate(&self) -> f64 {
         let retried = self.observability.metrics.jobs_retried() as f64;
         let enqueued = self.observability.metrics.jobs_enqueued() as f64;
-        
+
         if enqueued == 0.0 {
             0.0
         } else {

@@ -1,10 +1,9 @@
 use crate::rustfs_store::RustFSStore;
 use crate::services::MusicParams;
-use dog_blob::MemoryUploadSessionStore;
 use anyhow::Result;
 use dog_blob::adapter::BlobState;
+use dog_blob::MemoryUploadSessionStore;
 use dog_blob::{BlobConfig, DefaultKeyStrategy, DefaultUploadCoordinator};
-use dog_core::DogApp;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -14,7 +13,7 @@ pub struct RustFsState {
 }
 
 impl RustFsState {
-    pub async fn setup_store(app: &DogApp<Value, MusicParams>) -> Result<()> {
+    pub async fn setup_store(app: &mut dog_core::DogAppBuilder<Value, MusicParams>) -> Result<()> {
         // Create RustFS storage with production credentials
         let bucket = std::env::var("RUSTFS_BUCKET").unwrap_or_else(|_| "music-blobs".to_string());
 

@@ -42,9 +42,7 @@ pub enum ServiceEventData<'a, R> {
 
 /// Listener signature (async).
 pub type EventListener<R, P> = Arc<
-    dyn for<'a> Fn(&'a ServiceEventData<'a, R>, &'a HookContext<R, P>) -> HookFut<'a>
-        + Send
-        + Sync,
+    dyn for<'a> Fn(&'a ServiceEventData<'a, R>, &'a HookContext<R, P>) -> HookFut<'a> + Send + Sync,
 >;
 
 /// publish gate: return true to deliver, false to skip.
@@ -172,7 +170,11 @@ where
     }
 
     /// Sugar: app.on_str("messages.created", ...)
-    pub fn on_pattern(&mut self, pattern: ServiceEventPattern, listener: EventListener<R, P>) -> ListenerId {
+    pub fn on_pattern(
+        &mut self,
+        pattern: ServiceEventPattern,
+        listener: EventListener<R, P>,
+    ) -> ListenerId {
         let id = next_listener_id();
         self.listeners.push(ListenerEntry {
             id,
@@ -185,7 +187,11 @@ where
     }
 
     /// Feathers-ish: once(...)
-    pub fn once_pattern(&mut self, pattern: ServiceEventPattern, listener: EventListener<R, P>) -> ListenerId {
+    pub fn once_pattern(
+        &mut self,
+        pattern: ServiceEventPattern,
+        listener: EventListener<R, P>,
+    ) -> ListenerId {
         let id = next_listener_id();
         self.listeners.push(ListenerEntry {
             id,

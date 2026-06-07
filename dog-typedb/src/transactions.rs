@@ -112,30 +112,33 @@ pub fn analyze_query(query: &str) -> QueryAnalysis {
     let has_pagination = contains_kw(&q_lower, "limit") || contains_kw(&q_lower, "offset");
 
     // In TypeQL, aggregations commonly come through `reduce`, `group`, and aggregation funcs in expressions
-    let has_aggregation =
-        contains_kw(&q_lower, "reduce") ||
-        contains_kw(&q_lower, "group") ||
-        q_lower.contains("count(") ||
-        q_lower.contains("sum(") ||
-        q_lower.contains("max(") ||
-        q_lower.contains("min(") ||
-        q_lower.contains("mean(") ||
-        q_lower.contains("median(") ||
-        q_lower.contains("std(");
+    let has_aggregation = contains_kw(&q_lower, "reduce")
+        || contains_kw(&q_lower, "group")
+        || q_lower.contains("count(")
+        || q_lower.contains("sum(")
+        || q_lower.contains("max(")
+        || q_lower.contains("min(")
+        || q_lower.contains("mean(")
+        || q_lower.contains("median(")
+        || q_lower.contains("std(");
 
     // conservative flag; TypeQL function defs vary by version
     let has_functions = q_lower.contains("function") || q_lower.contains("let ");
 
-    let transaction_type = if has_schema_stage(&q_lower) && matches!(first, "define" | "undefine" | "redefine") {
-        TransactionType::Schema
-    } else if has_schema_stage(&q_lower) && !has_write_stage(&q_lower) && !contains_kw(&q_lower, "match") {
-        // fallback: schema-ish blobs
-        TransactionType::Schema
-    } else if has_write_stage(&q_lower) {
-        TransactionType::Write
-    } else {
-        TransactionType::Read
-    };
+    let transaction_type =
+        if has_schema_stage(&q_lower) && matches!(first, "define" | "undefine" | "redefine") {
+            TransactionType::Schema
+        } else if has_schema_stage(&q_lower)
+            && !has_write_stage(&q_lower)
+            && !contains_kw(&q_lower, "match")
+        {
+            // fallback: schema-ish blobs
+            TransactionType::Schema
+        } else if has_write_stage(&q_lower) {
+            TransactionType::Write
+        } else {
+            TransactionType::Read
+        };
 
     QueryAnalysis {
         primary_type,
@@ -156,31 +159,34 @@ pub async fn execute_typedb_query(
     query: &str,
 ) -> Result<Value> {
     println!("DEBUG: execute_typedb_query called with query: {}", query);
-    
+
     let analysis = analyze_query(query);
-    
-    println!("DEBUG: Query analysis completed. Transaction type: {:?}", analysis.transaction_type);
+
+    println!(
+        "DEBUG: Query analysis completed. Transaction type: {:?}",
+        analysis.transaction_type
+    );
 
     match analysis.transaction_type {
         TransactionType::Read => {
             println!("DEBUG: Dispatching to execute_read_query");
             execute_read_query(driver, database, query).await
-        },
+        }
         TransactionType::Write => {
             println!("DEBUG: Dispatching to execute_write_query");
             execute_write_query(driver, database, query).await
-        },
+        }
         TransactionType::Schema => {
             println!("DEBUG: Dispatching to execute_schema_query");
             execute_schema_query(driver, database, query).await
-        },
+        }
     }
 }
 
 async fn execute_read_query(driver: &TypeDBDriver, database: &str, query: &str) -> Result<Value> {
     println!("=== EXECUTE_READ_QUERY START ===");
     println!("Query: {}", query);
-    
+
     let tx = driver
         .transaction(database, typedb_driver::TransactionType::Read)
         .await
@@ -206,10 +212,14 @@ async fn execute_read_query(driver: &TypeDBDriver, database: &str, query: &str) 
 
 /// Execute a query with forced read transaction type
 /// TypeDB will reject DELETE/INSERT operations with TransactionType::Read
-pub async fn execute_read_transaction(driver: &TypeDBDriver, database: &str, query: &str) -> Result<Value> {
+pub async fn execute_read_transaction(
+    driver: &TypeDBDriver,
+    database: &str,
+    query: &str,
+) -> Result<Value> {
     println!("=== EXECUTE_READ_TRANSACTION START (FORCED READ) ===");
     println!("Query: {}", query);
-    
+
     let tx = driver
         .transaction(database, typedb_driver::TransactionType::Read)
         .await
@@ -232,7 +242,6 @@ pub async fn execute_read_transaction(driver: &TypeDBDriver, database: &str, que
     // read tx auto-closes on drop
     res
 }
-
 
 async fn execute_write_query(driver: &TypeDBDriver, database: &str, query: &str) -> Result<Value> {
     let tx = driver
@@ -312,7 +321,8 @@ async fn typedb_answer_to_http_ok(
             let mut truncated = false;
 
             while let Some(document_result) = stream.next().await {
-                let document = document_result.map_err(|e| anyhow::anyhow!("Failed to get concept document: {}", e))?;
+                let document = document_result
+                    .map_err(|e| anyhow::anyhow!("Failed to get concept document: {}", e))?;
                 answers.push(json!({"data": document.into_json(), "involvedBlocks": [0]}));
 
                 if answers.len() >= max_answers {
@@ -338,7 +348,8 @@ async fn typedb_answer_to_http_ok(
             let mut truncated = false;
 
             while let Some(row_result) = stream.next().await {
-                let row = row_result.map_err(|e| anyhow::anyhow!("Failed to get concept row: {}", e))?;
+                let row =
+                    row_result.map_err(|e| anyhow::anyhow!("Failed to get concept row: {}", e))?;
                 let mut data_map = Map::new();
 
                 for column_name in row.get_column_names() {
@@ -442,14 +453,14 @@ pub async fn load_schema_from_file(
     schema_paths: &[&str],
 ) -> Result<Value> {
     println!("Loading TypeDB schema files...");
-    
+
     let schema_files = ["schema.tql", "functions.tql"];
     let mut loaded_files = Vec::new();
     let mut responses = Vec::new();
-    
+
     for file_name in &schema_files {
         let mut file_content = None;
-        
+
         // Try to find the file in any of the provided paths
         for base_path in schema_paths {
             let full_path = if base_path.ends_with(file_name) {
@@ -457,7 +468,7 @@ pub async fn load_schema_from_file(
             } else {
                 format!("{}/{}", base_path.trim_end_matches('/'), file_name)
             };
-            
+
             println!("Checking for {} at: {}", file_name, full_path);
             if let Ok(content) = fs::read_to_string(&full_path) {
                 println!("Found {} at: {}", file_name, full_path);
@@ -465,7 +476,7 @@ pub async fn load_schema_from_file(
                 break;
             }
         }
-        
+
         if let Some(content) = file_content {
             println!("Loading {} ({} characters)...", file_name, content.len());
             match execute_typedb_query(driver, database, &content).await {
@@ -483,16 +494,19 @@ pub async fn load_schema_from_file(
             println!("File {} not found in any of the provided paths", file_name);
         }
     }
-    
+
     if loaded_files.is_empty() {
         return Err(anyhow::anyhow!(
             "No schema files (schema.tql, functions.tql) found in any expected locations: {:?}",
             schema_paths
         ));
     }
-    
-    println!("TypeDB schema loading completed. Loaded files: {:?}", loaded_files);
-    
+
+    println!(
+        "TypeDB schema loading completed. Loaded files: {:?}",
+        loaded_files
+    );
+
     // Return the last successful response, or a summary
     Ok(json!({
         "ok": {

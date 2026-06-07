@@ -1,12 +1,12 @@
 //! # dog-queue: Production-Grade Job Processing Infrastructure
-//! 
+//!
 //! **Multi-tenant job queue with superior correctness guarantees**
-//! 
+//!
 //! dog-queue delivers genuine advantages over existing solutions like Apalis
 //! through stronger semantics and multi-tenant design:
-//! 
+//!
 //! ## 🎯 Production-Ready Features
-//! 
+//!
 //! - **Stronger Correctness**: Lease tokens + expiry reaper + cancel-wins + tenant-scoped idempotency
 //! - **Multi-Tenant by Design**: Tenant isolation built into API contract, not manual key prefixing
 //! - **Reference Payloads**: Minimal serialization using BlobId/TrackId references for DogRS integration
@@ -14,13 +14,13 @@
 //! - **Unified Semantics**: Consistent lease behavior across Memory, Redis, PostgreSQL backends
 //! - **Structured Observability**: Event streams and distributed tracing, not just basic metrics
 //! - **Safe Backend Migration**: Consistent semantics enable zero-downtime storage transitions
-//! 
+//!
 //! ## 🚀 Reference Payload Quick Start
-//! 
+//!
 //! ```rust
 //! use dog_queue::prelude::*;
 //! use serde::{Deserialize, Serialize};
-//! 
+//!
 //! // Reference payload - constant size serialization
 //! #[derive(Serialize, Deserialize)]
 //! struct GenerateWaveformJob {
@@ -28,7 +28,7 @@
 //!     blob_id: BlobId,      // Reference to dog-blob storage
 //!     resolution: u32,      // Small config data
 //! }
-//! 
+//!
 //! #[async_trait::async_trait]
 //! impl Job for GenerateWaveformJob {
 //!     type Context = AudioContext;
@@ -50,7 +50,7 @@
 //!     const JOB_TYPE: &'static str = "generate_waveform";
 //!     const PRIORITY: JobPriority = JobPriority::High;
 //! }
-//! 
+//!
 //! // Multi-tenant queue with lease semantics
 //! let engine = QueueEngine::new(redis_backend)
 //!     .with_codec_registry()
@@ -63,14 +63,14 @@
 //! ```
 
 // Production-ready architecture modules
-pub mod engine;
-pub mod types;
-pub mod error;
-pub mod codec;
-pub mod job;
-pub mod backend;
 pub mod adapter;
+pub mod backend;
+pub mod codec;
+pub mod engine;
+pub mod error;
+pub mod job;
 pub mod observability;
+pub mod types;
 
 // Optional advanced features (placeholder for future implementation)
 // #[cfg(feature = "workflows")]
@@ -81,19 +81,19 @@ pub mod observability;
 
 // Core API exports - standardize on QueueAdapter for DogRS consistency
 pub use adapter::QueueAdapter;
-pub use types::{
-    JobId, QueueCtx, JobPriority, JobStatus, JobMessage, JobRecord, 
-    LeasedJob, QueueCapabilities, JobEvent
-};
-pub use error::{QueueError, QueueResult, JobError};
-pub use codec::{JobCodec, CodecRegistry};
-pub use codec::json::JsonCodec;
-pub use job::{Job, JobRegistry};
+pub use adapter::{QueueConfig, WorkerHandle};
 pub use backend::QueueBackend;
-pub use adapter::{WorkerHandle, QueueConfig};
+pub use codec::json::JsonCodec;
+pub use codec::{CodecRegistry, JobCodec};
+pub use error::{JobError, QueueError, QueueResult};
+pub use job::{Job, JobRegistry};
+pub use types::{
+    JobEvent, JobId, JobMessage, JobPriority, JobRecord, JobStatus, LeasedJob, QueueCapabilities,
+    QueueCtx,
+};
 
 // Observability exports
-pub use observability::{ObservabilityLayer, LiveMetrics};
+pub use observability::{LiveMetrics, ObservabilityLayer};
 
 // Optional feature exports
 #[cfg(feature = "cron-scheduling")]
@@ -111,7 +111,7 @@ pub use backend::sqlite::SqliteBackend;
 
 // Observability features
 #[cfg(feature = "metrics")]
-pub use observability::metrics::{PrometheusExporter, MetricsCollector};
+pub use observability::metrics::{MetricsCollector, PrometheusExporter};
 
 #[cfg(feature = "tracing-opentelemetry")]
 pub use observability::tracing::{DistributedTracing, SpanCollector};
@@ -122,33 +122,27 @@ pub use observability::ui::WebUI;
 /// Production-ready prelude for multi-tenant job processing
 pub mod prelude {
     // Core engine and types
-    pub use crate::{
-        QueueAdapter, Job, QueueBackend
-    };
-    
+    pub use crate::{Job, QueueAdapter, QueueBackend};
+
     // Essential types
-    pub use crate::{
-        QueueCtx, JobId, JobPriority, JobStatus, JobError, QueueResult
-    };
-    
+    pub use crate::{JobError, JobId, JobPriority, JobStatus, QueueCtx, QueueResult};
+
     // Codec system
-    pub use crate::{
-        JobCodec, JsonCodec, CodecRegistry
-    };
-    
+    pub use crate::{CodecRegistry, JobCodec, JsonCodec};
+
     // Job registry
     pub use crate::JobRegistry;
-    
+
     // Observability
-    pub use crate::{ObservabilityLayer, LiveMetrics};
-    
+    pub use crate::{LiveMetrics, ObservabilityLayer};
+
     // Essential traits
     pub use async_trait::async_trait;
-    
+
     // Optional features (placeholder for future implementation)
     // #[cfg(feature = "workflows")]
     // pub use crate::{Workflow, WorkflowBuilder};
-    
+
     // #[cfg(feature = "scheduling")]
     // pub use crate::{Schedule, Scheduler};
 }

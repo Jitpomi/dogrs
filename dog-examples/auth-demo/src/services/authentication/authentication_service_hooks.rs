@@ -1,8 +1,8 @@
+use crate::services::AuthDemoParams;
 use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::hooks::{DogAfterHook, HookContext, HookResult};
 use serde_json::Value;
-use crate::services::AuthDemoParams;
 pub struct StripPasswordFromAuthResult;
 
 #[async_trait]

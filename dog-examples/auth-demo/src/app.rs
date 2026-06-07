@@ -1,15 +1,15 @@
 use anyhow::Result;
 use dog_axum::{axum, AxumApp};
 
-use serde_json::Value;
 use crate::services::AuthDemoParams;
-
+use serde_json::Value;
 
 pub async fn auth_app() -> Result<AxumApp<Value, AuthDemoParams>> {
     dotenvy::from_filename("dog-examples/auth-demo/.env").ok();
     dotenvy::dotenv().ok();
 
-    let mut builder: dog_core::DogAppBuilder<Value, AuthDemoParams> = dog_core::DogAppBuilder::new();
+    let mut builder: dog_core::DogAppBuilder<Value, AuthDemoParams> =
+        dog_core::DogAppBuilder::new();
 
     crate::config::config(&mut builder)?;
     let auth_adapter = crate::auth::strategies(&mut builder)?;
@@ -21,7 +21,7 @@ pub async fn auth_app() -> Result<AxumApp<Value, AuthDemoParams>> {
     svcs.oauth_raw.setup(dog_app.clone());
 
     let mut ax: AxumApp<Value, AuthDemoParams> = axum(dog_app);
-    
+
     ax = ax
         .use_service("/messages", svcs.messages)
         .use_service("/users", svcs.users)

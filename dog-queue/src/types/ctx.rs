@@ -6,13 +6,13 @@ use std::collections::HashMap;
 pub struct QueueCtx {
     /// Tenant identifier for multi-tenant isolation
     pub tenant_id: String,
-    
+
     /// Optional trace ID for distributed tracing
     pub trace_id: Option<String>,
-    
+
     /// Optional request ID for request correlation
     pub request_id: Option<String>,
-    
+
     /// Additional tags for observability and filtering
     pub tags: HashMap<String, String>,
 }

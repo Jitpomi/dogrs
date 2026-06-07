@@ -1,4 +1,4 @@
-use crate::{QueueResult, codec::JobCodec};
+use crate::{codec::JobCodec, QueueResult};
 
 /// JSON codec for job serialization
 #[derive(Debug, Clone)]

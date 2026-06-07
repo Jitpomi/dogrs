@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::RwLock;
-use chrono::{DateTime, Utc, Duration};
 
 /// Live metrics collector for queue operations
 pub struct LiveMetrics {
@@ -11,10 +11,10 @@ pub struct LiveMetrics {
     jobs_failed: AtomicU64,
     jobs_retried: AtomicU64,
     jobs_canceled: AtomicU64,
-    
+
     // Per-job-type metrics
     job_type_metrics: Arc<RwLock<HashMap<String, JobTypeMetrics>>>,
-    
+
     // Performance metrics
     performance: Arc<RwLock<PerformanceMetrics>>,
 }
@@ -34,57 +34,72 @@ impl LiveMetrics {
 
     pub fn increment_jobs_enqueued(&self, job_type: &str) {
         self.jobs_enqueued.fetch_add(1, Ordering::Relaxed);
-        
+
         // Update per-job-type metrics asynchronously
         let job_type = job_type.to_string();
         let metrics = self.job_type_metrics.clone();
         tokio::spawn(async move {
             let mut metrics = metrics.write().await;
-            metrics.entry(job_type).or_insert_with(JobTypeMetrics::new).enqueued += 1;
+            metrics
+                .entry(job_type)
+                .or_insert_with(JobTypeMetrics::new)
+                .enqueued += 1;
         });
     }
 
     pub fn increment_jobs_completed(&self, job_type: &str) {
         self.jobs_completed.fetch_add(1, Ordering::Relaxed);
-        
+
         let job_type = job_type.to_string();
         let metrics = self.job_type_metrics.clone();
         tokio::spawn(async move {
             let mut metrics = metrics.write().await;
-            metrics.entry(job_type).or_insert_with(JobTypeMetrics::new).completed += 1;
+            metrics
+                .entry(job_type)
+                .or_insert_with(JobTypeMetrics::new)
+                .completed += 1;
         });
     }
 
     pub fn increment_jobs_failed(&self, job_type: &str) {
         self.jobs_failed.fetch_add(1, Ordering::Relaxed);
-        
+
         let job_type = job_type.to_string();
         let metrics = self.job_type_metrics.clone();
         tokio::spawn(async move {
             let mut metrics = metrics.write().await;
-            metrics.entry(job_type).or_insert_with(JobTypeMetrics::new).failed += 1;
+            metrics
+                .entry(job_type)
+                .or_insert_with(JobTypeMetrics::new)
+                .failed += 1;
         });
     }
 
     pub fn increment_jobs_retried(&self, job_type: &str) {
         self.jobs_retried.fetch_add(1, Ordering::Relaxed);
-        
+
         let job_type = job_type.to_string();
         let metrics = self.job_type_metrics.clone();
         tokio::spawn(async move {
             let mut metrics = metrics.write().await;
-            metrics.entry(job_type).or_insert_with(JobTypeMetrics::new).retried += 1;
+            metrics
+                .entry(job_type)
+                .or_insert_with(JobTypeMetrics::new)
+                .retried += 1;
         });
     }
 
     pub fn increment_jobs_canceled(&self, job_type: &str) {
         self.jobs_canceled.fetch_add(1, Ordering::Relaxed);
-        
+
         let job_type = job_type.to_string();
         let metrics = self.job_type_metrics.clone();
         tokio::spawn(async move {
             let mut metrics = metrics.write().await;
-            metrics.entry(job_type).or_insert_with(JobTypeMetrics::new).canceled += 1;
+            metrics
+                .entry(job_type)
+                .or_insert_with(JobTypeMetrics::new)
+                .canceled += 1;
         });
     }
 
@@ -190,14 +205,17 @@ impl PerformanceMetrics {
 
     /// Record execution time for a job type
     pub fn record_execution_time(&mut self, job_type: &str, duration: Duration) {
-        let times = self.execution_times.entry(job_type.to_string()).or_default();
+        let times = self
+            .execution_times
+            .entry(job_type.to_string())
+            .or_default();
         times.push(duration);
-        
+
         // Keep only last 1000 measurements per job type
         if times.len() > 1000 {
             times.remove(0);
         }
-        
+
         self.last_updated = Utc::now();
     }
 
@@ -222,7 +240,7 @@ impl PerformanceMetrics {
 
         let mut sorted_times = times.clone();
         sorted_times.sort_by_key(|d| d.num_milliseconds());
-        
+
         let index = ((percentile / 100.0) * (sorted_times.len() - 1) as f64).round() as usize;
         sorted_times.get(index).cloned()
     }
@@ -312,7 +330,8 @@ impl GlobalMetrics {
 
     /// Calculate jobs in progress
     pub fn jobs_in_progress(&self) -> u64 {
-        self.jobs_enqueued.saturating_sub(self.jobs_completed + self.jobs_failed + self.jobs_canceled)
+        self.jobs_enqueued
+            .saturating_sub(self.jobs_completed + self.jobs_failed + self.jobs_canceled)
     }
 }
 
@@ -323,16 +342,16 @@ mod tests {
     #[tokio::test]
     async fn test_live_metrics() {
         let metrics = LiveMetrics::new();
-        
+
         metrics.increment_jobs_enqueued("test_job");
         metrics.increment_jobs_completed("test_job");
-        
+
         assert_eq!(metrics.jobs_enqueued(), 1);
         assert_eq!(metrics.jobs_completed(), 1);
-        
+
         // Give async tasks time to complete
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        
+
         let job_metrics = metrics.job_type_metrics("test_job").await.unwrap();
         assert_eq!(job_metrics.enqueued, 1);
         assert_eq!(job_metrics.completed, 1);
@@ -342,14 +361,14 @@ mod tests {
     #[tokio::test]
     async fn test_performance_metrics() {
         let mut perf = PerformanceMetrics::new();
-        
+
         perf.record_execution_time("test_job", Duration::milliseconds(100));
         perf.record_execution_time("test_job", Duration::milliseconds(200));
         perf.record_execution_time("test_job", Duration::milliseconds(300));
-        
+
         let avg = perf.average_execution_time("test_job").unwrap();
         assert_eq!(avg.num_milliseconds(), 200);
-        
+
         let p50 = perf.percentile_execution_time("test_job", 50.0).unwrap();
         assert_eq!(p50.num_milliseconds(), 200);
     }
@@ -363,7 +382,7 @@ mod tests {
             jobs_retried: 5,
             jobs_canceled: 5,
         };
-        
+
         assert_eq!(global.success_rate(), 88.88888888888889); // 80/(80+10) * 100
         assert_eq!(global.retry_rate(), 5.0); // 5/100 * 100
         assert_eq!(global.jobs_in_progress(), 5); // 100 - 80 - 10 - 5

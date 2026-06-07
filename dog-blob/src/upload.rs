@@ -1,17 +1,11 @@
+use crate::{BlobCtx, BlobId, BlobResult, ByteStream, PartReceipt, UploadId, UploadSession};
 use async_trait::async_trait;
-use crate::{
-    BlobCtx, BlobId, BlobResult, PartReceipt, UploadId, UploadSession, ByteStream
-};
 
 /// Coordinates multipart and resumable uploads
 #[async_trait]
 pub trait UploadCoordinator: Send + Sync {
     /// Begin a new upload session
-    async fn begin(
-        &self,
-        ctx: BlobCtx,
-        intent: UploadIntent,
-    ) -> BlobResult<UploadSession>;
+    async fn begin(&self, ctx: BlobCtx, intent: UploadIntent) -> BlobResult<UploadSession>;
 
     /// Accept a part upload
     async fn accept_part(
@@ -31,25 +25,13 @@ pub trait UploadCoordinator: Send + Sync {
     ) -> BlobResult<UploadSession>;
 
     /// Complete the upload and return final blob receipt
-    async fn complete(
-        &self,
-        ctx: BlobCtx,
-        upload_id: &UploadId,
-    ) -> BlobResult<crate::BlobReceipt>;
+    async fn complete(&self, ctx: BlobCtx, upload_id: &UploadId) -> BlobResult<crate::BlobReceipt>;
 
     /// Abort the upload and cleanup
-    async fn abort(
-        &self,
-        ctx: BlobCtx,
-        upload_id: &UploadId,
-    ) -> BlobResult<()>;
+    async fn abort(&self, ctx: BlobCtx, upload_id: &UploadId) -> BlobResult<()>;
 
     /// Get upload session status
-    async fn get_session(
-        &self,
-        ctx: BlobCtx,
-        upload_id: &UploadId,
-    ) -> BlobResult<UploadSession>;
+    async fn get_session(&self, ctx: BlobCtx, upload_id: &UploadId) -> BlobResult<UploadSession>;
 }
 
 /// Intent to upload a blob
@@ -93,18 +75,10 @@ pub trait UploadSessionStore: Send + Sync {
     async fn delete(&self, upload_id: &UploadId) -> BlobResult<()>;
 
     /// Record a part upload
-    async fn record_part(
-        &self,
-        upload_id: &UploadId,
-        part: PartReceipt,
-    ) -> BlobResult<()>;
+    async fn record_part(&self, upload_id: &UploadId, part: PartReceipt) -> BlobResult<()>;
 
     /// Mark session as completed
-    async fn mark_completed(
-        &self,
-        upload_id: &UploadId,
-        completed_at: i64,
-    ) -> BlobResult<()>;
+    async fn mark_completed(&self, upload_id: &UploadId, completed_at: i64) -> BlobResult<()>;
 
     /// Mark session as failed
     async fn mark_failed(
@@ -115,11 +89,7 @@ pub trait UploadSessionStore: Send + Sync {
     ) -> BlobResult<()>;
 
     /// Mark session as aborted
-    async fn mark_aborted(
-        &self,
-        upload_id: &UploadId,
-        aborted_at: i64,
-    ) -> BlobResult<()>;
+    async fn mark_aborted(&self, upload_id: &UploadId, aborted_at: i64) -> BlobResult<()>;
 }
 
 impl UploadIntent {
@@ -157,7 +127,10 @@ impl UploadIntent {
     }
 
     pub fn with_parts(mut self, part_size: u64, total_parts: Option<u32>) -> Self {
-        self.chunking = Chunking::Parts { part_size, total_parts };
+        self.chunking = Chunking::Parts {
+            part_size,
+            total_parts,
+        };
         self
     }
 

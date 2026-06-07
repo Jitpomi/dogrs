@@ -112,42 +112,56 @@ impl AuthOptions {
                 return Err("Entity is configured but service is missing".to_string());
             }
         }
-        
+
         // Validate JWT configuration if JWT strategy is enabled
         if self.strategies.contains(&AuthStrategy::Jwt) {
-            self.jwt.validate().map_err(|e| format!("JWT validation failed: {}", e))?;
+            self.jwt
+                .validate()
+                .map_err(|e| format!("JWT validation failed: {}", e))?;
         }
-        
+
         // Validate OAuth providers if OAuth strategy is enabled
         if self.strategies.contains(&AuthStrategy::OAuth) {
             if self.oauth_providers.is_empty() {
-                return Err("OAuth strategy is enabled but no OAuth providers are configured".to_string());
+                return Err(
+                    "OAuth strategy is enabled but no OAuth providers are configured".to_string(),
+                );
             }
-            
+
             for (provider_name, provider) in &self.oauth_providers {
-                provider.validate().map_err(|e| format!("OAuth provider '{}' validation failed: {}", provider_name, e))?;
+                provider.validate().map_err(|e| {
+                    format!(
+                        "OAuth provider '{}' validation failed: {}",
+                        provider_name, e
+                    )
+                })?;
             }
         }
-        
+
         // Validate API key configuration if API key strategy is enabled
         if self.strategies.contains(&AuthStrategy::ApiKey) {
-            self.api_key.validate().map_err(|e| format!("API key validation failed: {}", e))?;
+            self.api_key
+                .validate()
+                .map_err(|e| format!("API key validation failed: {}", e))?;
         }
-        
+
         // Check for duplicate custom strategy names
         let mut custom_strategies = Vec::new();
         for strategy in &self.strategies {
             if let AuthStrategy::Custom(name) = strategy {
                 if custom_strategies.contains(name) {
-                    return Err(format!("Duplicate custom authentication strategy: '{}'", name));
+                    return Err(format!(
+                        "Duplicate custom authentication strategy: '{}'",
+                        name
+                    ));
                 }
                 custom_strategies.push(name.clone());
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Create a new AuthOptions builder
     pub fn builder() -> AuthOptionsBuilder {
         AuthOptionsBuilder::new()
@@ -204,11 +218,11 @@ impl JwtOptions {
         if self.issuer.is_empty() {
             return Err("JWT issuer cannot be empty".to_string());
         }
-        
+
         if self.audience.is_empty() {
             return Err("JWT audience cannot be empty".to_string());
         }
-        
+
         // Check that appropriate keys/secrets are provided for the algorithm
         match self.algorithm {
             JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
@@ -216,22 +230,25 @@ impl JwtOptions {
                     return Err("HMAC algorithms require a secret".to_string());
                 }
             }
-            JwtAlgorithm::RS256 | JwtAlgorithm::RS384 | JwtAlgorithm::RS512 |
-            JwtAlgorithm::ES256 | JwtAlgorithm::ES384 => {
+            JwtAlgorithm::RS256
+            | JwtAlgorithm::RS384
+            | JwtAlgorithm::RS512
+            | JwtAlgorithm::ES256
+            | JwtAlgorithm::ES384 => {
                 if self.private_key_path.is_none() && self.public_key_path.is_none() {
                     return Err("RSA/ECDSA algorithms require key files".to_string());
                 }
             }
         }
-        
+
         if self.access_token_expires_in.as_secs() == 0 {
             return Err("Access token expiration must be greater than 0".to_string());
         }
-        
+
         if self.refresh_token_expires_in.as_secs() == 0 {
             return Err("Refresh token expiration must be greater than 0".to_string());
         }
-        
+
         Ok(())
     }
 }
@@ -263,42 +280,42 @@ impl OAuthProvider {
         if self.name.is_empty() {
             return Err("OAuth provider name cannot be empty".to_string());
         }
-        
+
         if self.client_id.is_empty() {
             return Err("OAuth client ID cannot be empty".to_string());
         }
-        
+
         if self.client_secret.is_empty() {
             return Err("OAuth client secret cannot be empty".to_string());
         }
-        
+
         if self.auth_url.is_empty() {
             return Err("OAuth authorization URL cannot be empty".to_string());
         }
-        
+
         if self.token_url.is_empty() {
             return Err("OAuth token URL cannot be empty".to_string());
         }
-        
+
         if self.redirect_uri.is_empty() {
             return Err("OAuth redirect URI cannot be empty".to_string());
         }
-        
+
         // Validate URLs are properly formatted
         if !self.auth_url.starts_with("http://") && !self.auth_url.starts_with("https://") {
             return Err("OAuth authorization URL must be a valid HTTP/HTTPS URL".to_string());
         }
-        
+
         if !self.token_url.starts_with("http://") && !self.token_url.starts_with("https://") {
             return Err("OAuth token URL must be a valid HTTP/HTTPS URL".to_string());
         }
-        
+
         if let Some(ref user_info_url) = self.user_info_url {
             if !user_info_url.starts_with("http://") && !user_info_url.starts_with("https://") {
                 return Err("OAuth user info URL must be a valid HTTP/HTTPS URL".to_string());
             }
         }
-        
+
         Ok(())
     }
 }
@@ -330,22 +347,29 @@ impl ApiKeyOptions {
         if self.header_name.is_empty() {
             return Err("API key header name cannot be empty".to_string());
         }
-        
+
         // Validate header name format (basic check)
-        if !self.header_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if !self
+            .header_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
             return Err("API key header name must contain only alphanumeric characters, hyphens, and underscores".to_string());
         }
-        
+
         if let Some(ref query_param) = self.query_param {
             if query_param.is_empty() {
                 return Err("API key query parameter cannot be empty if specified".to_string());
             }
-            
-            if !query_param.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+
+            if !query_param
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
                 return Err("API key query parameter must contain only alphanumeric characters and underscores".to_string());
             }
         }
-        
+
         Ok(())
     }
 }
@@ -364,37 +388,37 @@ impl AuthOptionsBuilder {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Add an authentication strategy
     pub fn strategy(mut self, strategy: AuthStrategy) -> Self {
         self.strategies.push(strategy);
         self
     }
-    
+
     /// Set multiple authentication strategies
     pub fn strategies(mut self, strategies: Vec<AuthStrategy>) -> Self {
         self.strategies = strategies;
         self
     }
-    
+
     /// Configure JWT options
     pub fn jwt(mut self, jwt_options: JwtOptions) -> Self {
         self.jwt = Some(jwt_options);
         self
     }
-    
+
     /// Add an OAuth provider
     pub fn oauth_provider(mut self, name: String, provider: OAuthProvider) -> Self {
         self.oauth_providers.insert(name, provider);
         self
     }
-    
+
     /// Configure API key options
     pub fn api_key(mut self, api_key_options: ApiKeyOptions) -> Self {
         self.api_key = Some(api_key_options);
         self
     }
-    
+
     /// Build the final AuthOptions configuration
     pub fn build(self) -> AuthOptions {
         AuthOptions {
@@ -411,7 +435,7 @@ impl AuthOptionsBuilder {
             api_key: self.api_key.unwrap_or_default(),
         }
     }
-    
+
     /// Build and validate the AuthOptions configuration
     pub fn build_validated(self) -> Result<AuthOptions, String> {
         let options = self.build();

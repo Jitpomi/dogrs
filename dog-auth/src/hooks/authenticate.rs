@@ -10,7 +10,9 @@ use dog_core::hooks::DogBeforeHook;
 use dog_core::HookContext;
 use serde_json::{Map, Value};
 
-use crate::core::{extract_bearer_token, AuthenticationParams, AuthenticationRequest, AuthenticationResult};
+use crate::core::{
+    extract_bearer_token, AuthenticationParams, AuthenticationRequest, AuthenticationResult,
+};
 use crate::service::AuthenticationService;
 
 pub trait AuthenticateHookParams: Clone + Send + Sync {
@@ -86,8 +88,10 @@ where
     where
         P: Clone + Send + Sync,
     {
-        let auth_service = AuthenticationService::from_app(app)
-            .ok_or_else(|| DogError::not_authenticated("Could not find a valid authentication service").into_anyhow())?;
+        let auth_service = AuthenticationService::from_app(app).ok_or_else(|| {
+            DogError::not_authenticated("Could not find a valid authentication service")
+                .into_anyhow()
+        })?;
         Ok(Self::new(auth_service, strategies))
     }
 }
@@ -122,7 +126,9 @@ where
         };
 
         if self.strategies.is_empty() {
-            return Err(anyhow::anyhow!("The authenticate hook needs at least one allowed strategy"));
+            return Err(anyhow::anyhow!(
+                "The authenticate hook needs at least one allowed strategy"
+            ));
         }
 
         let auth_params = AuthenticationParams {

@@ -6,12 +6,12 @@
 //! from DogRS services and apps.
 
 pub mod app;
+mod error;
 pub mod middlewares;
-pub mod params;
 pub mod oauth;
+pub mod params;
 pub mod rest;
 pub mod state;
-mod error;
 pub use error::DogAxumError;
 pub use state::DogAxumState;
 

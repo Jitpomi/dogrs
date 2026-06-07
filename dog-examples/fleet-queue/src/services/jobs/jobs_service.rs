@@ -1,22 +1,22 @@
-
+use super::jobs_shared;
+use crate::services::jobs::jobs_adapter::JobsAdapter;
+use crate::services::FleetParams;
 use anyhow::Result;
 use async_trait::async_trait;
-use dog_core::tenant::TenantContext;
-use dog_core::{DogService, ServiceCapabilities, DogApp};
 use dog_core::errors::{DogError, ErrorKind};
+use dog_core::tenant::TenantContext;
+use dog_core::{DogService, ServiceCapabilities};
 use serde_json::Value;
-use crate::services::FleetParams;
-use crate::services::jobs::jobs_adapter::JobsAdapter;
-use super::jobs_shared;
+use std::sync::Arc;
 
 pub struct JobsService {
     adapter: JobsAdapter,
 }
 
 impl JobsService {
-    pub fn new(app: &DogApp<Value, FleetParams>) -> Result<Self> {
+    pub fn new(background_system: Arc<crate::background::BackgroundSystem>) -> Result<Self> {
         Ok(Self {
-            adapter: JobsAdapter::new(app)?,
+            adapter: JobsAdapter::new(background_system)?,
         })
     }
 }
@@ -40,21 +40,25 @@ impl DogService<Value, FleetParams> for JobsService {
                     DogError::new(ErrorKind::BadRequest, "Missing job data".to_string())
                 })?;
 
-                self.adapter.enqueue_job(data).await
-                    .map_err(|e| DogError::new(ErrorKind::GeneralError, e.to_string()).into_anyhow())
+                self.adapter.enqueue_job(data).await.map_err(|e| {
+                    DogError::new(ErrorKind::GeneralError, e.to_string()).into_anyhow()
+                })
             }
             "stats" => {
-                self.adapter.get_stats().await
-                    .map_err(|e| DogError::new(ErrorKind::GeneralError, e.to_string()).into_anyhow())
+                self.adapter.get_stats().await.map_err(|e| {
+                    DogError::new(ErrorKind::GeneralError, e.to_string()).into_anyhow()
+                })
             }
             "queue_status" => {
-                self.adapter.get_queue_status().await
-                    .map_err(|e| DogError::new(ErrorKind::GeneralError, e.to_string()).into_anyhow())
+                self.adapter.get_queue_status().await.map_err(|e| {
+                    DogError::new(ErrorKind::GeneralError, e.to_string()).into_anyhow()
+                })
             }
             _ => Err(DogError::new(
-                ErrorKind::MethodNotAllowed, 
-                format!("Unknown jobs method: {}", method)
-            ).into_anyhow())
+                ErrorKind::MethodNotAllowed,
+                format!("Unknown jobs method: {}", method),
+            )
+            .into_anyhow()),
         }
     }
 }

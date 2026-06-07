@@ -30,7 +30,7 @@ impl DogService<Value, MusicParams> for MusicService {
 
     async fn find(&self, _ctx: &TenantContext, _params: MusicParams) -> Result<Vec<Value>> {
         let result = self.adapter.find(None).await?;
-        
+
         // Extract files array from the adapter response
         if let Some(files) = result.get("files").and_then(|f| f.as_array()) {
             Ok(files.clone())
@@ -39,7 +39,12 @@ impl DogService<Value, MusicParams> for MusicService {
         }
     }
 
-    async fn remove(&self, _ctx: &TenantContext, id: Option<&str>, _params: MusicParams) -> Result<Value> {
+    async fn remove(
+        &self,
+        _ctx: &TenantContext,
+        id: Option<&str>,
+        _params: MusicParams,
+    ) -> Result<Value> {
         // Use the id parameter as the key for deletion
         let key = id.ok_or_else(|| anyhow::anyhow!("Missing id for remove operation"))?;
         let data = serde_json::json!({ "key": key });
@@ -59,7 +64,7 @@ impl DogService<Value, MusicParams> for MusicService {
             "upload" => {
                 let data = data.ok_or_else(|| anyhow::anyhow!("Upload requires data"))?;
                 self.adapter.upload(data).await
-            },
+            }
             "stream" => self.adapter.stream(data.unwrap()).await,
             "pause" => self.adapter.pause(data.unwrap()).await,
             "resume" => self.adapter.resume(data.unwrap()).await,

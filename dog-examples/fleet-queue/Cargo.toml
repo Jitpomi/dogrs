@@ -15,10 +15,11 @@ dotenvy = "0.15"
 reqwest = { version = "0.12", features = ["json"] }
 chrono = { version = "0.4", features = ["serde"] }
 urlencoding = "2.1"
-dog-axum = "0.1.6"
-dog-core = "0.1.6"
+dog-axum = { path = "../../dog-axum" }
+dog-core = { path = "../../dog-core" }
 dog-typedb = { path = "../../dog-typedb" }
-dog-queue = { path = "../../dog-queue" }  # Not published yet - excluded from publishing
+dog-queue = { path = "../../dog-queue" }
+dog-schema = { path = "../../dog-schema" }
 
 [lib]
 name = "fleet_queue"

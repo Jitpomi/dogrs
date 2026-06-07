@@ -5,7 +5,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use bcrypt::{hash, verify};
-use dog_auth::core::{AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult, AuthenticationStrategy};
+use dog_auth::core::{
+    AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult,
+    AuthenticationStrategy,
+};
 use dog_core::errors::DogError;
 use dog_core::HookContext;
 use serde_json::{json, Map, Value};
@@ -58,7 +61,6 @@ pub struct LocalStrategy<P>
 where
     P: Send + Clone + 'static,
 {
-
     name: String,
     options: LocalStrategyOptions,
     entity_resolver: Option<Arc<dyn LocalEntityResolver<P>>>,
@@ -93,7 +95,10 @@ where
         self
     }
 
-    pub fn with_entity_query_builder(mut self, builder: Arc<dyn LocalEntityQueryBuilder<P>>) -> Self {
+    pub fn with_entity_query_builder(
+        mut self,
+        builder: Arc<dyn LocalEntityQueryBuilder<P>>,
+    ) -> Self {
         self.entity_query_builder = Some(builder);
         self
     }
@@ -115,11 +120,14 @@ where
     }
 
     pub async fn hash_password(&self, password: &str) -> Result<String> {
-        hash(password, self.options.hash_size)
-            .map_err(|e| anyhow::anyhow!(e.to_string()))
+        hash(password, self.options.hash_size).map_err(|e| anyhow::anyhow!(e.to_string()))
     }
 
-    fn get_required_str(data: &Map<String, Value>, key: &str, error_message: &str) -> Result<String> {
+    fn get_required_str(
+        data: &Map<String, Value>,
+        key: &str,
+        error_message: &str,
+    ) -> Result<String> {
         let v = data
             .get(key)
             .and_then(|v| v.as_str())
@@ -185,8 +193,8 @@ where
     }
 
     async fn compare_password(&self, entity: &Value, password: &str) -> Result<()> {
-        let hash_val = Self::get_by_path(entity, &self.options.entity_password_field)
-            .and_then(|v| v.as_str());
+        let hash_val =
+            Self::get_by_path(entity, &self.options.entity_password_field).and_then(|v| v.as_str());
 
         let Some(hash_val) = hash_val else {
             return Err(DogError::not_authenticated(&self.options.error_message).into_anyhow());
@@ -234,7 +242,8 @@ where
             resolver.resolve_entity(&username, ctx).await?
         } else {
             let service_name = service_name.ok_or_else(|| {
-                DogError::not_authenticated("Local strategy requires authentication.service").into_anyhow()
+                DogError::not_authenticated("Local strategy requires authentication.service")
+                    .into_anyhow()
             })?;
             self.find_entity(ctx, &service_name, &username).await?
         }

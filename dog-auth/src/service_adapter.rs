@@ -23,7 +23,7 @@ where
     P: AuthenticateHookParams + Clone + Send + Sync + 'static,
 {
     pub fn new(auth: Arc<AuthenticationService<P>>) -> Self {
-        Self { 
+        Self {
             auth,
             app: std::sync::OnceLock::new(),
         }
@@ -44,7 +44,10 @@ where
     P: AuthenticateHookParams + Clone + Send + Sync + 'static,
 {
     fn capabilities(&self) -> ServiceCapabilities {
-        ServiceCapabilities::from_methods(vec![ServiceMethodKind::Create, ServiceMethodKind::Remove])
+        ServiceCapabilities::from_methods(vec![
+            ServiceMethodKind::Create,
+            ServiceMethodKind::Remove,
+        ])
     }
 
     async fn create(&self, ctx: &TenantContext, data: Value, params: P) -> Result<Value> {
@@ -59,10 +62,19 @@ where
             headers: params.headers().clone(),
         };
 
-        let app = self.app.get().expect("AuthServiceAdapter must be setup with DogApp");
+        let app = self
+            .app
+            .get()
+            .expect("AuthServiceAdapter must be setup with DogApp");
         let services = ServiceCaller::new(app.clone());
         let config = app.config_snapshot();
-        let mut hook_ctx = HookContext::new(ctx.clone(), ServiceMethodKind::Create, params, services, config);
+        let mut hook_ctx = HookContext::new(
+            ctx.clone(),
+            ServiceMethodKind::Create,
+            params,
+            services,
+            config,
+        );
 
         self.auth
             .create(&auth_req, &auth_params, &mut hook_ctx, &strategies, None)
@@ -80,11 +92,22 @@ where
             headers: params.headers().clone(),
         };
 
-        let app = self.app.get().expect("AuthServiceAdapter must be setup with DogApp");
+        let app = self
+            .app
+            .get()
+            .expect("AuthServiceAdapter must be setup with DogApp");
         let services = ServiceCaller::new(app.clone());
         let config = app.config_snapshot();
-        let mut hook_ctx = HookContext::new(ctx.clone(), ServiceMethodKind::Remove, params, services, config);
+        let mut hook_ctx = HookContext::new(
+            ctx.clone(),
+            ServiceMethodKind::Remove,
+            params,
+            services,
+            config,
+        );
 
-        self.auth.remove(id, &auth_params, &mut hook_ctx, &strategies).await
+        self.auth
+            .remove(id, &auth_params, &mut hook_ctx, &strategies)
+            .await
     }
 }

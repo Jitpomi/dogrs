@@ -1,6 +1,6 @@
+use crate::services::types::FleetParams;
 use dog_core::{ServiceCapabilities, ServiceMethodKind};
 use std::sync::Arc;
-use crate::services::types::FleetParams;
 
 pub fn capabilities() -> ServiceCapabilities {
     ServiceCapabilities::from_methods(vec![
@@ -9,13 +9,26 @@ pub fn capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, FleetParams>) -> anyhow::Result<()> {
-    app.service("operations")?.hooks(|h| {
-        h.before_find(Arc::new(super::operations_hooks::BeforeRead));
-        h.after_find(Arc::new(super::operations_hooks::AfterRead));
-        h.before_create(Arc::new(super::operations_hooks::BeforeWrite));
-        h.after_create(Arc::new(super::operations_hooks::AfterWrite));
+pub fn register_hooks(
+    app: &mut dog_core::DogAppBuilder<serde_json::Value, FleetParams>,
+) -> anyhow::Result<()> {
+    app.service_hooks("operations", |h| {
+        h.before(
+            dog_core::ServiceMethodKind::Find,
+            Arc::new(super::operations_hooks::BeforeRead),
+        );
+        h.after(
+            dog_core::ServiceMethodKind::Find,
+            Arc::new(super::operations_hooks::AfterRead),
+        );
+        h.before(
+            dog_core::ServiceMethodKind::Create,
+            Arc::new(super::operations_hooks::BeforeWrite),
+        );
+        h.after(
+            dog_core::ServiceMethodKind::Create,
+            Arc::new(super::operations_hooks::AfterWrite),
+        );
     });
-    
     Ok(())
 }

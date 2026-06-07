@@ -45,7 +45,12 @@ impl BlogAdapter {
         id.ok_or_else(|| DogError::bad_request(msg).into_anyhow())
     }
 
-    pub async fn _create(&self, ctx: &TenantContext, data: Value, _params: BlogParams) -> Result<Value> {
+    pub async fn _create(
+        &self,
+        ctx: &TenantContext,
+        data: Value,
+        _params: BlogParams,
+    ) -> Result<Value> {
         let mut obj = data.as_object().cloned().unwrap_or_default();
 
         let id = obj
@@ -59,7 +64,10 @@ impl BlogAdapter {
 
         let tenant = Self::tenant_key(ctx);
         let mut by_tenant = self.map_for().write().await;
-        by_tenant.entry(tenant).or_default().insert(id, value.clone());
+        by_tenant
+            .entry(tenant)
+            .or_default()
+            .insert(id, value.clone());
 
         Ok(value)
     }
@@ -80,7 +88,13 @@ impl BlogAdapter {
             .ok_or_else(|| self.not_found(id))
     }
 
-    pub async fn _update(&self, ctx: &TenantContext, id: &str, data: Value, _params: BlogParams) -> Result<Value> {
+    pub async fn _update(
+        &self,
+        ctx: &TenantContext,
+        id: &str,
+        data: Value,
+        _params: BlogParams,
+    ) -> Result<Value> {
         let tenant = Self::tenant_key(ctx);
         let mut by_tenant = self.map_for().write().await;
         let map = by_tenant.entry(tenant).or_default();
@@ -108,10 +122,7 @@ impl BlogAdapter {
         let mut by_tenant = self.map_for().write().await;
         let map = by_tenant.entry(tenant).or_default();
 
-        let existing = map
-            .get(id)
-            .cloned()
-            .ok_or_else(|| self.not_found(id))?;
+        let existing = map.get(id).cloned().ok_or_else(|| self.not_found(id))?;
 
         let mut record = existing.as_object().cloned().unwrap_or_default();
         if let Some(patch) = data.as_object() {
@@ -129,19 +140,19 @@ impl BlogAdapter {
         Ok(value)
     }
 
-    pub async fn _remove(&self, ctx: &TenantContext, id: Option<&str>, _params: BlogParams) -> Result<Value> {
+    pub async fn _remove(
+        &self,
+        ctx: &TenantContext,
+        id: Option<&str>,
+        _params: BlogParams,
+    ) -> Result<Value> {
         let id = self.require_id(id, "Remove requires an id")?;
 
         let tenant = Self::tenant_key(ctx);
         let mut by_tenant = self.map_for().write().await;
         let map = by_tenant.entry(tenant).or_default();
-        map.remove(id)
-            .ok_or_else(|| self.not_found(id))
+        map.remove(id).ok_or_else(|| self.not_found(id))
     }
 }
 
-dog_core::dog_adapter!(
-    BlogAdapter,
-    serde_json::Value,
-    crate::services::BlogParams
-);
+dog_core::dog_adapter!(BlogAdapter, serde_json::Value, crate::services::BlogParams);

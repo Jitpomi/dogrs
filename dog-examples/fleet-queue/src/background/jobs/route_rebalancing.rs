@@ -1,8 +1,8 @@
+use crate::services::FleetParams;
 use async_trait::async_trait;
+use dog_core::tenant::TenantContext;
 use dog_queue::prelude::*;
 use serde::{Deserialize, Serialize};
-use dog_core::tenant::TenantContext;
-use crate::services::FleetParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteRebalancingJob {
@@ -12,21 +12,24 @@ pub struct RouteRebalancingJob {
 }
 
 impl RouteRebalancingJob {
-    pub fn new(affected_routes: Vec<String>, traffic_delay_minutes: i32, trigger_reason: String) -> Self {
-        Self { 
-            affected_routes, 
-            traffic_delay_minutes, 
-            trigger_reason 
+    pub fn new(
+        affected_routes: Vec<String>,
+        traffic_delay_minutes: i32,
+        trigger_reason: String,
+    ) -> Self {
+        Self {
+            affected_routes,
+            traffic_delay_minutes,
+            trigger_reason,
         }
     }
 }
-
 
 #[async_trait]
 impl Job for RouteRebalancingJob {
     type Context = crate::background::FleetContext;
     type Result = String;
-    
+
     const JOB_TYPE: &'static str = "route_rebalancing";
     const PRIORITY: JobPriority = JobPriority::High;
     const MAX_RETRIES: u32 = 2;
@@ -34,8 +37,10 @@ impl Job for RouteRebalancingJob {
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
         let tenant_ctx = TenantContext::new(ctx.tenant_id.clone());
         let params = FleetParams::default();
-        
-        let operations_service = ctx.app.app.service("operations")
+
+        let operations_service = ctx
+            .app
+            .service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
 
         // Simple rebalancing event record - TypeDB functions handle all business logic
@@ -49,8 +54,13 @@ impl Job for RouteRebalancingJob {
         operations_service
             .create(tenant_ctx, rebalancing_event, params)
             .await
-            .map_err(|e| JobError::Retryable(format!("Failed to record rebalancing event: {}", e)))?;
+            .map_err(|e| {
+                JobError::Retryable(format!("Failed to record rebalancing event: {}", e))
+            })?;
 
-        Ok(format!("Route rebalancing event recorded for {} routes", self.affected_routes.len()))
+        Ok(format!(
+            "Route rebalancing event recorded for {} routes",
+            self.affected_routes.len()
+        ))
     }
 }

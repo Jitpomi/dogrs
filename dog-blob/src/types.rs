@@ -146,12 +146,19 @@ impl BlobPut {
         self
     }
 
-    pub fn with_attribute<K: Into<String>, V: serde::Serialize>(mut self, key: K, value: V) -> Self {
+    pub fn with_attribute<K: Into<String>, V: serde::Serialize>(
+        mut self,
+        key: K,
+        value: V,
+    ) -> Self {
         if self.attributes.is_null() {
             self.attributes = serde_json::Value::Object(serde_json::Map::new());
         }
         if let Some(obj) = self.attributes.as_object_mut() {
-            obj.insert(key.into(), serde_json::to_value(value).unwrap_or(serde_json::Value::Null));
+            obj.insert(
+                key.into(),
+                serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
+            );
         }
         self
     }
@@ -218,18 +225,18 @@ pub struct UploadSession {
     pub blob_id: BlobId,
     pub tenant_id: String,
     pub actor_id: Option<String>,
-    
+
     pub created_at: i64,
     pub updated_at: i64,
-    
+
     pub total_parts: Option<u32>,
     pub status: UploadStatus,
-    
+
     pub content_type: String,
     pub filename: Option<String>,
     pub size_hint: Option<u64>,
     pub attributes: serde_json::Value,
-    
+
     pub progress: UploadProgress,
 }
 
@@ -286,9 +293,7 @@ pub enum ChunkResult {
         total_chunks: u32,
     },
     /// All chunks received, file assembled and uploaded
-    Complete {
-        receipt: crate::BlobReceipt,
-    },
+    Complete { receipt: crate::BlobReceipt },
 }
 
 /// State tracking for a chunked upload session

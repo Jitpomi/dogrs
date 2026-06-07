@@ -1,5 +1,5 @@
-use dog_core::{ServiceCapabilities, ServiceMethodKind};
 use crate::services::types::FleetParams;
+use dog_core::{ServiceCapabilities, ServiceMethodKind};
 
 pub fn capabilities() -> ServiceCapabilities {
     ServiceCapabilities::from_methods(vec![
@@ -13,8 +13,8 @@ pub fn capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks(_app: &dog_core::DogApp<serde_json::Value, FleetParams>) -> anyhow::Result<()> {
-    // TomTom service doesn't use traditional hooks since it's queue-based
-    // Hooks are registered on other services (deliveries, vehicles) that trigger TomTom operations
+pub fn register_hooks(
+    _app: &mut dog_core::DogAppBuilder<serde_json::Value, FleetParams>,
+) -> anyhow::Result<()> {
     Ok(())
 }

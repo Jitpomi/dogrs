@@ -7,8 +7,8 @@ use futures::StreamExt;
 use std::env;
 
 use crate::{
-    BlobError, BlobInfo, BlobMetadata, BlobResult, BlobStore, ByteRange, ByteStream, GetResult, ObjectHead, PutResult,
-    StoreCapabilities,
+    BlobError, BlobInfo, BlobMetadata, BlobResult, BlobStore, ByteRange, ByteStream, GetResult,
+    ObjectHead, PutResult, StoreCapabilities,
 };
 
 /// S3-compatible configuration from environment variables
@@ -23,7 +23,8 @@ pub struct S3Config {
 impl S3Config {
     pub fn from_env() -> BlobResult<Self> {
         fn get_env(key: &str) -> BlobResult<String> {
-            env::var(key).map_err(|_| BlobError::invalid(format!("{} environment variable required", key)))
+            env::var(key)
+                .map_err(|_| BlobError::invalid(format!("{} environment variable required", key)))
         }
 
         Ok(Self {
@@ -149,7 +150,9 @@ impl S3CompatibleStore {
     }
 
     /// Extract rich metadata from S3 head_object response
-    pub fn extract_blob_metadata(head_result: &aws_sdk_s3::operation::head_object::HeadObjectOutput) -> BlobMetadata {
+    pub fn extract_blob_metadata(
+        head_result: &aws_sdk_s3::operation::head_object::HeadObjectOutput,
+    ) -> BlobMetadata {
         let mut metadata = BlobMetadata::default();
 
         if let Some(s3_metadata) = head_result.metadata() {
@@ -178,11 +181,24 @@ impl S3CompatibleStore {
 
             // Custom attributes (any metadata not in standard fields)
             for (key, value) in s3_metadata {
-                if !matches!(key.as_str(), 
-                    "filename" | "title" | "artist" | "album" | "genre" | "year" | 
-                    "duration" | "bitrate" | "thumbnail_url" | "album_art_url" |
-                    "latitude" | "longitude" | "location_name" | "encoding" |
-                    "sample_rate" | "channels"
+                if !matches!(
+                    key.as_str(),
+                    "filename"
+                        | "title"
+                        | "artist"
+                        | "album"
+                        | "genre"
+                        | "year"
+                        | "duration"
+                        | "bitrate"
+                        | "thumbnail_url"
+                        | "album_art_url"
+                        | "latitude"
+                        | "longitude"
+                        | "location_name"
+                        | "encoding"
+                        | "sample_rate"
+                        | "channels"
                 ) {
                     metadata.custom.insert(key.clone(), value.clone());
                 }
@@ -211,7 +227,8 @@ impl BlobStore for S3CompatibleStore {
         let data = self.collect_stream(&mut stream).await?;
         let aws_stream = AwsByteStream::from(data.clone());
 
-        let mut request = self.client
+        let mut request = self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
@@ -240,7 +257,8 @@ impl BlobStore for S3CompatibleStore {
         let data = self.collect_stream(&mut stream).await?;
         let aws_stream = AwsByteStream::from(data.clone());
 
-        let mut request = self.client
+        let mut request = self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
@@ -294,7 +312,8 @@ impl BlobStore for S3CompatibleStore {
     }
 
     async fn head(&self, key: &str) -> BlobResult<ObjectHead> {
-        let result = self.client
+        let result = self
+            .client
             .head_object()
             .bucket(&self.bucket)
             .key(key)
@@ -322,9 +341,7 @@ impl BlobStore for S3CompatibleStore {
     }
 
     async fn list(&self, prefix: Option<&str>, limit: Option<usize>) -> BlobResult<Vec<BlobInfo>> {
-        let mut request = self.client
-            .list_objects_v2()
-            .bucket(&self.bucket);
+        let mut request = self.client.list_objects_v2().bucket(&self.bucket);
 
         if let Some(prefix) = prefix {
             request = request.prefix(prefix);
@@ -341,7 +358,8 @@ impl BlobStore for S3CompatibleStore {
             for object in objects {
                 if let Some(key) = object.key {
                     // Get additional metadata including filename from head_object
-                    let head_result = self.client
+                    let head_result = self
+                        .client
                         .head_object()
                         .bucket(&self.bucket)
                         .key(&key)
@@ -350,7 +368,8 @@ impl BlobStore for S3CompatibleStore {
                         .map_err(Self::map_aws_error)?;
 
                     // Extract filename from metadata if available
-                    let filename = head_result.metadata()
+                    let filename = head_result
+                        .metadata()
                         .and_then(|metadata| metadata.get("filename"))
                         .map(|f| f.to_string());
 

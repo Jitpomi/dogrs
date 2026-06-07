@@ -54,11 +54,13 @@ impl DogBeforeHook<Value, BlogParams> for EnforceAuthorOnDelete {
 
         let policy = resolve_policy(ctx)?;
 
-        let posts = ctx.services.service::<Value, BlogParams>("posts")?;
+        let posts = ctx.services.service("posts")?;
 
         // Fetch all posts (including drafts) and filter by author_id.
         let mut params = ctx.params.clone();
-        params.query.insert("includeDrafts".to_string(), "true".to_string());
+        params
+            .query
+            .insert("includeDrafts".to_string(), "true".to_string());
         let all_posts = posts.find(&ctx.tenant, params.clone()).await?;
 
         let referencing: Vec<Value> = all_posts
@@ -71,13 +73,17 @@ impl DogBeforeHook<Value, BlogParams> for EnforceAuthorOnDelete {
         }
 
         match policy {
-            OnDeletePolicy::Restrict => Err(DogError::conflict("Cannot delete author while posts reference it")
-                .with_errors(json!({"_schema": ["cannot delete author with existing posts"]}))
-                .into_anyhow()),
+            OnDeletePolicy::Restrict => Err(DogError::conflict(
+                "Cannot delete author while posts reference it",
+            )
+            .with_errors(json!({"_schema": ["cannot delete author with existing posts"]}))
+            .into_anyhow()),
             OnDeletePolicy::Cascade => {
                 for p in referencing {
                     if let Some(id) = p.get("id").and_then(|v| v.as_str()) {
-                        let _ = posts.remove(&ctx.tenant, Some(id), ctx.params.clone()).await?;
+                        let _ = posts
+                            .remove(&ctx.tenant, Some(id), ctx.params.clone())
+                            .await?;
                     }
                 }
                 Ok(())
@@ -86,7 +92,9 @@ impl DogBeforeHook<Value, BlogParams> for EnforceAuthorOnDelete {
                 for p in referencing {
                     if let Some(id) = p.get("id").and_then(|v| v.as_str()) {
                         let patch = json!({"author_id": Value::Null});
-                        let _ = posts.patch(&ctx.tenant, Some(id), patch, ctx.params.clone()).await?;
+                        let _ = posts
+                            .patch(&ctx.tenant, Some(id), patch, ctx.params.clone())
+                            .await?;
                     }
                 }
                 Ok(())

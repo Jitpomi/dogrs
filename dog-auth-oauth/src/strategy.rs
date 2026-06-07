@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use dog_auth::core::{AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult, AuthenticationStrategy};
+use dog_auth::core::{
+    AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult,
+    AuthenticationStrategy,
+};
 use dog_core::errors::DogError;
 use dog_core::HookContext;
 use serde::{Deserialize, Serialize};
@@ -77,7 +80,6 @@ pub struct OAuthStrategy<P>
 where
     P: Clone + Send + Sync + 'static,
 {
-
     name: String,
     options: OAuthStrategyOptions<P>,
 }
@@ -116,10 +118,15 @@ where
     }
 
     fn read_string(data: &Map<String, Value>, key: &str) -> Option<String> {
-        data.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+        data.get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
-    fn parse_request(&self, authentication: &AuthenticationRequest) -> Result<OAuthAuthenticateData> {
+    fn parse_request(
+        &self,
+        authentication: &AuthenticationRequest,
+    ) -> Result<OAuthAuthenticateData> {
         let provider = Self::read_string(&authentication.data, "provider")
             .or_else(|| self.options.default_provider.clone())
             .ok_or_else(|| DogError::not_authenticated("Missing provider").into_anyhow())?;
@@ -187,7 +194,8 @@ where
         };
         data.insert(format!("{provider}Id"), Value::String(pid));
         let svc = ctx.services.service(service_name)?;
-        svc.create(&ctx.tenant, Value::Object(data), ctx.params.clone()).await
+        svc.create(&ctx.tenant, Value::Object(data), ctx.params.clone())
+            .await
     }
 
     async fn update_entity(
@@ -212,7 +220,13 @@ where
             data.insert(format!("{provider}Id"), Value::String(pid));
         }
         let svc = ctx.services.service(service_name)?;
-        svc.patch(&ctx.tenant, Some(&id), Value::Object(data), ctx.params.clone()).await
+        svc.patch(
+            &ctx.tenant,
+            Some(&id),
+            Value::Object(data),
+            ctx.params.clone(),
+        )
+        .await
     }
 }
 
@@ -228,7 +242,6 @@ where
         ctx: &mut HookContext<Value, P>,
         auth: &AuthenticationBase<P>,
     ) -> Result<AuthenticationResult> {
-
         let req = self.parse_request(authentication)?;
 
         let cfg = auth.configuration();
@@ -267,11 +280,15 @@ where
         // If entity/service are configured and we have a profile, upsert the entity.
         let mut entity_out: Option<Value> = None;
         if let Some(profile) = profile.as_ref() {
-            if let (Some(entity_key), Some(resolver)) = (cfg.entity.clone(), self.options.entity_resolver.as_ref()) {
+            if let (Some(entity_key), Some(resolver)) =
+                (cfg.entity.clone(), self.options.entity_resolver.as_ref())
+            {
                 if let Some(entity) = resolver.resolve_entity(&req.provider, profile, ctx).await? {
                     entity_out = Some(json!({ entity_key: entity }));
                 }
-            } else if let (Some(service_name), Some(entity_key)) = (cfg.service.clone(), cfg.entity.clone()) {
+            } else if let (Some(service_name), Some(entity_key)) =
+                (cfg.service.clone(), cfg.entity.clone())
+            {
                 let existing = self
                     .find_entity(ctx, &service_name, &req.provider, profile)
                     .await?;
@@ -333,10 +350,13 @@ fn map_oauth_provider_error(e: anyhow::Error) -> anyhow::Error {
         || hay.contains("already been redeemed")
         || hay.contains("authorization code") && hay.contains("already")
     {
-        return DogError::bad_request("OAuth code is invalid/expired or already used").into_anyhow();
+        return DogError::bad_request("OAuth code is invalid/expired or already used")
+            .into_anyhow();
     }
 
-    if hay.contains("redirect_uri_mismatch") || (hay.contains("redirect") && hay.contains("mismatch")) {
+    if hay.contains("redirect_uri_mismatch")
+        || (hay.contains("redirect") && hay.contains("mismatch"))
+    {
         return DogError::bad_request("OAuth redirect_uri mismatch").into_anyhow();
     }
 

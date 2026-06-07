@@ -1,8 +1,8 @@
+use crate::events::PublishFn;
+use anyhow::Result;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::events::PublishFn;
-use anyhow::Result;
 
 use crate::hooks::{collect_method_hooks, HookFut};
 use crate::{
@@ -84,9 +84,7 @@ where
             }
         }
         // Fallback to any_state
-        self.any_state
-            .get(key)
-            .and_then(|b| T::from_any(b))
+        self.any_state.get(key).and_then(|b| T::from_any(b))
     }
 
     pub fn register_service<S>(&mut self, name: S, service: Arc<dyn DogService<R, P>>)
@@ -107,7 +105,10 @@ where
     where
         F: FnOnce(&mut ServiceHooks<R, P>),
     {
-        let hooks = self.service_hooks.entry(service_name.to_string()).or_default();
+        let hooks = self
+            .service_hooks
+            .entry(service_name.to_string())
+            .or_default();
         f(hooks);
     }
 
@@ -200,8 +201,12 @@ where
 }
 
 pub trait FromAppValue: Sized {
-    fn from_config(_s: &str) -> Option<Self> { None }
-    fn from_any(_b: &Box<dyn Any + Send + Sync>) -> Option<Self> { None }
+    fn from_config(_s: &str) -> Option<Self> {
+        None
+    }
+    fn from_any(_b: &Box<dyn Any + Send + Sync>) -> Option<Self> {
+        None
+    }
 }
 
 impl FromAppValue for String {
@@ -292,10 +297,7 @@ where
             }
         }
         // Fallback to any_state
-        self.inner
-            .any_state
-            .get(key)
-            .and_then(|b| T::from_any(b))
+        self.inner.any_state.get(key).and_then(|b| T::from_any(b))
     }
 
     pub fn service(&self, name: &str) -> Result<ServiceHandle<R, P>> {
@@ -316,7 +318,6 @@ where
     pub fn config_snapshot(&self) -> crate::DogConfigSnapshot {
         self.inner.config.snapshot()
     }
-
 }
 
 impl<R, P> DogApp<R, P>
@@ -385,7 +386,6 @@ where
     }
 }
 
-
 // ──────────────────────────────────────────────────────────────
 // Pipeline helper (extracted)
 // ──────────────────────────────────────────────────────────────
@@ -397,10 +397,7 @@ where
 {
     /// Collect hooks in Feathers order:
     /// global first, then service.
-    fn collect_hooks_for_method(
-        &self,
-        method: &ServiceMethodKind,
-    ) -> HooksForMethod<R, P> {
+    fn collect_hooks_for_method(&self, method: &ServiceMethodKind) -> HooksForMethod<R, P> {
         let g = &self.app.inner.global_hooks;
         let map = &self.app.inner.service_hooks;
         let s = map.get(&self.name);
@@ -459,13 +456,13 @@ where
                     break;
                 }
             }
-            
+
             if ctx.error.is_none() {
                 if let Err(e) = (service_call_inner)(svc.clone(), &mut ctx).await {
                     ctx.error = Some(e);
                 }
             }
-            
+
             if ctx.error.is_none() {
                 for h in after.iter().rev() {
                     if let Err(e) = h.run(&mut ctx).await {
@@ -474,7 +471,7 @@ where
                     }
                 }
             }
-            
+
             if let Some(e) = ctx.error.take() {
                 Err(e)
             } else {
@@ -517,7 +514,7 @@ where
                     }),
                 };
             }
-            
+
             next.run(&mut ctx).await
         };
 
@@ -542,7 +539,11 @@ where
                 if let Some(result) = ctx.result.as_ref() {
                     let data = ServiceEventData::Standard(result);
 
-                    let listeners = self.app.inner.events.snapshot_emit(&self.name, &event, &data, &ctx);
+                    let listeners = self
+                        .app
+                        .inner
+                        .events
+                        .snapshot_emit(&self.name, &event, &data, &ctx);
 
                     for f in &listeners {
                         let _ = f(&data, &ctx).await;
@@ -551,9 +552,7 @@ where
             }
         }
 
-
         Ok(ctx)
-
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -786,7 +785,13 @@ where
     }
 
     /// Custom method that goes through the full dogrs pipeline (hooks, events, etc.)
-    pub async fn custom(&self, tenant: TenantContext, method: &'static str, data: Option<R>, params: P) -> Result<R> {
+    pub async fn custom(
+        &self,
+        tenant: TenantContext,
+        method: &'static str,
+        data: Option<R>,
+        params: P,
+    ) -> Result<R> {
         let method_kind = ServiceMethodKind::Custom(method);
 
         let services = ServiceCaller::new(self.app.clone());
@@ -804,7 +809,12 @@ where
                     let method_name = method_name.clone();
                     Box::pin(async move {
                         let result = svc
-                            .custom(&ctx.tenant, &method_name, ctx.data.take(), ctx.params.clone())
+                            .custom(
+                                &ctx.tenant,
+                                &method_name,
+                                ctx.data.take(),
+                                ctx.params.clone(),
+                            )
                             .await?;
 
                         ctx.result = Some(HookResult::One(result));
@@ -824,7 +834,6 @@ where
     }
 }
 
-
 pub struct ServiceCaller<R, P>
 where
     R: Send + 'static,
@@ -832,7 +841,6 @@ where
 {
     app: DogApp<R, P>,
 }
-
 
 impl<R, P> Clone for ServiceCaller<R, P>
 where
@@ -860,7 +868,10 @@ where
     }
 
     pub fn service(&self, name: &str) -> Result<Arc<dyn DogService<R, P>>> {
-        self.app.inner.registry.get(name)
+        self.app
+            .inner
+            .registry
+            .get(name)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))
     }

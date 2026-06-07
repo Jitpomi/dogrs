@@ -1,14 +1,10 @@
+use chrono::Utc;
 use std::sync::Arc;
 use std::time::Duration;
-use chrono::Utc;
 use tokio::time::interval;
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
-use crate::{
-    JobStatus,
-    backend::memory::storage::MemoryBackend,
-    QueueResult, JobEvent,
-};
+use crate::{backend::memory::storage::MemoryBackend, JobEvent, JobStatus, QueueResult};
 
 /// Lease expiry reaper for reclaiming expired jobs
 pub struct LeaseReaper {
@@ -33,12 +29,12 @@ impl LeaseReaper {
     /// Start the reaper background task
     pub async fn start(self) -> QueueResult<()> {
         let mut ticker = interval(self.interval);
-        
+
         info!("Starting lease reaper with interval: {:?}", self.interval);
-        
+
         loop {
             ticker.tick().await;
-            
+
             match self.reap_expired_leases().await {
                 Ok(reclaimed_count) => {
                     if reclaimed_count > 0 {
@@ -63,13 +59,11 @@ impl LeaseReaper {
         let expired_jobs = {
             let jobs = self.backend.jobs.read();
             jobs.iter()
-                .filter_map(|(job_id, record)| {
-                    match &record.status {
-                        JobStatus::Processing { lease_until } if *lease_until < now => {
-                            Some((job_id.clone(), record.clone()))
-                        }
-                        _ => None,
+                .filter_map(|(job_id, record)| match &record.status {
+                    JobStatus::Processing { lease_until } if *lease_until < now => {
+                        Some((job_id.clone(), record.clone()))
                     }
+                    _ => None,
                 })
                 .collect::<Vec<_>>()
         };
@@ -77,7 +71,7 @@ impl LeaseReaper {
         // Reclaim expired jobs
         for (job_id, mut record) in expired_jobs {
             debug!("Reclaiming expired lease for job: {}", job_id);
-            
+
             // Update job status back to retrying or enqueued
             let new_status = if record.attempt >= record.message.max_retries {
                 // Max retries exceeded - mark as failed
@@ -100,13 +94,18 @@ impl LeaseReaper {
             record.set_error("Lease expired".to_string());
 
             // Store updated record
-            self.backend.jobs.write().insert(job_id.clone(), record.clone());
+            self.backend
+                .jobs
+                .write()
+                .insert(job_id.clone(), record.clone());
 
             // Re-add to queue if retrying
             if matches!(new_status, JobStatus::Retrying { .. }) {
                 let mut queues = self.backend.queues.write();
                 let tenant_queues = queues.entry(record.tenant_id.clone()).or_default();
-                let queue = tenant_queues.entry(record.message.queue.clone()).or_default();
+                let queue = tenant_queues
+                    .entry(record.message.queue.clone())
+                    .or_default();
                 queue.push_back(job_id.clone());
             }
 
@@ -140,7 +139,10 @@ impl MemoryBackend {
     pub async fn force_lease_expiry(&self, job_id: crate::JobId) -> QueueResult<()> {
         let mut jobs = self.jobs.write();
         if let Some(record) = jobs.get_mut(&job_id) {
-            if let JobStatus::Processing { ref mut lease_until } = record.status {
+            if let JobStatus::Processing {
+                ref mut lease_until,
+            } = record.status
+            {
                 *lease_until = Utc::now() - chrono::Duration::seconds(1);
                 record.updated_at = Utc::now();
             }
@@ -179,7 +181,7 @@ impl Clone for MemoryBackend {
 mod tests {
     use super::*;
     use crate::backend::QueueBackend;
-    use crate::{QueueCtx, JobMessage, JobPriority};
+    use crate::{JobMessage, JobPriority, QueueCtx};
 
     fn create_test_context() -> QueueCtx {
         QueueCtx::new("test_tenant".to_string())
@@ -206,7 +208,11 @@ mod tests {
 
         // Enqueue and lease a job
         let job_id = backend.enqueue(ctx.clone(), message).await.unwrap();
-        let _leased = backend.dequeue(ctx.clone(), &["default"]).await.unwrap().unwrap();
+        let _leased = backend
+            .dequeue(ctx.clone(), &["default"])
+            .await
+            .unwrap()
+            .unwrap();
 
         // Force lease expiry
         backend.force_lease_expiry(job_id.clone()).await.unwrap();
@@ -232,7 +238,11 @@ mod tests {
 
         // Enqueue and lease a job
         let job_id = backend.enqueue(ctx.clone(), message).await.unwrap();
-        let _leased = backend.dequeue(ctx.clone(), &["default"]).await.unwrap().unwrap();
+        let _leased = backend
+            .dequeue(ctx.clone(), &["default"])
+            .await
+            .unwrap()
+            .unwrap();
 
         // Simulate job running for too long (lease expires after max retries)
         {

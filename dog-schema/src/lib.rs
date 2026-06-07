@@ -42,7 +42,9 @@ impl SchemaErrors {
 }
 
 pub fn unprocessable(message: &str, errors: Value) -> anyhow::Error {
-    DogError::unprocessable(message).with_errors(errors).into_anyhow()
+    DogError::unprocessable(message)
+        .with_errors(errors)
+        .into_anyhow()
 }
 
 pub fn schema_error(message: &str, msg: impl Into<String>) -> anyhow::Error {

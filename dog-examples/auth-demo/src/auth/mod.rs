@@ -1,5 +1,3 @@
-
-
 use anyhow::Result;
 use dog_auth::{AuthOptions, AuthStrategy, AuthenticationService};
 use dog_auth_local::LocalStrategy;
@@ -13,7 +11,9 @@ pub mod jwt;
 pub mod local;
 pub mod oauth2;
 
-pub fn strategies(builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>) -> Result<Arc<dog_auth::AuthServiceAdapter<AuthDemoParams>>> {
+pub fn strategies(
+    builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>,
+) -> Result<Arc<dog_auth::AuthServiceAdapter<AuthDemoParams>>> {
     let mut opts = AuthOptions::default();
     opts.strategies = vec![
         AuthStrategy::Jwt,

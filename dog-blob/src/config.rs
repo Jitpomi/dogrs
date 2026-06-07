@@ -22,7 +22,7 @@ pub struct BlobConfig {
 impl Default for BlobConfig {
     fn default() -> Self {
         Self {
-            max_blob_bytes: 5 * 1024 * 1024 * 1024, // 5GB
+            max_blob_bytes: 5 * 1024 * 1024 * 1024,      // 5GB
             multipart_threshold_bytes: 16 * 1024 * 1024, // 16MB (2x part size)
             upload_rules: UploadRules::default(),
             require_range_support: false,

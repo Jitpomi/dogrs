@@ -14,7 +14,7 @@ pub struct MusicServices {
 }
 
 pub fn configure(
-    app: &dog_core::DogApp<serde_json::Value, MusicParams>,
+    app: &mut dog_core::DogAppBuilder<serde_json::Value, MusicParams>,
     state: Arc<RustFsState>,
 ) -> anyhow::Result<MusicServices> {
     let music: Arc<dyn DogService<serde_json::Value, MusicParams>> =

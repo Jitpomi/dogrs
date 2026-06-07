@@ -1,6 +1,10 @@
 use dog_schema::schema;
 
-#[schema(service = "authors", error_message = "Authors schema validation failed", backend = "validator")]
+#[schema(
+    service = "authors",
+    error_message = "Authors schema validation failed",
+    backend = "validator"
+)]
 pub mod authors_schema {
     use serde::Deserialize;
     use validator::Validate;
@@ -23,10 +27,16 @@ pub mod authors_schema {
     #[derive(Debug, Deserialize, Validate)]
     #[serde(deny_unknown_fields)]
     pub struct CreateAuthor {
-        #[validate(required(message = "name is required"), length(min = 1, message = "name must not be empty"))]
+        #[validate(
+            required(message = "name is required"),
+            length(min = 1, message = "name must not be empty")
+        )]
         pub name: Option<String>,
 
-        #[validate(required(message = "email is required"), email(message = "email must be a valid email"))]
+        #[validate(
+            required(message = "email is required"),
+            email(message = "email must be a valid email")
+        )]
         pub email: Option<String>,
 
         #[validate(nested)]

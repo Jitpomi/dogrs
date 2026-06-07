@@ -1,6 +1,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, spanned::Spanned, Attribute, ItemMod, LitBool, LitStr, Meta, NestedMeta};
+use syn::{
+    parse_macro_input, spanned::Spanned, Attribute, ItemMod, LitBool, LitStr, Meta, NestedMeta,
+};
 
 #[proc_macro_attribute]
 pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
@@ -35,12 +37,15 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     let service = service.unwrap_or_else(|| LitStr::new("", proc_macro2::Span::call_site()));
     let error_message = error_message
         .unwrap_or_else(|| LitStr::new("Schema validation failed", proc_macro2::Span::call_site()));
-    let backend = backend.unwrap_or_else(|| LitStr::new("built_in", proc_macro2::Span::call_site()));
+    let backend =
+        backend.unwrap_or_else(|| LitStr::new("built_in", proc_macro2::Span::call_site()));
 
     let (_, items) = match &mut module.content {
         Some((brace, items)) => (brace, items),
         None => {
-            return syn::Error::new(module.span(), "#[schema] requires an inline module").to_compile_error().into();
+            return syn::Error::new(module.span(), "#[schema] requires an inline module")
+                .to_compile_error()
+                .into();
         }
     };
 
@@ -59,9 +64,12 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let Some(create_struct) = create_struct else {
-        return syn::Error::new(module.span(), "#[schema] module must contain a #[create] struct")
-            .to_compile_error()
-            .into();
+        return syn::Error::new(
+            module.span(),
+            "#[schema] module must contain a #[create] struct",
+        )
+        .to_compile_error()
+        .into();
     };
 
     let create_rules = collect_field_rules(&create_struct);
@@ -75,11 +83,14 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     let patch_ident = patch_struct.as_ref().map(|s| s.ident.clone());
 
     let resolve_create_fn = gen_resolve_create(&create_rules, &error_message);
-    let validate_create_fn = gen_validate_create(&create_rules, &error_message, &backend, &create_ident);
+    let validate_create_fn =
+        gen_validate_create(&create_rules, &error_message, &backend, &create_ident);
     let validate_patch_fn = patch_rules
         .as_ref()
         .map(|rules| {
-            let patch_ident = patch_ident.as_ref().expect("patch rules implies patch struct");
+            let patch_ident = patch_ident
+                .as_ref()
+                .expect("patch rules implies patch struct");
             gen_validate_patch(rules, &error_message, &backend, patch_ident)
         })
         .unwrap_or_else(|| quote! {});
@@ -116,9 +127,8 @@ fn strip_internal_attrs(items: &mut Vec<syn::Item>) {
             s.attrs.push(syn::parse_quote!(#[allow(dead_code)]));
 
             // strip #[create]/#[patch]
-            s.attrs.retain(|a| {
-                !(a.path.is_ident("create") || a.path.is_ident("patch"))
-            });
+            s.attrs
+                .retain(|a| !(a.path.is_ident("create") || a.path.is_ident("patch")));
 
             // strip #[dog(...)] on fields
             if let syn::Fields::Named(named) = &mut s.fields {
@@ -156,7 +166,9 @@ fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
     };
 
     for f in fields {
-        let Some(ident) = f.ident.clone() else { continue };
+        let Some(ident) = f.ident.clone() else {
+            continue;
+        };
         let json_key = ident.to_string();
 
         let mut rule = FieldRule {
@@ -187,7 +199,9 @@ fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
                                 }
                                 NestedMeta::Meta(Meta::List(ml)) => {
                                     if ml.path.is_ident("min_len") {
-                                        if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
+                                        if let Some(NestedMeta::Lit(syn::Lit::Int(n))) =
+                                            ml.nested.first()
+                                        {
                                             if let Ok(v) = n.base10_parse::<usize>() {
                                                 rule.min_len = Some(v);
                                             }
@@ -218,11 +232,7 @@ fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
 
 fn is_option_type(ty: &syn::Type) -> bool {
     match ty {
-        syn::Type::Path(p) => p
-            .path
-            .segments
-            .last()
-            .is_some_and(|s| s.ident == "Option"),
+        syn::Type::Path(p) => p.path.segments.last().is_some_and(|s| s.ident == "Option"),
         _ => false,
     }
 }
@@ -268,22 +278,25 @@ fn gen_resolve_create(rules: &[FieldRule], _error_message: &LitStr) -> proc_macr
         .iter()
         .filter(|r| r.trim && matches!(r.kind, FieldKind::String))
         .map(|r| {
-        let key = &r.json_key;
-        quote! {
-            if let Some(serde_json::Value::String(s)) = obj.get_mut(#key) {
-                *s = s.trim().to_string();
+            let key = &r.json_key;
+            quote! {
+                if let Some(serde_json::Value::String(s)) = obj.get_mut(#key) {
+                    *s = s.trim().to_string();
+                }
             }
-        }
-    });
+        });
 
-    let default_stmts = rules.iter().filter_map(|r| r.default_bool.map(|v| (r, v))).map(|(r, v)| {
-        let key = &r.json_key;
-        quote! {
-            if !obj.contains_key(#key) {
-                obj.insert(#key.to_string(), serde_json::Value::Bool(#v));
+    let default_stmts = rules
+        .iter()
+        .filter_map(|r| r.default_bool.map(|v| (r, v)))
+        .map(|(r, v)| {
+            let key = &r.json_key;
+            quote! {
+                if !obj.contains_key(#key) {
+                    obj.insert(#key.to_string(), serde_json::Value::Bool(#v));
+                }
             }
-        }
-    });
+        });
 
     quote! {
         pub fn resolve_create<P>(data: &mut serde_json::Value, _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>

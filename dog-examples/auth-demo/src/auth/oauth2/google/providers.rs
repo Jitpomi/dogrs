@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use crate::services::AuthDemoParams;
 
-use dog_auth_oauth::{OAuth2AuthorizationCodeProvider, OAuthEntityResolver, OAuthStrategy, OAuthStrategyOptions};
+use dog_auth_oauth::{
+    OAuth2AuthorizationCodeProvider, OAuthEntityResolver, OAuthStrategy, OAuthStrategyOptions,
+};
 use dog_core::HookContext;
 use serde_json::{json, Value};
 
@@ -28,7 +30,11 @@ fn google_provider_with_redirect(
         "https://accounts.google.com/o/oauth2/v2/auth",
         "https://oauth2.googleapis.com/token",
         redirect_uri.to_string(),
-        vec!["openid".to_string(), "email".to_string(), "profile".to_string()],
+        vec![
+            "openid".to_string(),
+            "email".to_string(),
+            "profile".to_string(),
+        ],
         Some("https://openidconnect.googleapis.com/v1/userinfo".to_string()),
     )?)
 }
@@ -99,7 +105,11 @@ pub fn register_google_oauth(
         .get_string("oauth.google.redirect_uri")
         .ok_or_else(|| anyhow::anyhow!("Missing oauth.google.redirect_uri"))?;
 
-    let provider = Arc::new(google_provider_with_redirect(&config, "google", &redirect_uri)?);
+    let provider = Arc::new(google_provider_with_redirect(
+        &config,
+        "google",
+        &redirect_uri,
+    )?);
     let authorize_url = provider.authorize_url();
 
     let redirect_service = if redirect_uri.ends_with("/oauth/google/callback") {

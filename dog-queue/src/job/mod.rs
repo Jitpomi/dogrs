@@ -1,26 +1,26 @@
 pub mod registry;
 
-pub use registry::{JobRegistry, JobHandler};
+pub use registry::{JobHandler, JobRegistry};
 
 use crate::{JobError, JobPriority};
 use async_trait::async_trait;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Serialize};
 
 /// Trait for defining jobs that can be processed by the queue
 #[async_trait]
 pub trait Job: Send + Sync + Serialize + DeserializeOwned + 'static {
     /// Context type passed to job execution
     type Context: Send + Sync + Clone + 'static;
-    
+
     /// Result type returned by job execution
     type Result: Send + Sync + Serialize + 'static;
 
     /// Job type identifier for dispatch
     const JOB_TYPE: &'static str;
-    
+
     /// Job priority
     const PRIORITY: JobPriority = JobPriority::Normal;
-    
+
     /// Maximum retry attempts
     const MAX_RETRIES: u32 = 3;
 
@@ -31,12 +31,12 @@ pub trait Job: Send + Sync + Serialize + DeserializeOwned + 'static {
     fn job_type(&self) -> &'static str {
         Self::JOB_TYPE
     }
-    
+
     /// Get the job priority (default: Normal)
     fn priority(&self) -> JobPriority {
         Self::PRIORITY
     }
-    
+
     /// Get the maximum number of retry attempts (default: 3)
     fn max_retries(&self) -> u32 {
         Self::MAX_RETRIES

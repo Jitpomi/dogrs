@@ -68,8 +68,7 @@ where
     }
 }
 
-pub type ValidateFn<R, P> =
-    Arc<dyn Fn(&R, &HookMeta<R, P>) -> Result<()> + Send + Sync + 'static>;
+pub type ValidateFn<R, P> = Arc<dyn Fn(&R, &HookMeta<R, P>) -> Result<()> + Send + Sync + 'static>;
 
 pub type ResolveFn<R, P> =
     Arc<dyn Fn(&mut R, &HookMeta<R, P>) -> Result<()> + Send + Sync + 'static>;

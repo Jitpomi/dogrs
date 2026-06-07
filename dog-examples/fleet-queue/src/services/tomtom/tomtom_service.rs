@@ -1,21 +1,21 @@
+use super::tomtom_shared;
+use crate::services::tomtom::tomtom_adapter::TomTomAdapter;
+use crate::services::FleetParams;
 use anyhow::Result;
 use async_trait::async_trait;
-use dog_core::tenant::TenantContext;
-use dog_core::{DogService, ServiceCapabilities, DogApp};
 use dog_core::errors::{DogError, ErrorKind};
+use dog_core::tenant::TenantContext;
+use dog_core::{DogAppBuilder, DogService, ServiceCapabilities};
 use serde_json::Value;
-use crate::services::FleetParams;
-use crate::services::tomtom::tomtom_adapter::TomTomAdapter;
-use super::tomtom_shared;
 
 pub struct TomTomService {
     adapter: TomTomAdapter,
 }
 
 impl TomTomService {
-    pub fn new(app: &DogApp<Value, FleetParams>) -> Result<Self> {
-        Ok(Self { 
-            adapter: TomTomAdapter::new(app)? 
+    pub fn new(app: &mut DogAppBuilder<Value, FleetParams>) -> Result<Self> {
+        Ok(Self {
+            adapter: TomTomAdapter::new(app)?,
         })
     }
 }
@@ -38,24 +38,46 @@ impl DogService<Value, FleetParams> for TomTomService {
         })?;
 
         match method {
-            "geocode" => self.adapter.geocode(data).await
+            "geocode" => self
+                .adapter
+                .geocode(data)
+                .await
                 .map_err(|e| DogError::new(ErrorKind::BadRequest, e.to_string()).into_anyhow()),
-            "reverse-geocode" => self.adapter.reverse_geocode(data).await
+            "reverse-geocode" => self
+                .adapter
+                .reverse_geocode(data)
+                .await
                 .map_err(|e| DogError::new(ErrorKind::BadRequest, e.to_string()).into_anyhow()),
-            "search" => self.adapter.search_addresses(data).await
+            "search" => self
+                .adapter
+                .search_addresses(data)
+                .await
                 .map_err(|e| DogError::new(ErrorKind::BadRequest, e.to_string()).into_anyhow()),
-            "route" => self.adapter.calculate_route(data).await
+            "route" => self
+                .adapter
+                .calculate_route(data)
+                .await
                 .map_err(|e| DogError::new(ErrorKind::BadRequest, e.to_string()).into_anyhow()),
-            "eta" => self.adapter.update_eta(data).await
+            "eta" => self
+                .adapter
+                .update_eta(data)
+                .await
                 .map_err(|e| DogError::new(ErrorKind::BadRequest, e.to_string()).into_anyhow()),
-            "traffic" => self.adapter.check_traffic(data).await
+            "traffic" => self
+                .adapter
+                .check_traffic(data)
+                .await
                 .map_err(|e| DogError::new(ErrorKind::BadRequest, e.to_string()).into_anyhow()),
-            "stats" => self.adapter.get_stats().await
+            "stats" => self
+                .adapter
+                .get_stats()
+                .await
                 .map_err(|e| DogError::new(ErrorKind::BadRequest, e.to_string()).into_anyhow()),
             _ => Err(DogError::new(
-                ErrorKind::MethodNotAllowed, 
-                format!("Unknown TomTom method: {}", method)
-            ).into_anyhow())
+                ErrorKind::MethodNotAllowed,
+                format!("Unknown TomTom method: {}", method),
+            )
+            .into_anyhow()),
         }
     }
 }

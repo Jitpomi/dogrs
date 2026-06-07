@@ -1,6 +1,9 @@
 use dog_schema::schema;
 
-#[schema(service = "messages", error_message = "Messages schema validation failed")]
+#[schema(
+    service = "messages",
+    error_message = "Messages schema validation failed"
+)]
 pub mod messages_schema {
 
     #[create]

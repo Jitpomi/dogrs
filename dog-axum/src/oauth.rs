@@ -81,68 +81,59 @@ where
 {
     let app_arc = std::sync::Arc::clone(&ax.app);
 
-    ax = ax.service(
-        cfg.login_path,
-        {
+    ax = ax.service(cfg.login_path, {
+        let app_arc = std::sync::Arc::clone(&app_arc);
+        let service_name = cfg.service_name;
+        let method = cfg.login_method;
+        let http_method = cfg.http_method;
+        move |headers: HeaderMap, OriginalUri(uri): OriginalUri| {
             let app_arc = std::sync::Arc::clone(&app_arc);
-            let service_name = cfg.service_name;
-            let method = cfg.login_method;
-            let http_method = cfg.http_method;
-            move |headers: HeaderMap, OriginalUri(uri): OriginalUri| {
-                let app_arc = std::sync::Arc::clone(&app_arc);
-                async move {
-                    rest::call_custom_redirect_location::<Value, P>(
-                        app_arc.as_ref(),
-                        service_name,
-                        method,
-                        &headers,
-                        Default::default(),
-                        http_method,
-                        &uri,
-                        None,
-                    )
-                    .await
-                }
+            async move {
+                rest::call_custom_redirect_location::<Value, P>(
+                    app_arc.as_ref(),
+                    service_name,
+                    method,
+                    &headers,
+                    Default::default(),
+                    http_method,
+                    &uri,
+                    None,
+                )
+                .await
             }
-        },
-    );
+        }
+    });
 
-    ax = ax.service(
-        cfg.callback_path,
-        {
+    ax = ax.service(cfg.callback_path, {
+        let app_arc = std::sync::Arc::clone(&app_arc);
+        let service_name = cfg.service_name;
+        let method = cfg.callback_method;
+        let http_method = cfg.http_method;
+        let payload = cfg.callback_payload.clone();
+        move |headers: HeaderMap, Query(query): Query<Q>, OriginalUri(uri): OriginalUri| {
             let app_arc = std::sync::Arc::clone(&app_arc);
-            let service_name = cfg.service_name;
-            let method = cfg.callback_method;
-            let http_method = cfg.http_method;
-            let payload = cfg.callback_payload.clone();
-            move |headers: HeaderMap, Query(query): Query<Q>, OriginalUri(uri): OriginalUri| {
-                let app_arc = std::sync::Arc::clone(&app_arc);
-                let payload = payload.clone();
-                async move {
-                    let data = (payload)(&query);
-                    rest::call_custom_json_qd::<Value, P, Q, Value>(
-                        app_arc.as_ref(),
-                        service_name,
-                        method,
-                        &headers,
-                        &query,
-                        http_method,
-                        &uri,
-                        &data,
-                    )
-                    .await
-                }
+            let payload = payload.clone();
+            async move {
+                let data = (payload)(&query);
+                rest::call_custom_json_qd::<Value, P, Q, Value>(
+                    app_arc.as_ref(),
+                    service_name,
+                    method,
+                    &headers,
+                    &query,
+                    http_method,
+                    &uri,
+                    &data,
+                )
+                .await
             }
-        },
-    );
+        }
+    });
 
     if let (Some(capture_path), Some(provider)) = (cfg.capture_path, cfg.capture_provider) {
-        ax = ax.service(
-            capture_path,
-            move |Query(query): Query<Q>| async move {
-                Ok::<_, DogAxumError>(rest::oauth_callback_capture_typed(provider.clone(), &query))
-            },
-        );
+        ax = ax.service(capture_path, move |Query(query): Query<Q>| async move {
+            Ok::<_, DogAxumError>(rest::oauth_callback_capture_typed(provider.clone(), &query))
+        });
     }
 
     ax

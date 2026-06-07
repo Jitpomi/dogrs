@@ -1,7 +1,6 @@
-use anyhow::Result;
-use dog_core::DogApp;
-use dog_core::{ServiceCapabilities, ServiceMethodKind};
 use crate::services::SocialParams;
+use anyhow::Result;
+use dog_core::{ServiceCapabilities, ServiceMethodKind};
 
 pub fn capabilities() -> ServiceCapabilities {
     ServiceCapabilities::from_methods(vec![
@@ -10,7 +9,9 @@ pub fn capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks(_app: &DogApp<serde_json::Value, SocialParams>) -> Result<()> {
+pub fn register_hooks(
+    _app: &mut dog_core::DogAppBuilder<serde_json::Value, SocialParams>,
+) -> Result<()> {
     // TODO: Implement persons hooks for TypeDB social network
     // - Validate person profile data and privacy settings
     // - Handle friendship and following relationships

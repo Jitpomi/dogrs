@@ -4,7 +4,7 @@ use anyhow::Result;
 async fn main() -> Result<()> {
     // Load environment variables from .env file
     dotenvy::dotenv().ok();
-    
+
     // Set RUST_LOG if not already set, but don't initialize tracing
     // Let the framework handle logging initialization
     if std::env::var("RUST_LOG").is_err() {
