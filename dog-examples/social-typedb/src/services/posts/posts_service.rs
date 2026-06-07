@@ -1,4 +1,4 @@
-use super::posts_shared;
+use dog_core::ServiceMethodKind;
 use crate::services::SocialParams;
 use crate::typedb::TypeDBState;
 use anyhow::Result;
@@ -24,8 +24,12 @@ impl PostsService {
 
 #[async_trait]
 impl DogService<Value, SocialParams> for PostsService {
+
     fn capabilities(&self) -> ServiceCapabilities {
-        posts_shared::capabilities()
+        ServiceCapabilities::from_methods(vec![
+            ServiceMethodKind::Custom("read"),
+            ServiceMethodKind::Custom("write"),
+        ])
     }
 
     async fn custom(

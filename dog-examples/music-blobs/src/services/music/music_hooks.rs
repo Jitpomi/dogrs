@@ -1,10 +1,10 @@
+use crate::rustfs::RustFsState;
 use crate::services::MusicParams;
 use anyhow::Result;
 use async_trait::async_trait;
-use dog_core::hooks::{DogBeforeHook, DogAfterHook, HookContext};
+use dog_core::hooks::{DogAfterHook, DogBeforeHook, HookContext};
 use serde_json::Value;
 use std::sync::Arc;
-use crate::rustfs::RustFsState;
 
 pub struct ProcessMulterParams;
 
@@ -16,27 +16,50 @@ impl DogBeforeHook<Value, MusicParams> for ProcessMulterParams {
                 if let Some(ref mut data) = ctx.data {
                     // Try to read the file data to check for thumbnail
                     if let Ok(file_data) = extract_file_data(data).await {
-                        if let Some((mime, img_bytes)) = crate::metadata::audio::AudioMetadataExtractor::extract_raw_album_art(&file_data) {
+                        if let Some((mime, img_bytes)) =
+                            crate::metadata::audio::AudioMetadataExtractor::extract_raw_album_art(
+                                &file_data,
+                            )
+                        {
                             // Add album_art_url="true" to the JSON metadata so frontend knows the cover exists
                             if let Some(obj) = data.as_object_mut() {
-                                if let Some(metadata) = obj.get_mut("metadata").and_then(|m| m.as_object_mut()) {
-                                    metadata.insert("album_art_url".to_string(), serde_json::json!("true"));
+                                if let Some(metadata) =
+                                    obj.get_mut("metadata").and_then(|m| m.as_object_mut())
+                                {
+                                    metadata.insert(
+                                        "album_art_url".to_string(),
+                                        serde_json::json!("true"),
+                                    );
                                 } else {
                                     let mut meta = serde_json::Map::new();
-                                    meta.insert("album_art_url".to_string(), serde_json::json!("true"));
-                                    obj.insert("metadata".to_string(), serde_json::Value::Object(meta));
+                                    meta.insert(
+                                        "album_art_url".to_string(),
+                                        serde_json::json!("true"),
+                                    );
+                                    obj.insert(
+                                        "metadata".to_string(),
+                                        serde_json::Value::Object(meta),
+                                    );
                                 }
-                                println!("✅ BeforeHook injected album_art_url='true' into metadata");
+                                println!(
+                                    "✅ BeforeHook injected album_art_url='true' into metadata"
+                                );
                             }
 
                             // dog-blob deletes the uploaded file immediately after processing it, so it won't exist in the AfterHook.
                             // We need to save the cover art to a NEW temporary file and pass that path!
                             let cover_temp_id = uuid::Uuid::new_v4();
-                            let cover_temp_path = std::env::temp_dir().join(format!("dogrs_cover_{}.tmp", cover_temp_id));
-                            
+                            let cover_temp_path = std::env::temp_dir()
+                                .join(format!("dogrs_cover_{}.tmp", cover_temp_id));
+
                             if tokio::fs::write(&cover_temp_path, &img_bytes).await.is_ok() {
-                                ctx.params.headers.insert("x-cover-temp-path".to_string(), cover_temp_path.to_string_lossy().to_string());
-                                ctx.params.headers.insert("x-has-cover".to_string(), "true".to_string());
+                                ctx.params.headers.insert(
+                                    "x-cover-temp-path".to_string(),
+                                    cover_temp_path.to_string_lossy().to_string(),
+                                );
+                                ctx.params
+                                    .headers
+                                    .insert("x-has-cover".to_string(), "true".to_string());
                                 ctx.params.headers.insert("x-cover-mime".to_string(), mime);
                             }
                         }
@@ -60,19 +83,28 @@ impl DogAfterHook<Value, MusicParams> for UploadCoverArtHook {
                 println!("🔍 AfterHook: Running for method 'upload'");
                 if let Some(result) = &ctx.result {
                     // Check if the before hook signaled that a cover exists
-                    let has_cover = ctx.params.headers.get("x-has-cover").is_some_and(|s| s == "true");
+                    let has_cover = ctx
+                        .params
+                        .headers
+                        .get("x-has-cover")
+                        .is_some_and(|s| s == "true");
                     println!("🔍 AfterHook: has_cover = {}", has_cover);
 
                     if has_cover {
                         if let Some(temp_path) = ctx.params.headers.get("x-cover-temp-path") {
                             println!("🔍 AfterHook: Found temp_path = {}", temp_path);
                             if let Ok(img_bytes) = tokio::fs::read(temp_path).await {
-                                let mime = ctx.params.headers.get("x-cover-mime").map(|s| s.as_str()).unwrap_or("image/jpeg");
+                                let mime = ctx
+                                    .params
+                                    .headers
+                                    .get("x-cover-mime")
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("image/jpeg");
                                 println!("🔍 AfterHook: Successfully read cover from temp_path ({} bytes, mime: {})", img_bytes.len(), mime);
-                                
+
                                 // Clean up our temp file!
                                 let _ = tokio::fs::remove_file(temp_path).await;
-                                
+
                                 // Extract the Value from HookResult
                                 let result_value = match result {
                                     dog_core::hooks::HookResult::One(v) => Some(v),
@@ -80,24 +112,38 @@ impl DogAfterHook<Value, MusicParams> for UploadCoverArtHook {
                                 };
 
                                 // Now we have the actual key generated by dog-blob!
-                                if let Some(key) = result_value.and_then(|v| v.get("key")).and_then(|k| k.as_str()) {
+                                if let Some(key) = result_value
+                                    .and_then(|v| v.get("key"))
+                                    .and_then(|k| k.as_str())
+                                {
                                     println!("🔍 AfterHook: Found S3 key: {}", key);
                                     let cover_key = format!("{}_cover", key);
-                                    let bucket = std::env::var("RUSTFS_BUCKET").unwrap_or_else(|_| "music-blobs".to_string());
-                                    
-                                    let cover_stream = aws_sdk_s3::primitives::ByteStream::from(img_bytes);
-                                    
-                                    let res = self.state.rustfs_store.client.put_object()
+                                    let bucket = std::env::var("RUSTFS_BUCKET")
+                                        .unwrap_or_else(|_| "music-blobs".to_string());
+
+                                    let cover_stream =
+                                        aws_sdk_s3::primitives::ByteStream::from(img_bytes);
+
+                                    let res = self
+                                        .state
+                                        .rustfs_store
+                                        .client
+                                        .put_object()
                                         .bucket(&bucket)
                                         .key(&cover_key)
                                         .content_type(mime)
                                         .body(cover_stream)
                                         .send()
                                         .await;
-                                        
+
                                     match res {
-                                        Ok(_) => println!("✅ AfterHook uploaded cover art to S3 at key: {}!", cover_key),
-                                        Err(e) => println!("❌ AfterHook failed to upload to S3: {}", e),
+                                        Ok(_) => println!(
+                                            "✅ AfterHook uploaded cover art to S3 at key: {}!",
+                                            cover_key
+                                        ),
+                                        Err(e) => {
+                                            println!("❌ AfterHook failed to upload to S3: {}", e)
+                                        }
                                     }
                                 } else {
                                     println!("❌ AfterHook: No 'key' found in result_value");

@@ -46,11 +46,12 @@ impl RustFsState {
         );
 
         // Create BlobState and then RustFsState containing it
-        let blob_state = Arc::new(BlobState::new(storage.clone(), config).with_uploads(coordinator));
+        let blob_state =
+            Arc::new(BlobState::new(storage.clone(), config).with_uploads(coordinator));
 
-        let state = Arc::new(RustFsState { 
+        let state = Arc::new(RustFsState {
             blob_state,
-            rustfs_store: storage 
+            rustfs_store: storage,
         });
         app.set("rustfs", state);
 

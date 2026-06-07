@@ -1,4 +1,4 @@
-use super::groups_shared;
+use dog_core::ServiceMethodKind;
 use crate::services::SocialParams;
 use crate::typedb::TypeDBState;
 use anyhow::Result;
@@ -24,8 +24,12 @@ impl GroupsService {
 
 #[async_trait]
 impl DogService<Value, SocialParams> for GroupsService {
+
     fn capabilities(&self) -> ServiceCapabilities {
-        groups_shared::capabilities()
+        ServiceCapabilities::from_methods(vec![
+            ServiceMethodKind::Custom("read"),
+            ServiceMethodKind::Custom("write"),
+        ])
     }
 
     async fn custom(
