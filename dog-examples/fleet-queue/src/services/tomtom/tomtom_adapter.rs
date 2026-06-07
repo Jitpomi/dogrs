@@ -604,7 +604,7 @@ impl TomTomAdapter {
 
         let response = self
             .client
-            .post(&format!("{}/operations", self.api_base_url))
+            .post(format!("{}/operations", self.api_base_url))
             .header("Content-Type", "application/json")
             .header("x-service-method", "read")
             .json(&json!({

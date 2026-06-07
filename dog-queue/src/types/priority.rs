@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Job priority levels for queue ordering (Higher values = higher priority)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 pub enum JobPriority {
     /// Low priority jobs (processed last)
     Low = 1,
 
     /// Normal priority jobs (default)
+    #[default]
     Normal = 2,
 
     /// High priority jobs (processed first)
@@ -21,11 +22,7 @@ pub enum JobPriority {
 // - Higher priority jobs first: Critical > High > Normal > Low
 // - Within same priority: older jobs first (created_at ascending)
 
-impl Default for JobPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
+
 
 impl JobPriority {
     /// Get all priority levels in order (low to high)

@@ -83,12 +83,10 @@ where
 
         // Basic, Feathers-like sanity check: if JWT is enabled, a secret must be present.
         // (Later, RSA/ECDSA key support can satisfy this instead.)
-        if cfg.strategies.contains(&crate::options::AuthStrategy::Jwt) {
-            if cfg.jwt.secret.is_none() {
-                return Err(anyhow::anyhow!(
-                    "A JWT secret must be provided in your authentication configuration"
-                ));
-            }
+        if cfg.strategies.contains(&crate::options::AuthStrategy::Jwt) && cfg.jwt.secret.is_none() {
+            return Err(anyhow::anyhow!(
+                "A JWT secret must be provided in your authentication configuration"
+            ));
         }
 
         Ok(())

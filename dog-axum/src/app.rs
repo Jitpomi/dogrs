@@ -94,6 +94,7 @@ where
 {
     pub app: Arc<DogApp<R, P>>,
     pub router: Router<()>,
+    #[allow(clippy::type_complexity)]
     pending_middleware: Vec<Box<dyn Fn(Router<()>) -> Router<()> + Send + Sync>>,
 }
 

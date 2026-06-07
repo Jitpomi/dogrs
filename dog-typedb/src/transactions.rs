@@ -353,8 +353,8 @@ async fn typedb_answer_to_http_ok(
                 let mut data_map = Map::new();
 
                 for column_name in row.get_column_names() {
-                    if let Ok(Some(concept)) = row.get(&column_name) {
-                        data_map.insert(column_name.clone(), format_concept(&concept)?);
+                    if let Ok(Some(concept)) = row.get(column_name) {
+                        data_map.insert(column_name.clone(), format_concept(concept)?);
                     }
                 }
 

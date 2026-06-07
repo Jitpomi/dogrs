@@ -21,8 +21,10 @@ pub enum AuthStrategy {
 
 /// JWT signing algorithms
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub enum JwtAlgorithm {
     /// HMAC using SHA-256
+    #[default]
     HS256,
     /// HMAC using SHA-384
     HS384,
@@ -40,16 +42,14 @@ pub enum JwtAlgorithm {
     ES384,
 }
 
-impl Default for JwtAlgorithm {
-    fn default() -> Self {
-        Self::HS256
-    }
-}
+
 
 /// Token type for JWT claims
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub enum TokenType {
     /// Access token for API requests
+    #[default]
     Access,
     /// Refresh token for obtaining new access tokens
     Refresh,
@@ -57,11 +57,7 @@ pub enum TokenType {
     Identity,
 }
 
-impl Default for TokenType {
-    fn default() -> Self {
-        Self::Access
-    }
-}
+
 
 /// Main authentication configuration
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -107,10 +103,8 @@ impl AuthOptions {
             return Err("At least one authentication strategy must be enabled".to_string());
         }
 
-        if self.entity.is_some() {
-            if self.service.as_deref().unwrap_or("").trim().is_empty() {
-                return Err("Entity is configured but service is missing".to_string());
-            }
+        if self.entity.is_some() && self.service.as_deref().unwrap_or("").trim().is_empty() {
+            return Err("Entity is configured but service is missing".to_string());
         }
 
         // Validate JWT configuration if JWT strategy is enabled

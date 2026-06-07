@@ -200,7 +200,7 @@ impl RustFsAdapter {
                     // Since files are uploaded through music service which validates audio types,
                     // all blobs in this bucket should be audio files. No need to filter by extension
                     // as keys are UUIDs, not filenames.
-                    .map(|blob| Self::serialize_music_file(blob))
+                    .map(Self::serialize_music_file)
                     .collect();
 
                 Ok(serde_json::json!({
@@ -265,7 +265,7 @@ impl RustFsAdapter {
         println!("🎵 Starting audio stream for key: {}", key);
 
         // Extract blob ID from the key (last part after the last slash)
-        let blob_id_str = key.split('/').last().unwrap_or(key);
+        let blob_id_str = key.split('/').next_back().unwrap_or(key);
         let blob_id = dog_blob::BlobId(blob_id_str.to_string());
 
         println!("🎵 Extracted blob ID: {} from key: {}", blob_id_str, key);
@@ -496,7 +496,7 @@ impl RustFsAdapter {
         println!("🗑️ Deleting blob for key: {}", key);
 
         // Extract blob ID from the key (last part after the last slash)
-        let blob_id_str = key.split('/').last().unwrap_or(key);
+        let blob_id_str = key.split('/').next_back().unwrap_or(key);
         let blob_id = dog_blob::BlobId(blob_id_str.to_string());
 
         // Use the adapter's delete method to remove the blob

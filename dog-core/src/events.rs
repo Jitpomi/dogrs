@@ -240,10 +240,8 @@ where
 
         for entry in &self.listeners {
             if entry.pattern.matches(path, event) {
-                if entry.once {
-                    if entry.called.swap(true, Ordering::SeqCst) {
-                        continue;
-                    }
+                if entry.once && entry.called.swap(true, Ordering::SeqCst) {
+                    continue;
                 }
                 to_call.push(entry.listener.clone());
             }

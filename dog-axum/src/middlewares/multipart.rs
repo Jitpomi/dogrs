@@ -166,6 +166,7 @@ pub struct MultipartToJson {
 }
 
 impl MultipartToJson {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             config: MultipartConfig::default(),
@@ -303,7 +304,7 @@ async fn convert_multipart_to_json(
             filename.is_some()
                 || content_type
                     .as_ref()
-                    .map_or(false, |ct| !ct.starts_with("text/"))
+                    .is_some_and(|ct| !ct.starts_with("text/"))
         };
 
         if is_file_field {

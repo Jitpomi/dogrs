@@ -26,16 +26,16 @@ impl TypeDBState {
     ) -> Result<()> {
         let address = app
             .get::<String>("typedb.address")
-            .unwrap_or_else(|| format!("127.0.0.1:1729"));
+            .unwrap_or_else(|| "127.0.0.1:1729".to_string());
         let database = app
             .get::<String>("typedb.database")
-            .unwrap_or_else(|| format!("social-network"));
+            .unwrap_or_else(|| "social-network".to_string());
         let username = app
             .get::<String>("typedb.username")
-            .unwrap_or_else(|| format!("admin"));
+            .unwrap_or_else(|| "admin".to_string());
         let password = app
             .get::<String>("typedb.password")
-            .unwrap_or_else(|| format!("password"));
+            .unwrap_or_else(|| "password".to_string());
         let tls = app
             .get::<String>("typedb.tls")
             .and_then(|s| s.parse().ok())

@@ -1,4 +1,4 @@
-use async_stream;
+
 use async_trait::async_trait;
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
@@ -299,8 +299,8 @@ impl BlobStore for S3CompatibleStore {
                 let mut body = result.body;
                 while let Some(chunk) = body.next().await {
                     match chunk {
-                        Ok(bytes) => yield Ok(bytes.into()),
-                        Err(e) => yield Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+                        Ok(bytes) => yield Ok(bytes),
+                        Err(e) => yield Err(std::io::Error::other(e)),
                     }
                 }
             }),

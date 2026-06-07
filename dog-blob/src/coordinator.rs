@@ -44,8 +44,7 @@ impl DefaultUploadCoordinator {
                         }
                     }
                     Err(e) => {
-                        yield Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
+                        yield Err(std::io::Error::other(
                             format!("Failed to read part {}: {}", key, e)
                         ));
                         return;

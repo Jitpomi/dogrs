@@ -37,10 +37,20 @@ where
     _marker: PhantomData<fn() -> P>,
 }
 
+impl<P> Default for JwtStrategy<P>
+where
+    P: Send + Clone + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<P> JwtStrategy<P>
 where
     P: Send + Clone + 'static,
 {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             name: "jwt".to_string(),

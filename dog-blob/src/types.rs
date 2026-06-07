@@ -268,6 +268,7 @@ impl ChunkSessionId {
     }
 
     /// Generate a new random chunk session ID
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self(format!("chunk_{}", Uuid::new_v4().simple()))
     }
@@ -293,7 +294,7 @@ pub enum ChunkResult {
         total_chunks: u32,
     },
     /// All chunks received, file assembled and uploaded
-    Complete { receipt: crate::BlobReceipt },
+    Complete { receipt: Box<crate::BlobReceipt> },
 }
 
 /// State tracking for a chunked upload session

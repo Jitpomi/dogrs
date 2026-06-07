@@ -200,8 +200,7 @@ impl BlobAdapter {
             .with_parts(
                 self.state.config.upload_rules.part_size,
                 put.size_hint.map(|s| {
-                    ((s + self.state.config.upload_rules.part_size - 1)
-                        / self.state.config.upload_rules.part_size) as u32
+                    s.div_ceil(self.state.config.upload_rules.part_size) as u32
                 }),
             );
 
@@ -484,7 +483,9 @@ impl BlobAdapter {
             sessions.remove(&session_id);
             drop(sessions);
 
-            Ok(ChunkResult::Complete { receipt })
+            Ok(ChunkResult::Complete {
+                receipt: Box::new(receipt),
+            })
         } else {
             // Still waiting for more chunks
             drop(sessions);
@@ -568,7 +569,9 @@ impl BlobAdapter {
 
             // Upload and wrap result in ChunkResult::Complete
             let receipt = self.put(ctx, put_request, stream).await?;
-            Ok(ChunkResult::Complete { receipt })
+            Ok(ChunkResult::Complete {
+                receipt: Box::new(receipt),
+            })
         }
     }
 }

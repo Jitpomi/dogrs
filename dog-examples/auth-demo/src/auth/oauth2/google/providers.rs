@@ -23,7 +23,7 @@ fn google_provider_with_redirect(
         .get_string("oauth.google.client_secret")
         .ok_or_else(|| anyhow::anyhow!("Missing oauth.google.client_secret"))?;
 
-    Ok(GoogleOAuthProvider::new(
+    GoogleOAuthProvider::new(
         name,
         client_id,
         client_secret,
@@ -36,7 +36,7 @@ fn google_provider_with_redirect(
             "profile".to_string(),
         ],
         Some("https://openidconnect.googleapis.com/v1/userinfo".to_string()),
-    )?)
+    )
 }
 
 pub fn authorize_url_for_redirect(
@@ -125,8 +125,10 @@ pub fn register_google_oauth(
         &redirect_service,
     )?);
 
-    let mut opts: OAuthStrategyOptions<AuthDemoParams> = OAuthStrategyOptions::default();
-    opts.default_provider = Some("google".to_string());
+    let mut opts = OAuthStrategyOptions {
+        default_provider: Some("google".to_string()),
+        ..Default::default()
+    };
     opts.providers.insert("google".to_string(), provider);
     opts.providers
         .insert("google_service".to_string(), provider_service);

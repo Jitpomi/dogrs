@@ -48,7 +48,7 @@ pub struct EnforceAuthorOnDelete;
 impl DogBeforeHook<Value, BlogParams> for EnforceAuthorOnDelete {
     async fn run(&self, ctx: &mut HookContext<Value, BlogParams>) -> Result<()> {
         // Only applies to authors.remove
-        let Some(author_id) = ctx.params.path.split('/').last() else {
+        let Some(author_id) = ctx.params.path.split('/').next_back() else {
             return Ok(());
         };
 

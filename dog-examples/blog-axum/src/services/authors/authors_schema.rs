@@ -1,3 +1,4 @@
+#![allow(clippy::module_inception)]
 use dog_schema::schema;
 
 #[schema(

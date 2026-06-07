@@ -25,6 +25,7 @@ pub fn tenant_from_headers(headers: &HeaderMap) -> TenantContext {
         .unwrap_or_else(|| TenantContext::new("default"))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_custom<R, P>(
     app: &DogApp<R, P>,
     service_name: &str,
@@ -71,7 +72,7 @@ where
     if supported {
         Ok(())
     } else {
-        Err(DogError::bad_request(&format!(
+        Err(DogError::bad_request(format!(
             "Service '{}' does not support custom method '{}'",
             service_name, method
         ))
@@ -80,6 +81,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_custom_json<R, P>(
     app: &DogApp<R, P>,
     service_name: &str,
@@ -109,6 +111,7 @@ where
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_custom_redirect<R, P>(
     app: &DogApp<R, P>,
     service_name: &str,
@@ -139,7 +142,7 @@ where
         .get(location_key)
         .and_then(|x| x.as_str())
         .ok_or_else(|| {
-            DogError::bad_request(&format!(
+            DogError::bad_request(format!(
                 "Expected response to include '{}' string field",
                 location_key
             ))
@@ -149,6 +152,7 @@ where
     Ok(Redirect::temporary(location))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_custom_redirect_location<R, P>(
     app: &DogApp<R, P>,
     service_name: &str,
@@ -246,6 +250,7 @@ pub fn oauth_callback_capture_typed<T: Serialize>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_custom_json_qd<R, P, Q, D>(
     app: &DogApp<R, P>,
     service_name: &str,
@@ -279,6 +284,7 @@ where
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_custom_redirect_qd<R, P, Q, D>(
     app: &DogApp<R, P>,
     service_name: &str,
@@ -391,7 +397,7 @@ where
         });
 
     let Some(method_name) = method_name else {
-        return Err(DogError::bad_request(&format!(
+        return Err(DogError::bad_request(format!(
             "Service '{}' does not support custom method '{}'",
             service_name, method
         ))
@@ -462,10 +468,10 @@ where
                     // Use clean Json extractor - multipart is handled by middleware
                     let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
                         .await // 10MB limit for JSON
-                        .map_err(|e| dog_core::errors::DogError::bad_request(&format!("Failed to read request body: {}", e)).into_anyhow())?;
+                        .map_err(|e| dog_core::errors::DogError::bad_request(format!("Failed to read request body: {}", e)).into_anyhow())?;
 
                     let data: R = serde_json::from_slice(&body_bytes)
-                        .map_err(|e| dog_core::errors::DogError::bad_request(&format!("Failed to parse JSON: {}", e)).into_anyhow())?;
+                        .map_err(|e| dog_core::errors::DogError::bad_request(format!("Failed to parse JSON: {}", e)).into_anyhow())?;
 
                     let params = RestParams::from_parts("rest", &headers, query, "POST", &uri);
                     let params = P::from_rest_params(params);

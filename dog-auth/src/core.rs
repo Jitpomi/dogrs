@@ -325,7 +325,7 @@ where
         }
 
         let strategy = self.strategies.get(strategy_name).ok_or_else(|| {
-            DogError::not_authenticated(&format!(
+            DogError::not_authenticated(format!(
                 "Unknown authentication strategy: {strategy_name}"
             ))
             .into_anyhow()
@@ -390,7 +390,7 @@ where
         let expires_in_seconds = overrides
             .as_ref()
             .and_then(|o| o.expires_in_seconds)
-            .unwrap_or_else(|| match token_type {
+            .unwrap_or(match token_type {
                 TokenType::Access | TokenType::Identity => jwt.access_token_expires_in.as_secs(),
                 TokenType::Refresh => jwt.refresh_token_expires_in.as_secs(),
             });

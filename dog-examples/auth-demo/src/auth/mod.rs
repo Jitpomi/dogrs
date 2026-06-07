@@ -14,12 +14,14 @@ pub mod oauth2;
 pub fn strategies(
     builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>,
 ) -> Result<Arc<dog_auth::AuthServiceAdapter<AuthDemoParams>>> {
-    let mut opts = AuthOptions::default();
-    opts.strategies = vec![
-        AuthStrategy::Jwt,
-        AuthStrategy::OAuth,
-        AuthStrategy::Custom("local".to_string()),
-    ];
+    let mut opts = AuthOptions {
+        strategies: vec![
+            AuthStrategy::Jwt,
+            AuthStrategy::OAuth,
+            AuthStrategy::Custom("local".to_string()),
+        ],
+        ..Default::default()
+    };
 
     opts.jwt.secret = builder.config_snapshot().get_string("auth.jwt.secret");
     opts.service = builder.config_snapshot().get_string("auth.service");

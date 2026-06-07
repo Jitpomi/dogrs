@@ -65,7 +65,7 @@ impl DogService<Value, AuthDemoParams> for OauthService {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 if code.trim().is_empty() {
-                    return Err(anyhow::anyhow!("Missing code").into());
+                    return Err(anyhow::anyhow!("Missing code"));
                 }
 
                 let auth_params = AuthenticationParams {
@@ -96,7 +96,7 @@ impl DogService<Value, AuthDemoParams> for OauthService {
 
                 Ok(res.auth_result)
             }
-            _ => Err(anyhow::anyhow!("Unknown oauth custom method: {method}").into()),
+            _ => Err(anyhow::anyhow!("Unknown oauth custom method: {method}")),
         }
     }
 }

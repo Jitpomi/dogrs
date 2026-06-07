@@ -28,6 +28,7 @@ impl<P> OAuth2AuthorizationCodeProvider<P>
 where
     P: Clone + Send + Sync + 'static,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: impl Into<String>,
         client_id: impl Into<String>,

@@ -84,10 +84,20 @@ where
     options: OAuthStrategyOptions<P>,
 }
 
+impl<P> Default for OAuthStrategy<P>
+where
+    P: Clone + Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<P> OAuthStrategy<P>
 where
     P: Clone + Send + Sync + 'static,
 {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             name: "oauth".to_string(),

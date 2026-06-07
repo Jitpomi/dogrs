@@ -173,7 +173,7 @@ impl OpenedBlob {
         match &self.content {
             OpenedContent::Stream { resolved_range, .. } => resolved_range
                 .as_ref()
-                .map_or(false, |r| !r.is_full_content()),
+                .is_some_and(|r| !r.is_full_content()),
             OpenedContent::SignedUrl { .. } => false,
         }
     }
