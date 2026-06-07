@@ -14,19 +14,19 @@ pub fn register_hooks(
 ) -> anyhow::Result<()> {
     app.service_hooks("employees", |h| {
         h.before(
-            dog_core::ServiceMethodKind::Find,
+            dog_core::ServiceMethodKind::Custom("read"),
             Arc::new(super::employees_hooks::BeforeRead),
         );
         h.after(
-            dog_core::ServiceMethodKind::Find,
+            dog_core::ServiceMethodKind::Custom("read"),
             Arc::new(super::employees_hooks::AfterRead),
         );
         h.before(
-            dog_core::ServiceMethodKind::Create,
+            dog_core::ServiceMethodKind::Custom("write"),
             Arc::new(super::employees_hooks::BeforeWrite),
         );
         h.after(
-            dog_core::ServiceMethodKind::Create,
+            dog_core::ServiceMethodKind::Custom("write"),
             Arc::new(super::employees_hooks::AfterWrite),
         );
     });

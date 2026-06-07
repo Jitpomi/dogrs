@@ -28,8 +28,6 @@ pub struct AfterRead;
 #[async_trait]
 impl DogAfterHook<Value, FleetParams> for AfterRead {
     async fn run(&self, _ctx: &mut HookContext<Value, FleetParams>) -> Result<()> {
-        // Log employee queries for audit purposes
-        println!("👥 Employee query completed successfully");
         Ok(())
     }
 }
@@ -58,8 +56,6 @@ pub struct AfterWrite;
 #[async_trait]
 impl DogAfterHook<Value, FleetParams> for AfterWrite {
     async fn run(&self, _ctx: &mut HookContext<Value, FleetParams>) -> Result<()> {
-        // Log employee write operations for audit trail
-        println!("👥 Employee data write operation completed");
         Ok(())
     }
 }

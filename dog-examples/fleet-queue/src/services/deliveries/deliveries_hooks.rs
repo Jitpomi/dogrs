@@ -47,51 +47,7 @@ pub struct AfterWrite;
 
 #[async_trait]
 impl DogAfterHook<Value, FleetParams> for AfterWrite {
-    async fn run(&self, ctx: &mut HookContext<Value, FleetParams>) -> Result<()> {
-        // Trigger TomTom operations after delivery creation/update
-        if let Some(delivery_data) = ctx.data.as_ref().and_then(|v| v.as_object()) {
-            let delivery_id = delivery_data
-                .get("delivery-id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-
-            let pickup_address = delivery_data
-                .get("pickup-address")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            let delivery_address = delivery_data
-                .get("delivery-address")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            println!(
-                "🚚 Delivery {} created/updated - Triggering TomTom workflow",
-                delivery_id
-            );
-
-            // In a real implementation, we would:
-            // 1. Get TomTomQueueService from context or service registry
-            // 2. Queue geocoding jobs for addresses
-            // 3. Queue route calculation
-            // 4. Queue initial traffic check
-
-            // For now, just log the intended actions
-            if !pickup_address.is_empty() {
-                println!("  → Would queue geocoding for pickup: {}", pickup_address);
-            }
-            if !delivery_address.is_empty() {
-                println!(
-                    "  → Would queue geocoding for delivery: {}",
-                    delivery_address
-                );
-            }
-            println!(
-                "  → Would queue route calculation for delivery {}",
-                delivery_id
-            );
-        }
-
+    async fn run(&self, _ctx: &mut HookContext<Value, FleetParams>) -> Result<()> {
         Ok(())
     }
 }
