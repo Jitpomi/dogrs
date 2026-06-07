@@ -165,8 +165,13 @@ pub struct MultipartToJson {
     config: MultipartConfig,
 }
 
+impl Default for MultipartToJson {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MultipartToJson {
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             config: MultipartConfig::default(),

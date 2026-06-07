@@ -25,6 +25,8 @@ pub enum ServiceMiddleware<L> {
     None,
 }
 
+type MiddlewareFn = Box<dyn Fn(Router<()>) -> Router<()> + Send + Sync>;
+
 impl<L> ServiceMiddleware<L>
 where
     L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
@@ -94,8 +96,7 @@ where
 {
     pub app: Arc<DogApp<R, P>>,
     pub router: Router<()>,
-    #[allow(clippy::type_complexity)]
-    pending_middleware: Vec<Box<dyn Fn(Router<()>) -> Router<()> + Send + Sync>>,
+    pending_middleware: Vec<MiddlewareFn>,
 }
 
 impl<R, P> Clone for AxumApp<R, P>

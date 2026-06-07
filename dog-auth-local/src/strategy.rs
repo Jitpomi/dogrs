@@ -67,11 +67,19 @@ where
     entity_query_builder: Option<Arc<dyn LocalEntityQueryBuilder<P>>>,
 }
 
+impl<P> Default for LocalStrategy<P>
+where
+    P: Send + Clone + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<P> LocalStrategy<P>
 where
     P: Send + Clone + 'static,
 {
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             name: "local".to_string(),

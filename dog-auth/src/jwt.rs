@@ -50,7 +50,6 @@ impl<P> JwtStrategy<P>
 where
     P: Send + Clone + 'static,
 {
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             name: "jwt".to_string(),

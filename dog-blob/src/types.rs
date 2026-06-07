@@ -261,6 +261,12 @@ pub struct PartReceipt {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ChunkSessionId(pub String);
 
+impl Default for ChunkSessionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChunkSessionId {
     /// Create from existing string (e.g., Dropzone UUID)
     pub fn from_string(id: String) -> Self {
@@ -268,7 +274,6 @@ impl ChunkSessionId {
     }
 
     /// Generate a new random chunk session ID
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self(format!("chunk_{}", Uuid::new_v4().simple()))
     }
