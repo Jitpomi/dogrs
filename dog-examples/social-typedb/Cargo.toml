@@ -7,7 +7,7 @@ edition = "2021"
 anyhow = "1"
 async-trait = "0.1"
 dog-axum = { path = "../../dog-axum" }
-dog-core = { path = "../../dog-core", features = ["serde", "adapters"] }
+dog-core = { path = "../../dog-core", features = ["json", "adapters"] }
 dog-schema = { path = "../../dog-schema" }
 dog-typedb = { path = "../../dog-typedb" }
 futures = "0.3"

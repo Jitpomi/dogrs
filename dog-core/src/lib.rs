@@ -21,4 +21,6 @@ pub use registry::DogServiceRegistry;
 pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};
 pub use tenant::{TenantContext, TenantId};
 pub use events::{DogEventHub, ServiceEventKind, ServiceEventData, method_to_standard_event};
-pub use errors::{DogError, ErrorKind, DogResult};
+pub use errors::{DogError, ErrorKind, DogResult, ErrorValue};
+#[cfg(all(feature = "serde", not(feature = "json")))]
+pub use errors::DogValue;
