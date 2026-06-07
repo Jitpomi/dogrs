@@ -16,8 +16,7 @@ impl DogBeforeHook<Value, MusicParams> for ProcessMulterParams {
                 if let Some(ref mut data) = ctx.data {
                     // Try to read the file data to check for thumbnail
                     if let Ok(file_data) = extract_file_data(data).await {
-                        // Extract cover thumbnail just to see if it exists
-                        if crate::metadata::audio::AudioMetadataExtractor::extract_raw_album_art(&file_data).is_some() {
+                        if let Some((mime, img_bytes)) = crate::metadata::audio::AudioMetadataExtractor::extract_raw_album_art(&file_data) {
                             // Add album_art_url="true" to the JSON metadata so frontend knows the cover exists
                             if let Some(obj) = data.as_object_mut() {
                                 if let Some(metadata) = obj.get_mut("metadata").and_then(|m| m.as_object_mut()) {
@@ -30,13 +29,15 @@ impl DogBeforeHook<Value, MusicParams> for ProcessMulterParams {
                                 println!("✅ BeforeHook injected album_art_url='true' into metadata");
                             }
 
-                            // ctx.data is consumed by dog-core during custom() execution, so the AfterHook
-                            // cannot read it. We must pass the temp path via params so the AfterHook can read the file!
-                            if let Some(file) = data.get("file") {
-                                if let Some(path) = file.get("temp_path").and_then(|p| p.as_str()) {
-                                    ctx.params.headers.insert("x-cover-temp-path".to_string(), path.to_string());
-                                    ctx.params.headers.insert("x-has-cover".to_string(), "true".to_string());
-                                }
+                            // dog-blob deletes the uploaded file immediately after processing it, so it won't exist in the AfterHook.
+                            // We need to save the cover art to a NEW temporary file and pass that path!
+                            let cover_temp_id = uuid::Uuid::new_v4();
+                            let cover_temp_path = std::env::temp_dir().join(format!("dogrs_cover_{}.tmp", cover_temp_id));
+                            
+                            if tokio::fs::write(&cover_temp_path, &img_bytes).await.is_ok() {
+                                ctx.params.headers.insert("x-cover-temp-path".to_string(), cover_temp_path.to_string_lossy().to_string());
+                                ctx.params.headers.insert("x-has-cover".to_string(), "true".to_string());
+                                ctx.params.headers.insert("x-cover-mime".to_string(), mime);
                             }
                         }
                     }
@@ -56,41 +57,60 @@ impl DogAfterHook<Value, MusicParams> for UploadCoverArtHook {
     async fn run(&self, ctx: &mut HookContext<Value, MusicParams>) -> Result<()> {
         if let dog_core::ServiceMethodKind::Custom(method_name) = &ctx.method {
             if *method_name == "upload" {
+                println!("🔍 AfterHook: Running for method 'upload'");
                 if let Some(result) = &ctx.result {
                     // Check if the before hook signaled that a cover exists
                     let has_cover = ctx.params.headers.get("x-has-cover").is_some_and(|s| s == "true");
+                    println!("🔍 AfterHook: has_cover = {}", has_cover);
 
                     if has_cover {
                         if let Some(temp_path) = ctx.params.headers.get("x-cover-temp-path") {
-                            if let Ok(file_data) = tokio::fs::read(temp_path).await {
-                                if let Some((mime, img_bytes)) = crate::metadata::audio::AudioMetadataExtractor::extract_raw_album_art(&file_data) {
-                                    // Extract the Value from HookResult
-                                    let result_value = match result {
-                                        dog_core::hooks::HookResult::One(v) => Some(v),
-                                        _ => None,
-                                    };
+                            println!("🔍 AfterHook: Found temp_path = {}", temp_path);
+                            if let Ok(img_bytes) = tokio::fs::read(temp_path).await {
+                                let mime = ctx.params.headers.get("x-cover-mime").map(|s| s.as_str()).unwrap_or("image/jpeg");
+                                println!("🔍 AfterHook: Successfully read cover from temp_path ({} bytes, mime: {})", img_bytes.len(), mime);
+                                
+                                // Clean up our temp file!
+                                let _ = tokio::fs::remove_file(temp_path).await;
+                                
+                                // Extract the Value from HookResult
+                                let result_value = match result {
+                                    dog_core::hooks::HookResult::One(v) => Some(v),
+                                    _ => None,
+                                };
 
-                                    // Now we have the actual key generated by dog-blob!
-                                    if let Some(key) = result_value.and_then(|v| v.get("key")).and_then(|k| k.as_str()) {
-                                        let cover_key = format!("{}_cover", key);
-                                        let bucket = std::env::var("RUSTFS_BUCKET").unwrap_or_else(|_| "music-blobs".to_string());
+                                // Now we have the actual key generated by dog-blob!
+                                if let Some(key) = result_value.and_then(|v| v.get("key")).and_then(|k| k.as_str()) {
+                                    println!("🔍 AfterHook: Found S3 key: {}", key);
+                                    let cover_key = format!("{}_cover", key);
+                                    let bucket = std::env::var("RUSTFS_BUCKET").unwrap_or_else(|_| "music-blobs".to_string());
+                                    
+                                    let cover_stream = aws_sdk_s3::primitives::ByteStream::from(img_bytes);
+                                    
+                                    let res = self.state.rustfs_store.client.put_object()
+                                        .bucket(&bucket)
+                                        .key(&cover_key)
+                                        .content_type(mime)
+                                        .body(cover_stream)
+                                        .send()
+                                        .await;
                                         
-                                        let cover_stream = aws_sdk_s3::primitives::ByteStream::from(img_bytes);
-                                        
-                                        let _ = self.state.rustfs_store.client.put_object()
-                                            .bucket(&bucket)
-                                            .key(&cover_key)
-                                            .content_type(mime)
-                                            .body(cover_stream)
-                                            .send()
-                                            .await;
-                                        
-                                        println!("✅ AfterHook uploaded cover art to S3 at key: {}!", cover_key);
+                                    match res {
+                                        Ok(_) => println!("✅ AfterHook uploaded cover art to S3 at key: {}!", cover_key),
+                                        Err(e) => println!("❌ AfterHook failed to upload to S3: {}", e),
                                     }
+                                } else {
+                                    println!("❌ AfterHook: No 'key' found in result_value");
                                 }
+                            } else {
+                                println!("❌ AfterHook: Failed to read from temp_path");
                             }
+                        } else {
+                            println!("❌ AfterHook: No 'x-cover-temp-path' in headers");
                         }
                     }
+                } else {
+                    println!("❌ AfterHook: ctx.result is None");
                 }
             }
         }
