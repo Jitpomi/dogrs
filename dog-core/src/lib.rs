@@ -15,12 +15,12 @@ pub mod errors;
 pub mod adapters;
 
 pub use app::{DogApp, ServiceCaller};
-pub use config::{DogConfig, DogConfigSnapshot };
+pub use config::{DogConfig, DogConfigSnapshot};
 pub use hooks::{
     DogAfterHook, DogAroundHook, DogBeforeHook, DogErrorHook, HookContext, Next, ServiceHooks, HookResult,
 };
 pub use registry::DogServiceRegistry;
 pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};
 pub use tenant::{TenantContext, TenantId};
-pub use events::{DogEventHub, ServiceEventKind, ServiceEventData, method_to_standard_event, };
+pub use events::{DogEventHub, ServiceEventKind, ServiceEventData, method_to_standard_event};
 pub use errors::{DogError, ErrorKind, DogResult};

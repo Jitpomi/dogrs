@@ -32,7 +32,19 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
-    let service = service.unwrap_or_else(|| LitStr::new("", proc_macro2::Span::call_site()));
+    // `service` is required — emit a compile error rather than silently defaulting to ""
+    // which would produce a runtime "service not found" failure.
+    let service = match service {
+        Some(s) => s,
+        None => {
+            return syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[schema] requires a `service` argument: #[schema(service = \"my_service\")]",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
     let error_message = error_message
         .unwrap_or_else(|| LitStr::new("Schema validation failed", proc_macro2::Span::call_site()));
     let backend = backend.unwrap_or_else(|| LitStr::new("built_in", proc_macro2::Span::call_site()));
@@ -74,7 +86,7 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     let create_ident = create_struct.ident.clone();
     let patch_ident = patch_struct.as_ref().map(|s| s.ident.clone());
 
-    let resolve_create_fn = gen_resolve_create(&create_rules, &error_message);
+    let resolve_create_fn = gen_resolve_create(&create_rules);
     let validate_create_fn = gen_validate_create(&create_rules, &error_message, &backend, &create_ident);
     let validate_patch_fn = patch_rules
         .as_ref()
@@ -141,6 +153,10 @@ enum FieldKind {
 struct FieldRule {
     json_key: String,
     kind: FieldKind,
+    /// When true, `resolve_create` trims the stored string value.
+    ///
+    /// Note: validation (non-empty, min_len) **always** uses the trimmed
+    /// value regardless of this flag, to prevent whitespace-only submissions.
     trim: bool,
     min_len: Option<usize>,
     default_bool: Option<bool>,
@@ -262,7 +278,12 @@ fn field_kind(ty: &syn::Type) -> FieldKind {
     }
 }
 
-fn gen_resolve_create(rules: &[FieldRule], _error_message: &LitStr) -> proc_macro2::TokenStream {
+/// Generates `resolve_create`: trims fields marked with `#[dog(trim)]` and
+/// applies `#[dog(default = ...)]` values for missing boolean fields.
+///
+/// Validation (non-empty / min_len) always trims regardless of the `trim`
+/// flag — see `gen_validate_create` and `gen_validate_patch`.
+fn gen_resolve_create(rules: &[FieldRule]) -> proc_macro2::TokenStream {
     // trim string fields + apply default bools if missing
     let trim_stmts = rules
         .iter()
