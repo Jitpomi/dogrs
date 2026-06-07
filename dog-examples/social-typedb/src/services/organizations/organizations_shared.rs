@@ -7,6 +7,3 @@ pub fn capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks() {
-    // TODO: Implement organization-specific hooks
-}
