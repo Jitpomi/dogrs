@@ -10,6 +10,10 @@ pub struct SchemaErrors {
 }
 
 impl SchemaErrors {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn push_schema(&mut self, msg: impl Into<String>) {
         Self::push_to(&mut self.map, "_schema", msg);
     }
