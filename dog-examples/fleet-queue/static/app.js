@@ -1116,7 +1116,6 @@ class FleetCommandPro {
                         }
                     });
                 } else {
-                    console.log('📭 No active assignments found');
                 }
             } else {
                 console.error('❌ Assignment routes request failed:', response.status, response.statusText);
@@ -1190,7 +1189,6 @@ class FleetCommandPro {
             
         } catch (error) {
             console.error(`❌ TomTom route calculation failed for ${vehicleId} → ${deliveryId}: ${error.message}`);
-            console.log('📍 Falling back to straight line route');
             
             // Fallback to straight line if TomTom fails
             const routeGeoJSON = this.createStraightLineRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng);
@@ -2158,11 +2156,9 @@ class FleetCommandPro {
                             this.showNotification(`No route data available for ${vehicleId}`, 'warning');
                         }
                     } else {
-                        console.log(`📭 No vehicle assignment found for ${vehicleId}`);
                         this.showNotification(`No active assignment for ${vehicleId}`, 'info');
                     }
                 } else {
-                    console.log(`📭 No active assignments found`);
                     this.showNotification(`No active assignment for ${vehicleId}`, 'info');
                 }
             } else {
@@ -2255,19 +2251,15 @@ class FleetCommandPro {
         let finalDeliveryStatus = deliveryStatus;
         
         if (!finalDeliveryAddress || !finalDeliveryAddress.includes(',')) {
-            console.log('No delivery address provided, trying reverse geocoding...');
             try {
                 const address = await this.reverseGeocode(lat, lng, null);
                 if (address) {
                     finalDeliveryAddress = address;
-                    console.log('✅ Using reverse geocoded address:', finalDeliveryAddress);
                 } else {
                     finalDeliveryAddress = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-                    console.log('❌ Reverse geocoding failed, using coordinates');
                 }
             } catch (geoError) {
                 finalDeliveryAddress = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-                console.log('❌ Reverse geocoding error, using coordinates:', geoError);
             }
         } else {
         }
@@ -2401,7 +2393,6 @@ class FleetCommandPro {
                     };
                 } else {
                     console.error('❌ TomTom backend did not return route geometry');
-                    console.log('Response structure:', Object.keys(routeData));
                     throw new Error('No route geometry in TomTom response');
                 }
                 
@@ -2429,7 +2420,6 @@ class FleetCommandPro {
 
     async getTomTomTrafficForRoute(fromLat, fromLng, toLat, toLng) {
         try {
-            console.log(`🚦 Checking traffic conditions for route...`);
             
             const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
                 method: 'POST',
@@ -2448,7 +2438,6 @@ class FleetCommandPro {
             
             if (response.ok) {
                 const trafficData = await response.json();
-                console.log(`🚦 Traffic data received:`, trafficData);
                 
                 if (trafficData.status === 'success') {
                     return {
@@ -2504,7 +2493,6 @@ class FleetCommandPro {
     exitTrackingMode() {
         if (!this.trackedVehicleId) return;
         
-        console.log(`🔄 Exiting tracking mode for vehicle: ${this.trackedVehicleId}`);
         
         // Restore all vehicle markers to normal appearance
         this.vehicleMarkers.forEach((marker, id) => {
@@ -3618,7 +3606,6 @@ class FleetCommandPro {
     
     async assignDeliveryToDriver(deliveryId, driverId) {
         try {
-            console.log(`🎯 Assigning delivery ${deliveryId} to driver ${driverId}`);
             
             // Create assignment in TypeDB
             const response = await fetch(`${this.apiBaseUrl}/operations`, {
@@ -3864,7 +3851,6 @@ class FleetCommandPro {
             
             if (data.status === 'success' && data.duration_seconds) {
                 const travelTimeHours = Math.ceil(data.duration_seconds / 3600); // Convert seconds to hours, round up
-                console.log(`TomTom routing: ${travelTimeHours} hours (${data.duration_seconds}s) for ${fromCoords.lat},${fromCoords.lng} to ${toCoords.lat},${toCoords.lng}`);
                 return travelTimeHours;
             }
         } catch (error) {
@@ -3894,7 +3880,6 @@ class FleetCommandPro {
             
             if (response.ok) {
                 const data = await response.json();
-                console.log('TomTom geocode response:', data);
                 
                 if (data.status === 'success') {
                     return { lat: data.latitude, lng: data.longitude };
@@ -3930,7 +3915,6 @@ class FleetCommandPro {
                 deliveryTimeInput.value = this.deliveryDetails.deliveryTime;
             }
             
-            console.log('Restored delivery details:', this.deliveryDetails);
         }
     }
     
@@ -3959,7 +3943,6 @@ class FleetCommandPro {
             }
             
             // Show success feedback
-            console.log('Delivery details saved:', this.deliveryDetails);
             
             // Optional: Show a brief success message
             this.showNotification('Delivery details saved successfully', 'success');
@@ -4081,7 +4064,6 @@ class FleetCommandPro {
 
 async assignDeliveryToDriver(deliveryId, driverId) {
     try {
-        console.log(`🎯 Assigning delivery ${deliveryId} to driver ${driverId}`);
         
         // Create assignment in TypeDB
         const response = await fetch(`${this.apiBaseUrl}/operations`, {
@@ -4111,40 +4093,32 @@ startRealTimeUpdates() {
 }
 
     updateDriversView() {
-        console.log('Updating drivers view...');
     }
     
     updateAnalyticsView() {
-        console.log('Updating analytics view...');
     }
     
     updateMaintenanceView() {
-        console.log('Updating maintenance view...');
     }
     
     updateSystemView() {
-        console.log('Updating system view...');
     }
     
     // Navigation methods
     showDashboard() {
-        console.log('Showing dashboard...');
         // Hide any open panels
         this.hideDriverAssignmentPanel();
     }
     
     showDriverAssignment() {
-        console.log('Showing driver assignment panel...');
         this.showDriverAssignmentPanel();
     }
     
     showVehicleManagement() {
-        console.log('Showing vehicle management...');
         this.hideDriverAssignmentPanel();
     }
     
     async showRouteOptimization() {
-        console.log('Showing route optimization panel...');
         this.hideDriverAssignmentPanel();
 
         // Remove old panel if it exists
@@ -5024,7 +4998,6 @@ startRealTimeUpdates() {
             // Get pickup time for location prediction
             const assignmentDateTime = scheduleInput?.value;
             if (!assignmentDateTime) {
-                console.log('No assignment time selected, using simple vehicle query');
                 // Fallback to simple query if no time selected
                 const response = await fetch(`${this.apiBaseUrl}/vehicles`, {
                     method: 'POST',
@@ -5068,7 +5041,6 @@ startRealTimeUpdates() {
             }
             
             const result = await response.json();
-            console.log('Loaded available vehicles from database:', result);
             
             this.processVehicleResponse(result, true);
             
@@ -5087,7 +5059,6 @@ startRealTimeUpdates() {
     
     processVehicleResponse(data, hasLocationData) {
         try {
-            console.log('Loaded available vehicles from database:', data);
             
             const availableVehicles = data.ok?.answers || [];
             const vehicleSelect = document.getElementById('vehicle-assignment');
@@ -5117,7 +5088,6 @@ startRealTimeUpdates() {
                 }
             });
             
-            console.log(`Loaded ${availableVehicles.length} available vehicles from database`);
             
             // Add event listener for vehicle selection to auto-populate pickup location
             if (hasLocationData) {
@@ -5154,7 +5124,6 @@ startRealTimeUpdates() {
                 // Convert coordinates to address using reverse geocoding
                 this.reverseGeocode(location.lat, location.lng, 'pickup-address');
                 
-                console.log(`Auto-populated pickup location for vehicle ${selectedVehicleId}:`, location);
             } else {
                 // Hide pickup location if no vehicle selected
                 pickupContainer.classList.add('hidden');
@@ -5212,11 +5181,9 @@ startRealTimeUpdates() {
                     // Auto-check the required certification checkboxes
                     this.updateCertificationCheckboxes(requiredCertifications);
                     
-                    console.log(`Auto-populated certification requirements for vehicle ${vehicleId}:`, requiredCertifications);
                 } else {
                     // No certification requirements for this vehicle
                     this.clearCertificationRequirements();
-                    console.log(`No certification requirements found for vehicle ${vehicleId}`);
                 }
             }
         } catch (error) {
@@ -5270,7 +5237,6 @@ startRealTimeUpdates() {
             
             if (response.ok) {
                 const data = await response.json();
-                console.log('TomTom reverse geocode response:', data);
                 
                 if (data.status === 'success' && data.address) {
                     const addressInput = document.getElementById(inputId);
@@ -5314,7 +5280,6 @@ startRealTimeUpdates() {
                 const deliveryLng = parseFloat(document.getElementById('delivery-lng').value);
                 
                 if (selectedDateTime && !isNaN(pickupLat) && !isNaN(pickupLng) && !isNaN(deliveryLat) && !isNaN(deliveryLng)) {
-                    console.log('Date, pickup and delivery locations available, loading drivers for:', selectedDateTime);
                     // Show the driver dropdown container
                     driverContainer.classList.remove('hidden');
                     this.loadAvailableDriversForDateAndLocation(selectedDateTime, pickupLat, pickupLng, deliveryLat, deliveryLng);
@@ -5415,7 +5380,6 @@ startRealTimeUpdates() {
             }
             
             const result = await response.json();
-            console.log('Loaded available drivers for date and location:', result);
             
             const availableDrivers = result.ok?.answers || [];
             
@@ -5677,7 +5641,6 @@ startRealTimeUpdates() {
                 vehicle_id: 'temp_vehicle'
             };
 
-            console.log('TomTom traffic request:', requestBody);
 
             const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
                 method: 'POST',
@@ -5695,7 +5658,6 @@ startRealTimeUpdates() {
             }
             
             const data = await response.json();
-            console.log('TomTom traffic response:', data);
             
             if (data.status === 'success') {
                 return {
@@ -5931,7 +5893,6 @@ startRealTimeUpdates() {
             }
             
             const data = await response.json();
-            console.log('TomTom backend results:', data);
             
             // Handle TomTom backend service response format for search
             if (data.status === 'success' && data.results) {
@@ -6100,7 +6061,6 @@ startRealTimeUpdates() {
             
             if (rules.length > 0 && rules[0].data?.value?.value) {
                 const hoursLimit = parseFloat(rules[0].data.value.value);
-                console.log(`📋 Jurisdiction ${jurisdiction} hours limit: ${hoursLimit}`);
                 return hoursLimit;
             }
             
@@ -6125,7 +6085,6 @@ startRealTimeUpdates() {
         };
         
         const limit = defaults[jurisdiction] || defaults['INTL'];
-        console.log(`📋 Using default hours limit for ${jurisdiction}: ${limit}`);
         return limit;
     }
     
@@ -6145,7 +6104,6 @@ startRealTimeUpdates() {
                 const minDateTime = `${year}-${month}-${day}T${hours}:${minutes}`;
                 scheduleInput.setAttribute('min', minDateTime);
                 
-                console.log('Set minimum datetime to:', minDateTime);
             } else {
                 console.error('Schedule input not found for datetime constraints');
             }
