@@ -14,6 +14,10 @@ use async_trait::async_trait;
 
 use dog_core::{DogBeforeHook, HookContext, ServiceHooks, ServiceMethodKind};
 
+mod private {
+    pub trait Sealed {}
+}
+
 /// Which write methods should a schema hook apply to?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteMethods {
@@ -197,6 +201,11 @@ where
 
 /// Validation rule accumulator — chains field checks and collects all errors before
 /// returning them together from [`Rules::check()`].
+///
+/// # Warning
+/// If the chain result is discarded without calling `.check()`, all validation
+/// is silently skipped. The `#[must_use]` attribute will warn about this.
+#[must_use = "call .check() to propagate validation errors"]
 #[derive(Default)]
 pub struct Rules {
     errors: Vec<anyhow::Error>,
@@ -207,6 +216,7 @@ impl Rules {
         Self::default()
     }
 
+    /// Fails if `v`, after trimming whitespace, is empty.
     pub fn non_empty(mut self, field: &str, v: &str) -> Self {
         if v.trim().is_empty() {
             self.errors
@@ -234,11 +244,14 @@ impl Rules {
         self
     }
 
+    /// Validates all accumulated rules and returns the combined result.
+    ///
+    /// Always uses the same error format regardless of how many errors were
+    /// collected, so callers can parse the message consistently.
+    #[must_use = "discarding the Result silently skips error propagation"]
     pub fn check(self) -> Result<()> {
         if self.errors.is_empty() {
             Ok(())
-        } else if self.errors.len() == 1 {
-            Err(self.errors.into_iter().next().expect("len == 1 was just verified"))
         } else {
             let msg = self
                 .errors
@@ -328,7 +341,11 @@ where
 }
 
 /// Extension method: `hooks.schema(|s| ...)`
-pub trait SchemaHooksExt<R, P>
+///
+/// # Note
+/// This trait is sealed — it is implemented only for [`ServiceHooks`] and
+/// cannot be implemented by external crates.
+pub trait SchemaHooksExt<R, P>: private::Sealed
 where
     R: Send + 'static,
     P: Send + Clone + 'static,
@@ -337,6 +354,12 @@ where
     where
         F: FnOnce(&mut SchemaBuilder<'_, R, P>);
 }
+
+impl<R, P> private::Sealed for ServiceHooks<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{}
 
 impl<R, P> SchemaHooksExt<R, P> for ServiceHooks<R, P>
 where
@@ -383,13 +406,17 @@ mod tests {
     #[test]
     fn rules_fails_on_empty_field() {
         let err = Rules::new().non_empty("name", "  ").check().unwrap_err();
-        assert!(err.to_string().contains("must not be empty"));
+        let msg = err.to_string();
+        assert!(msg.contains("Schema validation failed"));
+        assert!(msg.contains("must not be empty"));
     }
 
     #[test]
     fn rules_fails_on_short_field() {
         let err = Rules::new().min_len("bio", "hi", 5).check().unwrap_err();
-        assert!(err.to_string().contains("at least 5 chars"));
+        let msg = err.to_string();
+        assert!(msg.contains("Schema validation failed"));
+        assert!(msg.contains("at least 5 chars"));
     }
 
     #[test]
@@ -407,18 +434,19 @@ mod tests {
 
     #[test]
     fn min_len_trims_whitespace_before_counting() {
-        // spaces-only string should fail min_len just like non_empty fails it
         let err = Rules::new().min_len("name", "   ", 2).check().unwrap_err();
-        assert!(err.to_string().contains("at least 2 chars"));
-
-        // real chars pass
+        let msg = err.to_string();
+        assert!(msg.contains("Schema validation failed"));
+        assert!(msg.contains("at least 2 chars"));
         assert!(Rules::new().min_len("name", "  hi  ", 2).check().is_ok());
     }
 
     #[test]
     fn max_len_fails_on_long_field() {
         let err = Rules::new().max_len("bio", "hello world", 5).check().unwrap_err();
-        assert!(err.to_string().contains("at most 5 chars"));
+        let msg = err.to_string();
+        assert!(msg.contains("Schema validation failed"));
+        assert!(msg.contains("at most 5 chars"));
     }
 
     #[test]
