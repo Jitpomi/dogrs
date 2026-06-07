@@ -68,10 +68,10 @@ where
     }
 }
 
-pub type ValidateFn<R, P> =
+pub(crate) type ValidateFn<R, P> =
     Arc<dyn Fn(&R, &HookMeta<R, P>) -> Result<()> + Send + Sync + 'static>;
 
-pub type ResolveFn<R, P> =
+pub(crate) type ResolveFn<R, P> =
     Arc<dyn Fn(&mut R, &HookMeta<R, P>) -> Result<()> + Send + Sync + 'static>;
 
 /// Validate `ctx.data` for create/patch/update. (Feathers `validateData`)
@@ -188,7 +188,7 @@ pub struct Rules {
 
 impl Rules {
     pub fn new() -> Self {
-        Self { errors: Vec::new() }
+        Self::default()
     }
 
     pub fn non_empty(mut self, field: &str, v: &str) -> Self {
@@ -211,7 +211,7 @@ impl Rules {
         if self.errors.is_empty() {
             Ok(())
         } else if self.errors.len() == 1 {
-            Err(self.errors.into_iter().next().unwrap())
+            Err(self.errors.into_iter().next().expect("len == 1 was just verified"))
         } else {
             let msg = self
                 .errors
@@ -272,6 +272,7 @@ where
     ) -> &mut Self {
         let hook = ResolveData::<R, P>::new(f).with_methods(self.current_methods);
         self.hooks.before_all(Arc::new(hook));
+        self.current_methods = WriteMethods::AllWrites; // reset after each terminal call
         self
     }
 
@@ -281,6 +282,7 @@ where
     ) -> &mut Self {
         let hook = ValidateData::<R, P>::new(f).with_methods(self.current_methods);
         self.hooks.before_all(Arc::new(hook));
+        self.current_methods = WriteMethods::AllWrites; // reset after each terminal call
         self
     }
 }
@@ -314,6 +316,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dog_core::{DogApp, HookContext, ServiceCaller, ServiceMethodKind, TenantContext};
+
+    // ── Test helpers ───────────────────────────────────────────────────────
+
+    fn make_ctx(method: ServiceMethodKind, data: Option<String>) -> HookContext<String, ()> {
+        let app: DogApp<String, ()> = DogApp::default();
+        let config = app.config_snapshot();
+        let caller = ServiceCaller::new(app);
+        let mut ctx = HookContext::new(TenantContext::new("test"), method, (), caller, config);
+        ctx.data = data;
+        ctx
+    }
 
     // ── Rules ──────────────────────────────────────────────────────────────
 
@@ -382,5 +396,76 @@ mod tests {
     fn write_methods_update_only_matches_update() {
         assert!(WriteMethods::Update.matches(&ServiceMethodKind::Update));
         assert!(!WriteMethods::Update.matches(&ServiceMethodKind::Create));
+    }
+
+    // ── ValidateData ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn validate_data_fires_on_matching_method() {
+        let hook = ValidateData::<String, ()>::new(|data, _meta| {
+            if data.is_empty() {
+                anyhow::bail!("must not be empty");
+            }
+            Ok(())
+        });
+        let mut ctx = make_ctx(ServiceMethodKind::Create, Some("hello".to_string()));
+        assert!(hook.run(&mut ctx).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn validate_data_propagates_error() {
+        let hook = ValidateData::<String, ()>::new(|_, _| anyhow::bail!("validation failed"));
+        let mut ctx = make_ctx(ServiceMethodKind::Create, Some("any".to_string()));
+        let err = hook.run(&mut ctx).await.unwrap_err();
+        assert!(err.to_string().contains("validation failed"));
+    }
+
+    #[tokio::test]
+    async fn validate_data_skips_on_non_matching_method() {
+        let hook = ValidateData::<String, ()>::new(|_, _| anyhow::bail!("should not run"))
+            .with_methods(WriteMethods::Create);
+        let mut ctx = make_ctx(ServiceMethodKind::Find, None);
+        assert!(hook.run(&mut ctx).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn validate_data_errors_on_missing_data() {
+        let hook = ValidateData::<String, ()>::new(|_, _| Ok(()));
+        let mut ctx = make_ctx(ServiceMethodKind::Create, None);
+        let err = hook.run(&mut ctx).await.unwrap_err();
+        assert!(err.to_string().contains("ValidateData requires ctx.data"));
+    }
+
+    // ── ResolveData ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn resolve_data_mutates_ctx_data() {
+        let hook = ResolveData::<String, ()>::new(|data, _meta| {
+            *data = format!("resolved:{data}");
+            Ok(())
+        });
+        let mut ctx = make_ctx(ServiceMethodKind::Create, Some("raw".to_string()));
+        hook.run(&mut ctx).await.unwrap();
+        assert_eq!(ctx.data.as_deref(), Some("resolved:raw"));
+    }
+
+    #[tokio::test]
+    async fn resolve_data_skips_on_non_matching_method() {
+        let hook = ResolveData::<String, ()>::new(|data, _| {
+            *data = "mutated".to_string();
+            Ok(())
+        })
+        .with_methods(WriteMethods::Create);
+        let mut ctx = make_ctx(ServiceMethodKind::Find, None);
+        assert!(hook.run(&mut ctx).await.is_ok());
+        assert!(ctx.data.is_none()); // data untouched
+    }
+
+    #[tokio::test]
+    async fn resolve_data_errors_on_missing_data() {
+        let hook = ResolveData::<String, ()>::new(|_, _| Ok(()));
+        let mut ctx = make_ctx(ServiceMethodKind::Create, None);
+        let err = hook.run(&mut ctx).await.unwrap_err();
+        assert!(err.to_string().contains("ResolveData requires ctx.data"));
     }
 }
