@@ -310,3 +310,77 @@ where
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Rules ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn rules_passes_when_no_errors() {
+        let result = Rules::new()
+            .non_empty("name", "Alice")
+            .min_len("name", "Alice", 3)
+            .check();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rules_fails_on_empty_field() {
+        let err = Rules::new().non_empty("name", "  ").check().unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[test]
+    fn rules_fails_on_short_field() {
+        let err = Rules::new().min_len("bio", "hi", 5).check().unwrap_err();
+        assert!(err.to_string().contains("at least 5 chars"));
+    }
+
+    #[test]
+    fn rules_aggregates_multiple_errors() {
+        let err = Rules::new()
+            .non_empty("name", "")
+            .min_len("bio", "x", 10)
+            .check()
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Schema validation failed"));
+        assert!(msg.contains("must not be empty"));
+        assert!(msg.contains("at least 10 chars"));
+    }
+
+    // ── WriteMethods ───────────────────────────────────────────────────────
+
+    #[test]
+    fn write_methods_all_writes_matches_create_patch_update() {
+        let wm = WriteMethods::AllWrites;
+        assert!(wm.matches(&ServiceMethodKind::Create));
+        assert!(wm.matches(&ServiceMethodKind::Patch));
+        assert!(wm.matches(&ServiceMethodKind::Update));
+        assert!(!wm.matches(&ServiceMethodKind::Find));
+        assert!(!wm.matches(&ServiceMethodKind::Get));
+        assert!(!wm.matches(&ServiceMethodKind::Remove));
+    }
+
+    #[test]
+    fn write_methods_create_only_matches_create() {
+        let wm = WriteMethods::Create;
+        assert!(wm.matches(&ServiceMethodKind::Create));
+        assert!(!wm.matches(&ServiceMethodKind::Patch));
+        assert!(!wm.matches(&ServiceMethodKind::Update));
+    }
+
+    #[test]
+    fn write_methods_patch_only_matches_patch() {
+        assert!(WriteMethods::Patch.matches(&ServiceMethodKind::Patch));
+        assert!(!WriteMethods::Patch.matches(&ServiceMethodKind::Create));
+    }
+
+    #[test]
+    fn write_methods_update_only_matches_update() {
+        assert!(WriteMethods::Update.matches(&ServiceMethodKind::Update));
+        assert!(!WriteMethods::Update.matches(&ServiceMethodKind::Create));
+    }
+}

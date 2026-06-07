@@ -2,37 +2,48 @@
 
 All notable changes to the `dog-core` crate will be documented in this file.
 
-## [Unreleased]
+## [0.1.8] — Schema Eviction (Breaking)
 
-### Breaking Changes (Schema Eviction)
-- **Removed:** All schema validation logic (`ValidateData`, `ResolveData`, `HookMeta`, and the `SchemaHooksExt` builder) has been entirely removed from `dog-core`.
-- **Migrated To:** This logic now lives exclusively inside the `dog-schema` crate (`dog_schema::hooks::*`).
+### Breaking Changes
+- **Removed:** All schema validation logic (`ValidateData`, `ResolveData`, `HookMeta`,
+  `SchemaHooksExt`, `Rules`, `WriteMethods`) has been removed from `dog-core`.
+- **Migrated To:** `dog-schema` crate — available at `dog_schema::schema_hooks::*`
+  and re-exported at the `dog-schema` crate root (`dog_schema::SchemaHooksExt` etc).
 
-### Why We Did It (The Benefits)
-1. **Separation of Concerns:** `dog-core` is the foundational engine of the framework. Its only job is to handle the dependency injection registry and execute the hooks pipeline. It should not need to know what a "schema" is or how data is "validated." 
-2. **Reduced Core Footprint:** By moving validation logic to the `dog-schema` crate, developers who only want to use the raw `dog-core` pipeline aren't burdened by validation abstractions they might not need.
-3. **Ecosystem Cohesion:** It makes logical sense that all things schema-related (including the hooks that enforce them) live inside the `dog-schema` crate.
+### Why
+1. **Separation of Concerns:** `dog-core` handles the DI registry and hook pipeline only.
+   It should not know what a "schema" or "validation" is.
+2. **Reduced footprint:** Projects using only raw `dog-core` are no longer burdened by
+   validation abstractions they don't need.
+3. **Cohesion:** All schema logic — macros, validation, pipeline hooks — lives in `dog-schema`.
 
-### Losses & Performance
-- **Zero performance loss:** The code executed is exactly the same, just located in a different crate.
-- **Zero capability loss:** The exact same validation features exist.
-- **Temporary ergonomics loss (for manual users):** Existing developers who wrote validation code manually will temporarily experience compiler errors until they update their import paths.
+### Who Is Affected?
 
-### Who is Affected?
-1. **Developers using the `#[schema]` macro:** **NOT AFFECTED.** The macro was updated to generate the new paths automatically. Upon running `cargo update`, everything will compile seamlessly.
-2. **Developers writing manual schema hooks:** **AFFECTED.** If a developer manually imported `dog_core::schema::SchemaHooksExt` to write custom validation logic outside of the macro, their compiler will fail.
+**Using `#[schema]` and `dog-schema` is already in your `Cargo.toml`:**
+Not affected. The macro regenerates code with the new paths automatically.
 
-### How to Recover (Migration Steps)
-If you are manually utilizing schema hooks, simply update your `use` statements:
+**Using `#[schema]` but `dog-schema` is NOT in your `Cargo.toml`:**
+You will get an unresolved import error on the generated code. Add the dependency:
+```toml
+dog-schema = "0.1.8"
+```
 
-**Old Code:**
+**Writing manual schema hooks (`use dog_core::schema::...`):**
+Two steps required:
+
+Step 1 — add `dog-schema` to `Cargo.toml`:
+```toml
+dog-schema = "0.1.8"
+```
+
+Step 2 — update `use` statements:
 ```rust
+// Before
 use dog_core::schema::{SchemaHooksExt, HookMeta, ValidateData};
+
+// After
+use dog_schema::{SchemaHooksExt, HookMeta, ValidateData};
 ```
 
-**New Code:**
-```rust
-use dog_schema::hooks::{SchemaHooksExt, HookMeta, ValidateData};
-```
-
-Everything else functions exactly as it did before.
+### Zero capability or performance loss.
+The executed code is identical — only its location changed.
