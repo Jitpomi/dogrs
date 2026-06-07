@@ -195,7 +195,8 @@ impl RustFsAdapter {
         // Use dog-blob's list method to find uploaded files
         match self.adapter.list(ctx, query, Some(limit)).await {
             Ok(blobs) => {
-                let main_tracks: Vec<_> = blobs.into_iter()
+                let main_tracks: Vec<_> = blobs
+                    .into_iter()
                     .filter(|blob| !blob.key.ends_with("_cover"))
                     .collect();
 
@@ -328,10 +329,23 @@ impl RustFsAdapter {
         match self.read_blob_content(&cover_key).await {
             Ok(cover_content) => {
                 use base64::Engine;
-                let base64_content = base64::engine::general_purpose::STANDARD.encode(&cover_content);
+                let base64_content =
+                    base64::engine::general_purpose::STANDARD.encode(&cover_content);
+
+                let content_type = if cover_content.starts_with(&[0x89, b'P', b'N', b'G']) {
+                    "image/png"
+                } else if cover_content.starts_with(&[0xff, 0xd8, 0xff]) {
+                    "image/jpeg"
+                } else if cover_content.starts_with(b"GIF8") {
+                    "image/gif"
+                } else if cover_content.starts_with(b"RIFF") && cover_content.len() > 11 && &cover_content[8..12] == b"WEBP" {
+                    "image/webp"
+                } else {
+                    "image/jpeg"
+                };
 
                 Ok(serde_json::json!({
-                    "content_type": "image/jpeg",
+                    "content_type": content_type,
                     "cover_content": base64_content
                 }))
             }

@@ -22,13 +22,6 @@ impl AudioMetadataExtractor {
                     metadata = mp3_metadata;
                     has_metadata = true;
                 }
-            } else {
-                // Handle other audio formats
-                if let Some((encoding, mime_type)) = Self::get_audio_format_info(&filename_lower) {
-                    metadata.encoding = Some(encoding);
-                    metadata.mime_type = Some(mime_type);
-                    has_metadata = true;
-                }
             }
         }
 
@@ -75,9 +68,6 @@ impl AudioMetadataExtractor {
 
         // Extract technical audio properties using symphonia
         if let Some(audio_props) = Self::extract_audio_properties_with_symphonia(data) {
-            if metadata.duration.is_none() {
-                metadata.duration = audio_props.duration;
-            }
             metadata.bitrate = audio_props.bitrate;
             metadata.sample_rate = audio_props.sample_rate;
             metadata.channels = audio_props.channels;
@@ -89,7 +79,6 @@ impl AudioMetadataExtractor {
 
         Some(metadata)
     }
-
 
     /// Extract raw album art bytes from MP3 data
     pub fn extract_raw_album_art(data: &[u8]) -> Option<(String, Vec<u8>)> {
@@ -142,7 +131,7 @@ impl AudioMetadataExtractor {
         let format = probed.format;
 
         // Extract track information and calculate proper duration
-        let (sample_rate, channels, duration, bitrate) = {
+        let (sample_rate, channels, bitrate) = {
             let track = format
                 .tracks()
                 .iter()
@@ -174,17 +163,6 @@ impl AudioMetadataExtractor {
                     duration_seconds
                 );
                 Some(duration_seconds as u32)
-            } else if let Some(sample_rate) = sample_rate {
-                // Fallback: estimate from file size and sample rate
-                let bytes_per_sample = 2; // 16-bit samples
-                let estimated_samples =
-                    data.len() / (bytes_per_sample * channels.unwrap_or(2) as usize);
-                let duration_seconds = estimated_samples as f64 / sample_rate as f64;
-                println!(
-                    "🕐 Estimated duration from sample rate: {:.2}s",
-                    duration_seconds
-                );
-                Some(duration_seconds as u32)
             } else {
                 println!("❌ Could not calculate duration - no time base or sample rate");
                 None
@@ -206,30 +184,17 @@ impl AudioMetadataExtractor {
                 None
             };
 
-            (sample_rate, channels, duration, bitrate)
+            (sample_rate, channels, bitrate)
         };
 
         let result = AudioProperties {
             sample_rate,
             channels,
-            duration,
             bitrate,
         };
 
         println!("🎯 Final symphonia result: {:?}", result);
         Some(result)
-    }
-
-    /// Get audio format info from filename extension
-    fn get_audio_format_info(filename_lower: &str) -> Option<(String, String)> {
-        match filename_lower {
-            name if name.ends_with(".flac") => Some(("FLAC".to_string(), "audio/flac".to_string())),
-            name if name.ends_with(".wav") => Some(("WAV".to_string(), "audio/wav".to_string())),
-            name if name.ends_with(".aac") => Some(("AAC".to_string(), "audio/aac".to_string())),
-            name if name.ends_with(".ogg") => Some(("OGG".to_string(), "audio/ogg".to_string())),
-            name if name.ends_with(".m4a") => Some(("M4A".to_string(), "audio/mp4".to_string())),
-            _ => None,
-        }
     }
 }
 
@@ -239,6 +204,4 @@ struct AudioProperties {
     bitrate: Option<u32>,
     sample_rate: Option<u32>,
     channels: Option<u32>,
-    duration: Option<u32>,
 }
-

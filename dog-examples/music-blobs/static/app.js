@@ -143,11 +143,11 @@ class MusicPlayer {
     if (this.musicLibrary.length === 0) {
       trackList.innerHTML = `
         <div class="empty-state">
-          <i class="fas fa-music"></i>
+          <iconify-icon icon="ph:music-notes-simple-fill"></iconify-icon>
           <h3>No music files found</h3>
           <p>Upload some music files to get started</p>
           <button class="upload-btn" onclick="musicPlayer.openUploadModal()">
-            <i class="fas fa-upload"></i>
+            <iconify-icon icon="ph:upload-simple-bold"></iconify-icon>
             Upload Music
           </button>
         </div>`;
@@ -168,20 +168,20 @@ class MusicPlayer {
 
             <div class="track-play-btn">
               <button class="play-button play-btn" data-track-id="${trackId}" style="display:inline-block;">
-                <i class="fas fa-play"></i>
+                <iconify-icon icon="ph:play-fill"></iconify-icon>
               </button>
               <button class="play-button pause-btn" data-track-id="${trackId}" style="display:none;">
-                <i class="fas fa-pause"></i>
+                <iconify-icon icon="ph:pause-fill"></iconify-icon>
               </button>
               <button class="play-button stop-btn" data-track-id="${trackId}" style="display:none;">
-                <i class="fas fa-stop"></i>
+                <iconify-icon icon="ph:stop-fill"></iconify-icon>
               </button>
             </div>
 
             <div class="track-artwork" id="artwork-${this.safeId(trackId)}">
               ${track.metadata?.album_art_url
-            ? `<div class="placeholder"><i class="fas fa-spinner fa-spin"></i></div>`
-            : `<div class="placeholder"><i class="fas fa-music"></i></div>`
+            ? `<div class="placeholder"><iconify-icon icon="ph:spinner-gap-bold" class="fa-spin"></iconify-icon></div>`
+            : `<div class="placeholder"><iconify-icon icon="ph:music-notes-simple-fill"></iconify-icon></div>`
           }
             </div>
 
@@ -193,18 +193,18 @@ class MusicPlayer {
 
             <div class="track-genre-tag"><span class="genre-badge">${genre}</span></div>
             <div class="track-duration">${duration}</div>
-            <div class="track-vocal-indicator"><i class="fas fa-microphone"></i></div>
+            <div class="track-vocal-indicator"><iconify-icon icon="ph:microphone-fill"></iconify-icon></div>
 
             <div class="track-waveform">
               ${this.createWaveformContainer(trackId)}
             </div>
 
             <div class="track-actions">
-              <button class="action-btn favorite-btn"><i class="far fa-heart"></i></button>
-              <button class="action-btn star-btn"><i class="fas fa-star"></i></button>
+              <button class="action-btn favorite-btn"><iconify-icon icon="ph:heart"></iconify-icon></button>
+              <button class="action-btn star-btn"><iconify-icon icon="ph:star-fill"></iconify-icon></button>
               <div class="track-menu-container">
                 <button class="action-btn menu-btn" data-track-id="${trackId}">
-                  <i class="fas fa-ellipsis-v"></i>
+                  <iconify-icon icon="ph:dots-three-vertical-bold"></iconify-icon>
                 </button>
               </div>
             </div>
@@ -243,10 +243,10 @@ class MusicPlayer {
         const menu = document.createElement("div");
         menu.innerHTML = `
           <div class="dropdown-item download-item" data-track-id="${trackId}">
-            <i class="fas fa-download"></i><span>Download</span>
+            <iconify-icon icon="ph:download-simple-bold"></iconify-icon><span>Download</span>
           </div>
           <div class="dropdown-item delete-item" data-track-id="${trackId}">
-            <i class="fas fa-trash"></i><span>Delete</span>
+            <iconify-icon icon="ph:trash-bold"></iconify-icon><span>Delete</span>
           </div>
         `;
 
@@ -330,7 +330,7 @@ class MusicPlayer {
       } else {
         const container = document.getElementById(`artwork-${this.safeId(trackId)}`);
         if (container) {
-          container.innerHTML = `<div class="placeholder"><i class="fas fa-music"></i></div>`;
+          container.innerHTML = `<div class="placeholder"><iconify-icon icon="ph:music-notes-simple-fill"></iconify-icon></div>`;
         }
       }
     } catch (e) {
@@ -431,8 +431,8 @@ class MusicPlayer {
     ctx.clearRect(0, 0, width, height);
 
     // Optimize bar width for 2000 peaks
-    const barW = Math.max(0.3, width / peaks.length);
-    const gap = Math.min(0.1, barW * 0.1);
+    const barW = Math.max(1.5, width / peaks.length);
+    const gap = Math.max(0.5, barW * 0.1);
     const maxH = height * 0.85;
 
     for (let i = 0; i < peaks.length; i++) {
@@ -440,7 +440,7 @@ class MusicPlayer {
       if (x >= width) break; // Don't draw beyond canvas
 
       const amp = Math.max(0.01, Math.min(1.0, peaks[i]));
-      const h = Math.max(1, amp * maxH);
+      const h = Math.max(2, amp * maxH);
       const y = (height - h) / 2;
 
       // Enhanced gradient with better contrast
@@ -486,8 +486,8 @@ class MusicPlayer {
     // Clear in CSS pixels (transform already set)
     ctx.clearRect(0, 0, width, height);
 
-    const barW = 0.7;
-    const gap = 0.25;
+    const barW = 1.5;
+    const gap = 0.5;
     const step = barW + gap;
     const count = Math.floor(width / step);
 
@@ -992,9 +992,9 @@ class MusicPlayer {
 
   updatePlayerControls() {
     const playPauseBtn = document.getElementById("playPauseBtn");
-    const icon = playPauseBtn?.querySelector("i");
+    const icon = playPauseBtn?.querySelector("iconify-icon");
     if (!icon) return;
-    icon.className = this.isPlaying ? "fas fa-pause" : "fas fa-play";
+    icon.setAttribute("icon", this.isPlaying ? "ph:pause-fill" : "ph:play-fill");
   }
 
   updateProgress() {
