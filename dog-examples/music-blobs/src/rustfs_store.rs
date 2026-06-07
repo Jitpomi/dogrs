@@ -40,8 +40,8 @@ impl RustFSConfig {
 /// Production RustFS store implementation using AWS SDK (S3-compatible)
 #[derive(Clone)]
 pub struct RustFSStore {
-    client: Client,
-    bucket: String,
+    pub client: Client,
+    pub bucket: String,
 }
 
 impl RustFSStore {

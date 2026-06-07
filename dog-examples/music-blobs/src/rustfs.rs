@@ -10,6 +10,7 @@ use std::sync::Arc;
 /// RustFsState contains a BlobState following RustFS documentation pattern
 pub struct RustFsState {
     pub blob_state: Arc<BlobState>,
+    pub rustfs_store: RustFSStore,
 }
 
 impl RustFsState {
@@ -45,9 +46,12 @@ impl RustFsState {
         );
 
         // Create BlobState and then RustFsState containing it
-        let blob_state = Arc::new(BlobState::new(storage, config).with_uploads(coordinator));
+        let blob_state = Arc::new(BlobState::new(storage.clone(), config).with_uploads(coordinator));
 
-        let state = Arc::new(RustFsState { blob_state });
+        let state = Arc::new(RustFsState { 
+            blob_state,
+            rustfs_store: storage 
+        });
         app.set("rustfs", state);
 
         Ok(())

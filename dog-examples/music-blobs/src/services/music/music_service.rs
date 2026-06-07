@@ -66,6 +66,7 @@ impl DogService<Value, MusicParams> for MusicService {
                 self.adapter.upload(data).await
             }
             "stream" => self.adapter.stream(data.unwrap()).await,
+            "cover" => self.adapter.cover(data.unwrap()).await,
             "pause" => self.adapter.pause(data.unwrap()).await,
             "resume" => self.adapter.resume(data.unwrap()).await,
             "stop" => self.adapter.stop(data.unwrap()).await,

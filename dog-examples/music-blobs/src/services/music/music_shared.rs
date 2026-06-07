@@ -20,9 +20,10 @@ pub fn capabilities() -> ServiceCapabilities {
 
 pub fn register_hooks(
     app: &mut dog_core::DogAppBuilder<serde_json::Value, MusicParams>,
+    state: Arc<crate::rustfs::RustFsState>,
 ) -> Result<()> {
     app.service_hooks("music", |h| {
-        h.before_all(Arc::new(super::music_hooks::ProcessMulterParams));
+        h.before_all(Arc::new(super::music_hooks::ProcessMulterParams { state }));
     });
 
     Ok(())

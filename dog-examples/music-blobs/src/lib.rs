@@ -53,7 +53,9 @@ pub async fn build() -> anyhow::Result<AxumApp<Value, MusicParams>> {
                 .allow_headers(tower_http::cors::Any),
         )
         .fallback_service(tower_http::services::ServeDir::new(
-            std::env::var("STATIC_DIR").unwrap_or_else(|_| "static".to_string()),
+            std::env::var("STATIC_DIR").unwrap_or_else(|_| {
+                format!("{}/static", env!("CARGO_MANIFEST_DIR"))
+            }),
         ));
 
     Ok(ax)

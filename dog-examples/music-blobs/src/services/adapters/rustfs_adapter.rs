@@ -316,6 +316,36 @@ impl RustFsAdapter {
         }
     }
 
+    pub async fn cover(&self, data: Value) -> Result<Value> {
+        let key = data
+            .get("key")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in cover request"))?;
+
+        let cover_key = format!("{}_cover", key);
+        let blob_id_str = cover_key.split('/').next_back().unwrap_or(&cover_key);
+        let blob_id = dog_blob::BlobId(blob_id_str.to_string());
+        
+        let ctx = Self::create_default_context();
+
+        match self.adapter.open(ctx, blob_id, None).await {
+            Ok(_) => {
+                let cover_content = self.read_blob_content(&cover_key).await?;
+                use base64::Engine;
+                let base64_content = base64::engine::general_purpose::STANDARD.encode(&cover_content);
+
+                Ok(serde_json::json!({
+                    "content_type": "image/jpeg",
+                    "cover_content": base64_content
+                }))
+            }
+            Err(e) => {
+                println!("🎵 Failed to open cover for {}: {}", key, e);
+                Ok(serde_json::json!({}))
+            }
+        }
+    }
+
     // Helper method to read blob content from the actual uploaded files
     async fn read_blob_content(&self, full_key: &str) -> Result<Vec<u8>> {
         println!("🎵 Reading actual blob content for key: {}", full_key);

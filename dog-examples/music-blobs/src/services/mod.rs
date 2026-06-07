@@ -21,7 +21,7 @@ pub fn configure(
         Arc::new(music::MusicService::new(Arc::clone(&state)));
     app.register_service("music", Arc::clone(&music));
 
-    music::music_shared::register_hooks(app)?;
+    music::music_shared::register_hooks(app, state)?;
 
     Ok(MusicServices { music })
 }

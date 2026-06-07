@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,6 +11,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
     <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.esm.js" type="module"></script>
 </head>
+
 <body>
     <div class="app-container">
         <!-- Sidebar Navigation -->
@@ -18,7 +20,7 @@
                 <i class="fas fa-music"></i>
                 <span>MusicBlobs</span>
             </div>
-            
+
             <nav class="nav-menu">
                 <div class="nav-section">
                     <h3>Browse</h3>
@@ -28,7 +30,7 @@
                         <li><i class="fas fa-microphone"></i> AI Voiceover</li>
                     </ul>
                 </div>
-                
+
                 <div class="nav-section">
                     <h3>Library</h3>
                     <ul>
@@ -49,12 +51,12 @@
                         <i class="fas fa-bars"></i>
                     </button>
                 </div>
-                
+
                 <div class="search-container">
                     <i class="fas fa-search"></i>
                     <input type="text" placeholder="Search music, artists, genres..." class="search-input">
                 </div>
-                
+
                 <div class="header-actions">
                     <button class="upload-btn">
                         <i class="fas fa-upload"></i>
@@ -79,7 +81,7 @@
                         <option>Classical</option>
                     </select>
                 </div>
-                
+
                 <div class="filter-group">
                     <label>Mood</label>
                     <select class="filter-select">
@@ -91,7 +93,7 @@
                         <option>Sad</option>
                     </select>
                 </div>
-                
+
                 <div class="filter-group">
                     <label>Duration</label>
                     <select class="filter-select">
@@ -102,7 +104,7 @@
                         <option>3+ minutes</option>
                     </select>
                 </div>
-                
+
                 <div class="view-options">
                     <button class="view-btn active" data-view="list">
                         <i class="fas fa-list"></i>
@@ -165,7 +167,7 @@
                 <div class="track-artist" id="playerArtist">Artist Name</div>
             </div>
         </div>
-        
+
         <div class="player-controls">
             <button class="control-btn" id="prevBtn">
                 <i class="fas fa-step-backward"></i>
@@ -177,7 +179,7 @@
                 <i class="fas fa-step-forward"></i>
             </button>
         </div>
-        
+
         <div class="player-progress">
             <span class="time-current" id="currentTime">0:00</span>
             <div class="progress-bar">
@@ -186,7 +188,7 @@
             </div>
             <span class="time-total" id="totalTime">0:00</span>
         </div>
-        
+
         <div class="player-actions">
             <button class="action-btn" id="volumeBtn">
                 <i class="fas fa-volume-up"></i>
@@ -202,4 +204,5 @@
 
     <script src="app.js" type="module"></script>
 </body>
+
 </html>

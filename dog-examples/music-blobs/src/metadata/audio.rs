@@ -1,4 +1,3 @@
-use base64::{engine::general_purpose, Engine as _};
 use dog_blob::BlobMetadata;
 use std::io::Cursor;
 use symphonia::core::formats::FormatOptions;
@@ -65,9 +64,7 @@ impl AudioMetadataExtractor {
                         .map(|ms| ms / 1000);
                 }
                 "APIC" => {
-                    if let Some(album_art) = Self::extract_album_art(frame) {
-                        Self::set_album_art(&mut metadata, album_art);
-                    }
+                    // Album art is extracted separately using extract_raw_album_art
                 }
                 _ => {}
             }
@@ -90,59 +87,18 @@ impl AudioMetadataExtractor {
         Some(metadata)
     }
 
-    /// Extract album art from APIC frame
-    fn extract_album_art(frame: &id3::Frame) -> Option<AlbumArt> {
-        let picture = frame.content().picture()?;
 
-        println!("🖼️ Found APIC frame");
-        println!(
-            "📸 Picture data: {} bytes, mime: {}, type: {:?}",
-            picture.data.len(),
-            picture.mime_type,
-            picture.picture_type
-        );
-
-        let base64_data = general_purpose::STANDARD.encode(&picture.data);
-        let data_url = format!("data:{};base64,{}", picture.mime_type, base64_data);
-
-        println!(
-            "🔗 Generated data URL (first 100 chars): {}",
-            if data_url.len() > 100 {
-                &data_url[..100]
-            } else {
-                &data_url
-            }
-        );
-
-        Some(AlbumArt {
-            data_url,
-            picture_type: picture.picture_type,
-        })
-    }
-
-    /// Set album art based on picture type
-    fn set_album_art(metadata: &mut BlobMetadata, album_art: AlbumArt) {
-        match album_art.picture_type {
-            id3::frame::PictureType::CoverFront => {
-                println!("✅ Setting as album_art_url (CoverFront)");
-                metadata.album_art_url = Some(album_art.data_url);
-            }
-            id3::frame::PictureType::Other => {
-                if metadata.album_art_url.is_none() {
-                    println!("✅ Setting as thumbnail_url (Other, no album art yet)");
-                    metadata.thumbnail_url = Some(album_art.data_url);
-                }
-            }
-            _ => {
-                if metadata.thumbnail_url.is_none() {
-                    println!(
-                        "✅ Setting as thumbnail_url (other type: {:?})",
-                        album_art.picture_type
-                    );
-                    metadata.thumbnail_url = Some(album_art.data_url);
+    /// Extract raw album art bytes from MP3 data
+    pub fn extract_raw_album_art(data: &[u8]) -> Option<(String, Vec<u8>)> {
+        let tag = id3::Tag::read_from2(std::io::Cursor::new(data)).ok()?;
+        for frame in tag.frames() {
+            if frame.id() == "APIC" {
+                if let Some(picture) = frame.content().picture() {
+                    return Some((picture.mime_type.clone(), picture.data.clone()));
                 }
             }
         }
+        None
     }
 
     /// Extract technical audio properties using symphonia
@@ -283,8 +239,3 @@ struct AudioProperties {
     duration: Option<u32>,
 }
 
-/// Extracted album art data
-struct AlbumArt {
-    data_url: String,
-    picture_type: id3::frame::PictureType,
-}

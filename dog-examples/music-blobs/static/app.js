@@ -17,7 +17,7 @@ class MusicPlayer {
     this.isPlaying = false;
     this.isPaused = false;
 
-    this.duration = 0; 
+    this.duration = 0;
 
     // waveform
     this.waveformCanvases = new Map(); // trackId -> { canvas, ctx, cssW, cssH, dpr }
@@ -178,12 +178,11 @@ class MusicPlayer {
               </button>
             </div>
 
-            <div class="track-artwork">
-              ${
-                track.metadata?.album_art_url
-                  ? `<img src="${track.metadata.album_art_url}" alt="Album Art">` 
-                  : `<div class="placeholder"><i class="fas fa-music"></i></div>` 
-              }
+            <div class="track-artwork" id="artwork-${trackId}">
+              ${track.metadata?.album_art_url
+            ? `<div class="placeholder"><i class="fas fa-spinner fa-spin"></i></div>`
+            : `<div class="placeholder"><i class="fas fa-music"></i></div>`
+          }
             </div>
 
             <div class="track-info">
@@ -241,8 +240,6 @@ class MusicPlayer {
         e.stopPropagation();
         const trackId = button.dataset.trackId;
 
-
-
         const menu = document.createElement("div");
         menu.innerHTML = `
           <div class="dropdown-item download-item" data-track-id="${trackId}">
@@ -250,15 +247,16 @@ class MusicPlayer {
           </div>
           <div class="dropdown-item delete-item" data-track-id="${trackId}">
             <i class="fas fa-trash"></i><span>Delete</span>
-          </div>`;
+          </div>
+        `;
+
+        document.body.appendChild(menu);
 
         const rect = button.getBoundingClientRect();
         menu.style.position = "fixed";
-        menu.style.top = `${rect.bottom + 5}px`;
-        menu.style.left = `${rect.right - 140}px`;
+        menu.style.top = `${rect.bottom + window.scrollY}px`;
+        menu.style.left = `${rect.left + window.scrollX - 100}px`;
         menu.style.zIndex = "2147483647";
-
-        document.body.appendChild(menu);
 
         menu.querySelector(".download-item").addEventListener("click", (ev) => {
           ev.stopPropagation();
@@ -275,11 +273,60 @@ class MusicPlayer {
           this.deleteTrack(trackId, trackTitle);
           menu.remove();
         });
+        
+        // Close when clicking outside
+        const closeMenu = (e) => {
+          if (!menu.contains(e.target) && e.target !== button) {
+            menu.remove();
+            document.removeEventListener("click", closeMenu);
+          }
+        };
+
+        setTimeout(() => document.addEventListener("click", closeMenu), 0);
       });
     });
 
     // Initialize static waveforms with real peaks from backend
     this.musicLibrary.forEach((t) => this.loadWaveformPeaks(t.key));
+    
+    // Load track covers
+    this.musicLibrary.forEach(track => {
+      if (track.metadata?.album_art_url) {
+        this.loadTrackCover(track.key);
+      }
+    });
+  }
+
+  async loadTrackCover(trackId) {
+    try {
+      const resp = await fetch("/music", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-service-method": "cover",
+        },
+        body: JSON.stringify({ key: trackId }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.cover_content) {
+        const img = document.createElement("img");
+        img.src = `data:${data.content_type || "image/jpeg"};base64,${data.cover_content}`;
+        img.alt = "Album Art";
+        const container = document.getElementById(`artwork-${trackId}`);
+        if (container) {
+          container.innerHTML = "";
+          container.appendChild(img);
+        }
+      } else {
+        const container = document.getElementById(`artwork-${trackId}`);
+        if (container) {
+          container.innerHTML = `<div class="placeholder"><i class="fas fa-music"></i></div>`;
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch cover", e);
+    }
   }
 
   createWaveformContainer(trackId) {
@@ -382,7 +429,7 @@ class MusicPlayer {
     for (let i = 0; i < peaks.length; i++) {
       const x = i * (barW + gap);
       if (x >= width) break; // Don't draw beyond canvas
-      
+
       const amp = Math.max(0.01, Math.min(1.0, peaks[i]));
       const h = Math.max(1, amp * maxH);
       const y = (height - h) / 2;
@@ -390,7 +437,7 @@ class MusicPlayer {
       // Enhanced gradient with better contrast
       const alpha = 0.3 + amp * 0.6;
       const grad = ctx.createLinearGradient(x, y, x, y + h);
-      
+
       if (amp > 0.7) {
         // High amplitude - warmer colors
         grad.addColorStop(0, `rgba(200,210,220,${alpha})`);
@@ -677,7 +724,7 @@ class MusicPlayer {
   cleanupAudio() {
     // First teardown audio graph before manipulating audio element
     this.teardownAudioGraph();
-    
+
     if (this.currentAudio) {
       try {
         this.currentAudio.pause();
@@ -685,17 +732,17 @@ class MusicPlayer {
       } catch (e) {
         console.warn("Error pausing audio:", e);
       }
-      
+
       try {
         this.currentAudio.src = "";
         this.currentAudio.load();
       } catch (e) {
         console.warn("Error clearing audio src:", e);
       }
-      
+
       this.currentAudio = null;
     }
-    
+
     if (this.currentObjectUrl) {
       try {
         URL.revokeObjectURL(this.currentObjectUrl);
@@ -750,7 +797,7 @@ class MusicPlayer {
     } catch (e) {
       console.warn("Error disconnecting source node:", e);
     }
-    
+
     try {
       if (this.analyser) {
         this.analyser.disconnect();
@@ -759,7 +806,7 @@ class MusicPlayer {
     } catch (e) {
       console.warn("Error disconnecting analyser:", e);
     }
-    
+
     this.dataArray = null;
   }
 
@@ -785,21 +832,21 @@ class MusicPlayer {
       // If we have real peaks data, use it as the base and overlay live frequency data
       if (wf.peaks && wf.peaks.length > 0) {
         this.drawRealWaveform(trackId, wf.peaks);
-        
+
         // Overlay live frequency visualization
         const barW = width / wf.peaks.length;
         const maxH = height * 0.9;
-        
+
         for (let i = 0; i < Math.min(wf.peaks.length, this.dataArray.length); i++) {
           const x = i * barW;
           const staticAmp = wf.peaks[i];
           const liveFreq = this.dataArray[Math.floor((i / wf.peaks.length) * this.dataArray.length)] / 255;
-          
+
           // Combine static waveform with live frequency data
           const combinedAmp = Math.max(staticAmp, liveFreq * 0.3);
           const h = combinedAmp * maxH;
           const y = (height - h) / 2;
-          
+
           // Add live frequency overlay with accent color
           if (liveFreq > 0.1) {
             const liveH = liveFreq * maxH * 0.4;
@@ -848,15 +895,15 @@ class MusicPlayer {
       if (this.currentAudio?.duration) {
         const p = this.currentAudio.currentTime / this.currentAudio.duration;
         const px = p * width;
-        
+
         // Progress fill
         ctx.fillStyle = "rgba(0,212,170,0.08)";
         ctx.fillRect(0, 0, px, height);
-        
+
         // Progress line
         ctx.fillStyle = "#00d4aa";
         ctx.fillRect(px - 1, 0, 2, height);
-        
+
         // Progress indicator dot
         ctx.beginPath();
         ctx.arc(px, height / 2, 3, 0, 2 * Math.PI);
