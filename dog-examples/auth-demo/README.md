@@ -81,7 +81,7 @@ Use the returned `accessToken` to hit protected routes, such as creating a new m
 curl -i -X POST http://127.0.0.1:3000/messages \
   -H "Authorization: Bearer eyJ0eXAiOi..." \
   -H "Content-Type: application/json" \
-  -d '{"text":"Hello, DogRS!"}'
+  -d '{"text":"Hello, DogRS!", "sender":"user_123"}'
 ```
 
 ### 4. OAuth2 (Google)
