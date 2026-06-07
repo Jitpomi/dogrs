@@ -462,10 +462,10 @@ where
                     // Use clean Json extractor - multipart is handled by middleware
                     let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
                         .await // 10MB limit for JSON
-                        .map_err(|e| anyhow::anyhow!("Failed to read request body: {}", e))?;
+                        .map_err(|e| dog_core::errors::DogError::bad_request(&format!("Failed to read request body: {}", e)).into_anyhow())?;
 
                     let data: R = serde_json::from_slice(&body_bytes)
-                        .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))?;
+                        .map_err(|e| dog_core::errors::DogError::bad_request(&format!("Failed to parse JSON: {}", e)).into_anyhow())?;
 
                     let params = RestParams::from_parts("rest", &headers, query, "POST", &uri);
                     let params = P::from_rest_params(params);
