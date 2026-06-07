@@ -1,8 +1,7 @@
-#![allow(clippy::module_inception)]
 use dog_schema::schema;
 
 #[schema(service = "users", error_message = "Users schema validation failed")]
-pub mod users_schema {
+pub mod def {
     #[create]
     #[allow(non_snake_case)]
     pub struct CreateUser {
@@ -30,4 +29,4 @@ pub mod users_schema {
     }
 }
 
-pub use users_schema::register;
+pub use def::*;

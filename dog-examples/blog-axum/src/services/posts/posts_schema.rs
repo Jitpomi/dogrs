@@ -1,8 +1,7 @@
-#![allow(clippy::module_inception)]
 use dog_schema::schema;
 
 #[schema(service = "posts", error_message = "Posts schema validation failed")]
-pub mod posts_schema {
+pub mod def {
     #[create]
     pub struct CreatePost {
         #[dog(trim, min_len(1))]
@@ -34,4 +33,4 @@ pub mod posts_schema {
     }
 }
 
-pub use posts_schema::register;
+pub use def::*;

@@ -1,4 +1,3 @@
-#![allow(clippy::module_inception)]
 use dog_schema::schema;
 
 #[schema(
@@ -6,7 +5,7 @@ use dog_schema::schema;
     error_message = "Authors schema validation failed",
     backend = "validator"
 )]
-pub mod authors_schema {
+pub mod def {
     use serde::Deserialize;
     use validator::Validate;
 
@@ -59,4 +58,4 @@ pub mod authors_schema {
     }
 }
 
-pub use authors_schema::register;
+pub use def::*;
