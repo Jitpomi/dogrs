@@ -13,12 +13,12 @@ readme = "README.md"
 
 [dependencies]
 dog-core = { path = "../dog-core", version = "0.1.8", features = ["serde"] }
-serde_json = "1.0.145"
-anyhow = "1.0.100"
+serde_json = "1"
+anyhow = "1"
 
 # Re-export proc macros
 dog-schema-macros = { path = "../dog-schema-macros", version = "0.1.8" }
-async-trait = "0.1.89"
+async-trait = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

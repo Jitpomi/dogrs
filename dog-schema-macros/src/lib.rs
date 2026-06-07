@@ -155,10 +155,11 @@ struct FieldRule {
     kind: FieldKind,
     /// When true, `resolve_create` trims the stored string value.
     ///
-    /// Note: validation (non-empty, min_len) **always** uses the trimmed
+    /// Note: validation (non-empty, min_len, max_len) **always** uses the trimmed
     /// value regardless of this flag, to prevent whitespace-only submissions.
     trim: bool,
     min_len: Option<usize>,
+    max_len: Option<usize>,
     default_bool: Option<bool>,
     optional: bool,
 }
@@ -180,6 +181,7 @@ fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
             kind: field_kind(&f.ty),
             trim: false,
             min_len: None,
+            max_len: None,
             default_bool: None,
             optional: is_option_type(&f.ty),
         };
@@ -206,6 +208,12 @@ fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
                                         if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
                                             if let Ok(v) = n.base10_parse::<usize>() {
                                                 rule.min_len = Some(v);
+                                            }
+                                        }
+                                    } else if ml.path.is_ident("max_len") {
+                                        if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
+                                            if let Ok(v) = n.base10_parse::<usize>() {
+                                                rule.max_len = Some(v);
                                             }
                                         }
                                     }
@@ -347,6 +355,7 @@ fn gen_validate_create(
     let checks = rules.iter().map(|r| {
         let key = &r.json_key;
         let min_len = r.min_len;
+        let max_len = r.max_len;
 
         match r.kind {
             FieldKind::String => {
@@ -360,6 +369,16 @@ fn gen_validate_create(
                     quote! {}
                 };
 
+                let max_len_check = if let Some(n) = max_len {
+                    quote! {
+                        if v.trim().chars().count() > #n {
+                            errs.push_field(#key, format!("must be at most {} chars", #n));
+                        }
+                    }
+                } else {
+                    quote! {}
+                };
+
                 if r.optional {
                     quote! {
                         if let Some(v) = obj.get(#key).and_then(|v| v.as_str()) {
@@ -367,6 +386,7 @@ fn gen_validate_create(
                                 errs.push_field(#key, "must not be empty");
                             }
                             #min_len_check
+                            #max_len_check
                         }
                     }
                 } else {
@@ -379,6 +399,7 @@ fn gen_validate_create(
                                         errs.push_field(#key, "must not be empty");
                                     }
                                     #min_len_check
+                                    #max_len_check
                                 } else {
                                     errs.push_field(#key, "must be a string");
                                 }
@@ -471,6 +492,7 @@ fn gen_validate_patch(
     let checks = rules.iter().map(|r| {
         let key = &r.json_key;
         let min_len = r.min_len;
+        let max_len = r.max_len;
 
         match r.kind {
             FieldKind::String => {
@@ -478,6 +500,16 @@ fn gen_validate_patch(
                     quote! {
                         if v.trim().chars().count() < #n {
                             errs.push_field(#key, format!("must be at least {} chars", #n));
+                        }
+                    }
+                } else {
+                    quote! {}
+                };
+
+                let max_len_check = if let Some(n) = max_len {
+                    quote! {
+                        if v.trim().chars().count() > #n {
+                            errs.push_field(#key, format!("must be at most {} chars", #n));
                         }
                     }
                 } else {
@@ -493,6 +525,7 @@ fn gen_validate_patch(
                                 errs.push_field(#key, "must not be empty");
                             }
                             #min_len_check
+                            #max_len_check
                         } else {
                             errs.push_field(#key, "must be a string");
                         }
