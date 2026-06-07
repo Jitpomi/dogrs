@@ -8,12 +8,14 @@ This approach mirrors Feathers’ `app.set()` / `app.get()` pattern, but adapted
 ### 🧱 DogRS Config Basics
 
 ```rust
-let mut app = DogApp::<MyRecord, MyParams>::new();
+let mut builder = DogAppBuilder::<MyRecord, MyParams>::new();
 
-app.set("paginate.default", "10");
-app.set("paginate.max", "50");
+builder.set("paginate.default", "10");
+builder.set("paginate.max", "50");
 
-assert_eq!(app.get("paginate.default"), Some("10"));
+let app = builder.build();
+
+assert_eq!(app.get("paginate.default"), Some("10".to_string()));
 ```
 
 DogRS configuration is a simple string-based key/value store.
@@ -43,10 +45,10 @@ Your application chooses if it wants to support:
 Here’s a recommended helper that mirrors Feathers-style override layering:
 
 ```rust
-pub fn load_env_config<R, P>(app: &mut DogApp<R, P>, prefix: &str)
+pub fn load_env_config<R, P>(builder: &mut DogAppBuilder<R, P>, prefix: &str)
 where
     R: Send + 'static,
-    P: Send + 'static,
+    P: Send + Clone + 'static,
 {
     for (key, value) in std::env::vars() {
         // Example: ADSDOG__PAGINATE__DEFAULT => paginate.default
@@ -55,7 +57,7 @@ where
                 .to_lowercase()
                 .replace("__", ".");
 
-            app.set(normalized, value);
+            builder.set(normalized, value);
         }
     }
 }
@@ -64,14 +66,16 @@ where
 ### 🏗 Putting It Together: Defaults + Env Overrides
 
 ```rust
-let mut app: DogApp<YourRecord, YourParams> = DogApp::new();
+let mut builder = DogAppBuilder::<YourRecord, YourParams>::new();
 
 // defaults
-app.set("paginate.default", "10");
-app.set("paginate.max", "50");
+builder.set("paginate.default", "10");
+builder.set("paginate.max", "50");
 
 // override using environmental prefix ADSDOG__
-load_env_config(&mut app, "ADSDOG__");
+load_env_config(&mut builder, "ADSDOG__");
+
+let app = builder.build();
 ```
 
 If the environment contains:
@@ -106,7 +110,8 @@ let tenant_file = format!("config/tenants/{tenant_id}.json");
 
 let tenant_cfg = load_json_file(&tenant_file)?; // your code, not DogRS
 
-app.set(format!("tenant.{tenant_id}.limit"), tenant_cfg.limit);
+// Configuration happens during app build time:
+builder.set(format!("tenant.{tenant_id}.limit"), tenant_cfg.limit);
 ```
 
 Config can then be accessed inside any service:
