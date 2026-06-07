@@ -13,7 +13,7 @@ pub async fn auth_app() -> Result<AxumApp<Value, AuthDemoParams>> {
 
     crate::config::config(&mut builder)?;
     let auth_adapter = crate::auth::strategies(&mut builder)?;
-    let svcs = crate::services::configure(&mut builder, auth_adapter.auth().clone())?;
+    let svcs = crate::services::configure(&mut builder, auth_adapter.clone())?;
     crate::hooks::global_hooks(&mut builder);
     crate::channels::configure(&mut builder)?;
     let dog_app = builder.build();
