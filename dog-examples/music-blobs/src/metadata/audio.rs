@@ -37,36 +37,39 @@ impl AudioMetadataExtractor {
 
     /// Extract MP3 ID3 metadata including album art
     fn extract_mp3_metadata(data: &[u8]) -> Option<BlobMetadata> {
-        let tag = id3::Tag::read_from2(std::io::Cursor::new(data)).ok()?;
         let mut metadata = BlobMetadata::default();
 
-        println!("🎵 Found ID3 tag with {} frames", tag.frames().count());
+        if let Ok(tag) = id3::Tag::read_from2(std::io::Cursor::new(data)) {
+            println!("🎵 Found ID3 tag with {} frames", tag.frames().count());
 
-        // Extract basic metadata
-        for frame in tag.frames() {
-            println!("🔍 Processing frame: {}", frame.id());
-            match frame.id() {
-                "TIT2" => metadata.title = frame.content().text().map(String::from),
-                "TPE1" => metadata.artist = frame.content().text().map(String::from),
-                "TALB" => metadata.album = frame.content().text().map(String::from),
-                "TCON" => metadata.genre = frame.content().text().map(String::from),
-                "TYER" | "TDRC" => {
-                    metadata.year = frame
-                        .content()
-                        .text()
-                        .and_then(|text| text.chars().take(4).collect::<String>().parse().ok());
+            // Extract basic metadata
+            for frame in tag.frames() {
+                println!("🔍 Processing frame: {}", frame.id());
+                match frame.id() {
+                    "TIT2" => metadata.title = frame.content().text().map(String::from),
+                    "TPE1" => metadata.artist = frame.content().text().map(String::from),
+                    "TALB" => metadata.album = frame.content().text().map(String::from),
+                    "TCON" => metadata.genre = frame.content().text().map(String::from),
+                    "TYER" | "TDRC" => {
+                        metadata.year = frame
+                            .content()
+                            .text()
+                            .and_then(|text| text.chars().take(4).collect::<String>().parse().ok());
+                    }
+                    "TLEN" => {
+                        metadata.duration = frame
+                            .content()
+                            .text()
+                            .and_then(|text| text.parse::<u32>().ok())
+                            .map(|ms| ms / 1000);
+                    }
+                    "APIC" => {
+                        // Album art is extracted separately using extract_raw_album_art
+                        // But we still need to set the metadata flag so the UI knows there is cover art!
+                        metadata.album_art_url = Some("true".to_string());
+                    }
+                    _ => {}
                 }
-                "TLEN" => {
-                    metadata.duration = frame
-                        .content()
-                        .text()
-                        .and_then(|text| text.parse::<u32>().ok())
-                        .map(|ms| ms / 1000);
-                }
-                "APIC" => {
-                    // Album art is extracted separately using extract_raw_album_art
-                }
-                _ => {}
             }
         }
 

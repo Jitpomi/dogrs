@@ -195,11 +195,12 @@ impl RustFsAdapter {
         // Use dog-blob's list method to find uploaded files
         match self.adapter.list(ctx, query, Some(limit)).await {
             Ok(blobs) => {
-                let music_files: Vec<serde_json::Value> = blobs
+                let main_tracks: Vec<_> = blobs.into_iter()
+                    .filter(|blob| !blob.key.ends_with("_cover"))
+                    .collect();
+
+                let music_files: Vec<serde_json::Value> = main_tracks
                     .into_iter()
-                    // Since files are uploaded through music service which validates audio types,
-                    // all blobs in this bucket should be audio files. No need to filter by extension
-                    // as keys are UUIDs, not filenames.
                     .map(Self::serialize_music_file)
                     .collect();
 
@@ -323,14 +324,9 @@ impl RustFsAdapter {
             .ok_or_else(|| anyhow::anyhow!("Missing 'key' field in cover request"))?;
 
         let cover_key = format!("{}_cover", key);
-        let blob_id_str = cover_key.split('/').next_back().unwrap_or(&cover_key);
-        let blob_id = dog_blob::BlobId(blob_id_str.to_string());
-        
-        let ctx = Self::create_default_context();
 
-        match self.adapter.open(ctx, blob_id, None).await {
-            Ok(_) => {
-                let cover_content = self.read_blob_content(&cover_key).await?;
+        match self.read_blob_content(&cover_key).await {
+            Ok(cover_content) => {
                 use base64::Engine;
                 let base64_content = base64::engine::general_purpose::STANDARD.encode(&cover_content);
 

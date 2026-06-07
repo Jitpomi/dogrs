@@ -178,7 +178,7 @@ class MusicPlayer {
               </button>
             </div>
 
-            <div class="track-artwork" id="artwork-${trackId}">
+            <div class="track-artwork" id="artwork-${this.safeId(trackId)}">
               ${track.metadata?.album_art_url
             ? `<div class="placeholder"><i class="fas fa-spinner fa-spin"></i></div>`
             : `<div class="placeholder"><i class="fas fa-music"></i></div>`
@@ -273,7 +273,7 @@ class MusicPlayer {
           this.deleteTrack(trackId, trackTitle);
           menu.remove();
         });
-        
+
         // Close when clicking outside
         const closeMenu = (e) => {
           if (!menu.contains(e.target) && e.target !== button) {
@@ -288,7 +288,7 @@ class MusicPlayer {
 
     // Initialize static waveforms with real peaks from backend
     this.musicLibrary.forEach((t) => this.loadWaveformPeaks(t.key));
-    
+
     // Load track covers
     this.musicLibrary.forEach(track => {
       if (track.metadata?.album_art_url) {
@@ -313,13 +313,22 @@ class MusicPlayer {
         const img = document.createElement("img");
         img.src = `data:${data.content_type || "image/jpeg"};base64,${data.cover_content}`;
         img.alt = "Album Art";
-        const container = document.getElementById(`artwork-${trackId}`);
+        const container = document.getElementById(`artwork-${this.safeId(trackId)}`);
         if (container) {
           container.innerHTML = "";
           container.appendChild(img);
         }
+
+        // Update the player artwork if this track is currently playing
+        if (this.currentTrackId === trackId) {
+          const playerArtwork = document.getElementById("playerArtwork");
+          if (playerArtwork) {
+            playerArtwork.src = img.src;
+            playerArtwork.style.display = "block";
+          }
+        }
       } else {
-        const container = document.getElementById(`artwork-${trackId}`);
+        const container = document.getElementById(`artwork-${this.safeId(trackId)}`);
         if (container) {
           container.innerHTML = `<div class="placeholder"><i class="fas fa-music"></i></div>`;
         }
@@ -957,8 +966,17 @@ class MusicPlayer {
     if (!player) return;
 
     if (artwork) {
-      artwork.src = track.metadata?.album_art_url || "";
-      artwork.style.display = track.metadata?.album_art_url ? "block" : "none";
+      if (track.metadata?.album_art_url) {
+        const listImg = document.querySelector(`#artwork-${this.safeId(track.key)} img`);
+        if (listImg) {
+          artwork.src = listImg.src;
+          artwork.style.display = "block";
+        } else {
+          artwork.style.display = "none";
+        }
+      } else {
+        artwork.style.display = "none";
+      }
     }
     if (title) title.textContent = track.metadata?.title || track.filename || "Unknown Title";
     if (artist) artist.textContent = track.metadata?.artist || "Unknown Artist";
