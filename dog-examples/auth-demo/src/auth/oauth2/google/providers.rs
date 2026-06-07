@@ -23,20 +23,20 @@ fn google_provider_with_redirect(
         .get_string("oauth.google.client_secret")
         .ok_or_else(|| anyhow::anyhow!("Missing oauth.google.client_secret"))?;
 
-    GoogleOAuthProvider::new(
-        name,
+    GoogleOAuthProvider::new(dog_auth_oauth::oauth2_client::OAuth2ClientConfig {
+        name: name.to_string(),
         client_id,
         client_secret,
-        "https://accounts.google.com/o/oauth2/v2/auth",
-        "https://oauth2.googleapis.com/token",
-        redirect_uri.to_string(),
-        vec![
+        auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
+        token_url: "https://oauth2.googleapis.com/token".to_string(),
+        redirect_uri: redirect_uri.to_string(),
+        scopes: vec![
             "openid".to_string(),
             "email".to_string(),
             "profile".to_string(),
         ],
-        Some("https://openidconnect.googleapis.com/v1/userinfo".to_string()),
-    )
+        userinfo_url: Some("https://openidconnect.googleapis.com/v1/userinfo".to_string()),
+    })
 }
 
 pub fn authorize_url_for_redirect(

@@ -13,6 +13,17 @@ use serde_json::Value;
 
 use crate::strategy::OAuthProvider;
 
+pub struct OAuth2ClientConfig {
+    pub name: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub auth_url: String,
+    pub token_url: String,
+    pub redirect_uri: String,
+    pub scopes: Vec<String>,
+    pub userinfo_url: Option<String>,
+}
+
 pub struct OAuth2AuthorizationCodeProvider<P>
 where
     P: Clone + Send + Sync + 'static,
@@ -28,30 +39,20 @@ impl<P> OAuth2AuthorizationCodeProvider<P>
 where
     P: Clone + Send + Sync + 'static,
 {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        name: impl Into<String>,
-        client_id: impl Into<String>,
-        client_secret: impl Into<String>,
-        auth_url: impl Into<String>,
-        token_url: impl Into<String>,
-        redirect_uri: impl Into<String>,
-        scopes: Vec<String>,
-        userinfo_url: Option<String>,
-    ) -> Result<Self> {
+    pub fn new(config: OAuth2ClientConfig) -> Result<Self> {
         let client = BasicClient::new(
-            ClientId::new(client_id.into()),
-            Some(ClientSecret::new(client_secret.into())),
-            AuthUrl::new(auth_url.into())?,
-            Some(TokenUrl::new(token_url.into())?),
+            ClientId::new(config.client_id),
+            Some(ClientSecret::new(config.client_secret)),
+            AuthUrl::new(config.auth_url)?,
+            Some(TokenUrl::new(config.token_url)?),
         )
-        .set_redirect_uri(RedirectUrl::new(redirect_uri.into())?);
+        .set_redirect_uri(RedirectUrl::new(config.redirect_uri)?);
 
         Ok(Self {
-            name: name.into(),
+            name: config.name,
             client,
-            scopes,
-            userinfo_url,
+            scopes: config.scopes,
+            userinfo_url: config.userinfo_url,
             _marker: PhantomData,
         })
     }
