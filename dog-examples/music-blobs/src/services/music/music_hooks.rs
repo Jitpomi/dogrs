@@ -6,9 +6,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use crate::rustfs::RustFsState;
 
-pub struct ProcessMulterParams {
-    pub state: Arc<RustFsState>,
-}
+pub struct ProcessMulterParams;
 
 #[async_trait]
 impl DogBeforeHook<Value, MusicParams> for ProcessMulterParams {
