@@ -68,57 +68,28 @@ impl TypeDBState {
     }
 
     async fn load_schema_from_file(state: &TypeDBState) -> Result<()> {
-        // Enhanced dog-typedb now automatically loads both schema.tql and functions.tql
         let schema_paths = [
             "src/",
             "dog-examples/fleet-queue/src/",
             "./dog-examples/fleet-queue/src/",
         ];
 
-        println!("Loading TypeDB schema and functions using enhanced dog-typedb...");
-
-        // Single call now loads both schema.tql and functions.tql automatically
         match load_schema_from_file(&state.driver, &state.database, &schema_paths).await {
-            Ok(response) => {
-                println!("Enhanced schema loading completed!");
-                if let Some(loaded_files) = response.get("ok").and_then(|ok| ok.get("loadedFiles"))
-                {
-                    println!("Loaded files: {}", loaded_files);
-                }
-            }
-            Err(e) if e.to_string().contains("already exists") => {
-                println!(
-                    "Schema files already exist, proceeding to redefine specific functions..."
-                );
-            }
-            Err(e) => {
-                println!("Failed to load schema files: {}", e);
-                return Err(e);
-            }
+            Ok(_) => {}
+            Err(e) if e.to_string().contains("already exists") => {}
+            Err(e) => return Err(e),
         }
 
-        // Redefine specific functions to add parameters (TypeDB 3.0 best practice)
+        // Redefine parameterised functions (TypeDB 3.0 requires explicit parameter signatures)
         let redefine_queries = [
             "redefine fun hours_exceeded_employees($maxHours: double) -> { employee }: match $employee isa employee, has daily-hours $hours; $hours >= $maxHours; return { $employee };",
             "redefine fun compliant_employees($maxHours: double) -> { employee }: match $employee isa employee, has daily-hours $hours; $hours < $maxHours; return { $employee };",
         ];
 
-        let mut redefined_count = 0;
         for redefine_query in &redefine_queries {
-            match execute_typedb_query(&state.driver, &state.database, redefine_query).await {
-                Ok(_) => {
-                    println!("TypeDB function redefined with parameters successfully");
-                    redefined_count += 1;
-                }
-                Err(e) => println!("Function redefine failed: {}", e),
+            if let Err(e) = execute_typedb_query(&state.driver, &state.database, redefine_query).await {
+                eprintln!("TypeDB function redefine failed: {}", e);
             }
-        }
-
-        if redefined_count > 0 {
-            println!(
-                "Successfully redefined {} TypeDB functions with parameters",
-                redefined_count
-            );
         }
 
         Ok(())

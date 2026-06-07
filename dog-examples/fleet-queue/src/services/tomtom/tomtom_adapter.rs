@@ -215,12 +215,12 @@ impl TomTomAdapter {
         let vehicle_id = data
             .get("vehicle_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+            .ok_or_else(|| anyhow::anyhow!("Missing 'vehicle_id' field"))?;
 
         let delivery_id = data
             .get("delivery_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+            .ok_or_else(|| anyhow::anyhow!("Missing 'delivery_id' field"))?;
 
         // Extract vehicle parameters for commercial vehicle routing
         let mut url_params = vec![format!("key={}", self.api_key)];
@@ -526,7 +526,7 @@ impl TomTomAdapter {
         let vehicle_id = data
             .get("vehicle_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+            .ok_or_else(|| anyhow::anyhow!("Missing 'vehicle_id' field"))?;
 
         // Use TomTom Routing API with traffic information
         let url = format!(

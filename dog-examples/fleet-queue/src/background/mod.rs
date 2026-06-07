@@ -68,19 +68,12 @@ impl BackgroundSystem {
             ComplianceMonitoringJob::JOB_TYPE.to_string(),
         ];
 
-        println!("🔧 Starting dog-queue workers for queues: {:?}", queues);
         let worker_handle = self
             .adapter
             .start_workers(ctx.clone(), context, queues)
             .await?;
 
         self.worker_handles.lock().unwrap().push(worker_handle);
-
-        println!("🚀 Background processing system started with proper dog-queue integration");
-        println!(
-            "📊 Workers active: {}",
-            self.worker_handles.lock().unwrap().len()
-        );
         Ok(())
     }
 
@@ -126,12 +119,10 @@ impl BackgroundSystem {
 
     /// Shutdown background system
     pub async fn shutdown(self) -> Result<()> {
-        // Take ownership of worker handles out of the Mutex
         let handles: Vec<_> = self.worker_handles.lock().unwrap().drain(..).collect();
         for handle in handles {
             handle.shutdown().await?;
         }
-        println!("Background processing system shutdown complete");
         Ok(())
     }
 }
