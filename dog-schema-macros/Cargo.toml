@@ -20,4 +20,4 @@ quote = "1"
 # TODO: migrate to syn 2 — syn 1 forces double-compilation when a downstream crate
 # also uses syn 2 (which is now the common case). Requires rewriting all
 # parse_macro_input!/AttributeArgs/NestedMeta usage to syn 2 APIs.
-syn = { version = "1", features = ["full", "extra-traits"] }
+syn = { version = "2", features = ["full", "extra-traits"] }

@@ -5,10 +5,10 @@ edition = "2021"
 
 [dependencies]
 # DogRS ecosystem
-dog-core = "0.1.7"
-dog-axum = "0.1.7"
-dog-typedb = "0.1.7"
-dog-blob = "0.1.7"
+dog-core = { path = "../../dog-core" }
+dog-axum = { path = "../../dog-axum", features = ["auth"] }
+dog-typedb = { path = "../../dog-typedb" }
+dog-blob = { path = "../../dog-blob" }
 
 # Web framework
 axum = { version = "0.8.9", features = ["multipart"] }
@@ -27,7 +27,7 @@ async-trait = "0.1"
 
 # Audio metadata
 id3 = "1.17"
-symphonia = { version = "0.5", features = ["all"] }
+symphonia = { version = "0.6", features = ["all"] }
 async-stream = "0.3"
 
 # AWS SDK for RustFS (S3-compatible)

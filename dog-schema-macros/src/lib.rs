@@ -1,36 +1,31 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, spanned::Spanned, Attribute, ItemMod, LitBool, LitStr, Meta, NestedMeta};
+use syn::{parse_macro_input, spanned::Spanned, Attribute, ItemMod, LitBool, LitStr};
 
 #[proc_macro_attribute]
 pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let mut service: Option<LitStr> = None;
     let mut error_message: Option<LitStr> = None;
     let mut backend: Option<LitStr> = None;
 
-    let mut module = parse_macro_input!(item as ItemMod);
-
-    for arg in args {
-        match arg {
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("service") => {
-                if let syn::Lit::Str(s) = nv.lit {
-                    service = Some(s);
-                }
-            }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("error_message") => {
-                if let syn::Lit::Str(s) = nv.lit {
-                    error_message = Some(s);
-                }
-            }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("backend") => {
-                if let syn::Lit::Str(s) = nv.lit {
-                    backend = Some(s);
-                }
-            }
-            _ => {}
+    // syn 2: parse attribute args with syn::meta::parser instead of AttributeArgs/NestedMeta
+    let schema_attr_parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("service") {
+            service = Some(meta.value()?.parse()?);
+            Ok(())
+        } else if meta.path.is_ident("error_message") {
+            error_message = Some(meta.value()?.parse()?);
+            Ok(())
+        } else if meta.path.is_ident("backend") {
+            backend = Some(meta.value()?.parse()?);
+            Ok(())
+        } else {
+            Err(meta.error("unknown #[schema] argument"))
         }
-    }
+    });
+    parse_macro_input!(args with schema_attr_parser);
+
+    let mut module = parse_macro_input!(item as ItemMod);
 
     // `service` is required — emit a compile error rather than silently defaulting to ""
     // which would produce a runtime "service not found" failure.
@@ -124,8 +119,9 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(quote!(#module))
 }
 
+// syn 2: attr.path() is now a method (was a field `attr.path` in syn 1)
 fn has_marker_attr(attrs: &[Attribute], name: &str) -> bool {
-    attrs.iter().any(|a| a.path.is_ident(name))
+    attrs.iter().any(|a| a.path().is_ident(name))
 }
 
 fn strip_internal_attrs(items: &mut [syn::Item]) {
@@ -133,15 +129,15 @@ fn strip_internal_attrs(items: &mut [syn::Item]) {
         if let syn::Item::Struct(s) = it {
             s.attrs.push(syn::parse_quote!(#[allow(dead_code)]));
 
-            // strip #[create]/#[patch]
+            // strip #[create]/#[patch] — syn 2: a.path() is a method
             s.attrs.retain(|a| {
-                !(a.path.is_ident("create") || a.path.is_ident("patch"))
+                !(a.path().is_ident("create") || a.path().is_ident("patch"))
             });
 
             // strip #[dog(...)] on fields
             if let syn::Fields::Named(named) = &mut s.fields {
                 for f in named.named.iter_mut() {
-                    f.attrs.retain(|a| !a.path.is_ident("dog"));
+                    f.attrs.retain(|a| !a.path().is_ident("dog"));
                 }
             }
         }
@@ -192,45 +188,49 @@ fn collect_field_rules(st: &syn::ItemStruct) -> Result<Vec<FieldRule>, syn::Erro
             optional: is_option_type(&f.ty),
         };
 
-        // Allow: #[dog(...)] on fields
+        // syn 2: parse #[dog(...)] using attr.parse_nested_meta() instead of
+        // attr.parse_meta() + NestedMeta iteration.
         for attr in &f.attrs {
-            if !attr.path.is_ident("dog") {
+            if !attr.path().is_ident("dog") {
                 continue;
             }
-            if let Ok(Meta::List(list)) = attr.parse_meta() {
-                for nested in list.nested {
-                    match nested {
-                        NestedMeta::Meta(Meta::Path(p)) => {
-                            if p.is_ident("trim") {
-                                rule.trim = true;
-                            } else if p.is_ident("optional") {
-                                rule.optional = true;
-                            }
-                        }
-                        NestedMeta::Meta(Meta::List(ml)) => {
-                            if ml.path.is_ident("min_len") {
-                                if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
-                                    if let Ok(v) = n.base10_parse::<usize>() {
-                                        rule.min_len = Some(v);
-                                    }
-                                }
-                            } else if ml.path.is_ident("max_len") {
-                                if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
-                                    if let Ok(v) = n.base10_parse::<usize>() {
-                                        rule.max_len = Some(v);
-                                    }
-                                }
-                            }
-                        }
-                        NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("default") => {
-                            if let syn::Lit::Bool(LitBool { value, .. }) = nv.lit {
-                                rule.default_bool = Some(value);
-                            }
-                        }
-                        _ => {}
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("trim") {
+                    rule.trim = true;
+                } else if meta.path.is_ident("optional") {
+                    rule.optional = true;
+                } else if meta.path.is_ident("min_len") {
+                    // #[dog(min_len(5))]  — parse the parenthesised integer
+                    let content;
+                    syn::parenthesized!(content in meta.input);
+                    let n: syn::LitInt = content.parse()?;
+                    rule.min_len = Some(n.base10_parse()?);
+                } else if meta.path.is_ident("max_len") {
+                    // #[dog(max_len(100))]
+                    let content;
+                    syn::parenthesized!(content in meta.input);
+                    let n: syn::LitInt = content.parse()?;
+                    rule.max_len = Some(n.base10_parse()?);
+                } else if meta.path.is_ident("default") {
+                    // #[dog(default = true)]
+                    // syn 2: meta.value()?.parse() — value() returns &ParseBuffer
+                    let value: LitBool = meta.value()?.parse()?;
+                    rule.default_bool = Some(value.value());
+                } else {
+                    // Silently ignore unknown #[dog] attributes (e.g. `relation`) —
+                    // they may carry metadata for other layers that this macro doesn't act on.
+                    // Consume any value token if present so the parser doesn't choke.
+                    if meta.input.peek(syn::Token![=]) {
+                        let _: syn::Token![=] = meta.input.parse()?;
+                        let _: proc_macro2::TokenTree = meta.input.parse()?;
+                    } else if meta.input.peek(syn::token::Paren) {
+                        let content;
+                        syn::parenthesized!(content in meta.input);
+                        let _: proc_macro2::TokenStream = content.parse()?;
                     }
                 }
-            }
+                Ok(())
+            })?;
         }
 
         // Compile-time consistency: min_len must not exceed max_len.

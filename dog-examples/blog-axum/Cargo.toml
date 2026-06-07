@@ -8,10 +8,10 @@ anyhow = "1.0.102"
 async-trait = "0.1.89"
 axum = { version = "0.8.9", features = ["macros", "json"] }
 chrono = { version = "0.4.45", features = ["serde"] }
-dog-axum = "0.1.7"
-dog-core = { version = "0.1.7", features = ["serde", "adapters"] }
-dog-schema = "0.1.7"
-dog-schema-validator = "0.1.7"
+dog-axum = { path = "../../dog-axum" }
+dog-core = { path = "../../dog-core", features = ["serde", "adapters"] }
+dog-schema = { path = "../../dog-schema" }
+dog-schema-validator = { path = "../../dog-schema-validator" }
 futures = "0.3.32"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }

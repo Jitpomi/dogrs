@@ -1,9 +1,8 @@
 use base64::{Engine as _, engine::general_purpose};
 use dog_blob::BlobMetadata;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::{FormatOptions, probe::Hint};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 use std::io::Cursor;
 
 /// Audio metadata extractor for various formats
@@ -131,86 +130,83 @@ impl AudioMetadataExtractor {
     /// Extract technical audio properties using symphonia
     fn extract_audio_properties_with_symphonia(data: &[u8]) -> Option<AudioProperties> {
         println!("🎼 Using symphonia to extract audio properties from {} bytes", data.len());
-        
+
         // Create a media source from the byte data
         let cursor = Cursor::new(data.to_vec());
         let media_source = MediaSourceStream::new(Box::new(cursor), Default::default());
-        
+
         // Create a probe hint (symphonia will auto-detect format)
         let mut hint = Hint::new();
         hint.with_extension("mp3");
-        
-        // Probe the media source
+
+        // Probe the media source — 0.6: probe() returns Box<dyn FormatReader> directly
         let format_opts = FormatOptions::default();
         let metadata_opts = MetadataOptions::default();
-        
-        let probed = match symphonia::default::get_probe()
-            .format(&hint, media_source, &format_opts, &metadata_opts) {
-            Ok(probed) => {
+
+        let format = match symphonia::default::get_probe()
+            .probe(&hint, media_source, format_opts, metadata_opts) {
+            Ok(fmt) => {
                 println!("✅ Symphonia successfully probed the audio format");
-                probed
+                fmt
             },
             Err(e) => {
                 println!("❌ Symphonia probe failed: {:?}", e);
                 return None;
             }
         };
-        
-        let format = probed.format;
-        
-        // Extract track information and calculate proper duration
+
+        // Find the first audio track — 0.6: codec_params is Option<CodecParameters::Audio(...)>
+        // time_base and duration are now fields on Track directly.
         let (sample_rate, channels, duration, bitrate) = {
-            let track = format.tracks().iter().find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)?;
-            
-            println!("🎵 Found track with codec: {:?}", track.codec_params.codec);
-            
-            let codec_params = &track.codec_params;
-            let sample_rate = codec_params.sample_rate;
-            let channels = codec_params.channels.map(|ch| ch.count() as u32);
-            
-            println!("📊 Codec params - Sample rate: {:?}, Channels: {:?}", sample_rate, channels);
-            println!("📊 Time base: {:?}, N frames: {:?}", codec_params.time_base, codec_params.n_frames);
-            
-            // Calculate duration from symphonia's codec parameters
-            let duration = if let (Some(time_base), Some(n_frames)) = (codec_params.time_base, codec_params.n_frames) {
-                let duration_seconds = (n_frames as f64 * time_base.numer as f64) / time_base.denom as f64;
-                println!("🕐 Calculated duration from symphonia time base: {:.2}s", duration_seconds);
+            use symphonia::core::codecs::CodecParameters;
+
+            let track = format.tracks().iter().find(|t| {
+                matches!(&t.codec_params, Some(CodecParameters::Audio(_)))
+            })?;
+
+            println!("🎵 Found audio track id={}", track.id);
+
+            let (sample_rate, channels) = match &track.codec_params {
+                Some(CodecParameters::Audio(params)) => {
+                    println!("📊 Codec params - Sample rate: {:?}, Channels: {:?}",
+                        params.sample_rate, params.channels);
+                    (params.sample_rate, params.channels.as_ref().map(|ch| ch.count() as u32))
+                }
+                _ => (None, None),
+            };
+
+            println!("📊 Track time_base: {:?}, duration: {:?}", track.time_base, track.duration);
+
+            // Duration in 0.6 is on Track as (time_base, duration in ticks)
+            let duration = if let (Some(time_base), Some(dur_ticks)) =
+                (track.time_base, track.duration)
+            {
+                let duration_seconds =
+                    dur_ticks.get() as f64 * time_base.numer.get() as f64 / time_base.denom.get() as f64;
+                println!("🕐 Calculated duration from track time base: {:.2}s", duration_seconds);
                 Some(duration_seconds as u32)
-            } else if let Some(sample_rate) = sample_rate {
-                // Fallback: estimate from file size and sample rate
-                let bytes_per_sample = 2; // 16-bit samples
-                let estimated_samples = data.len() / (bytes_per_sample * channels.unwrap_or(2) as usize);
-                let duration_seconds = estimated_samples as f64 / sample_rate as f64;
+            } else if let Some(sr) = sample_rate {
+                let bytes_per_sample = 2usize;
+                let estimated_samples =
+                    data.len() / (bytes_per_sample * channels.unwrap_or(2) as usize);
+                let duration_seconds = estimated_samples as f64 / sr as f64;
                 println!("🕐 Estimated duration from sample rate: {:.2}s", duration_seconds);
                 Some(duration_seconds as u32)
             } else {
                 println!("❌ Could not calculate duration - no time base or sample rate");
                 None
             };
-            
-            // Calculate bitrate from file size and duration
-            let bitrate = if let Some(dur) = duration {
-                if dur > 0 {
-                    let calculated_bitrate = ((data.len() * 8) / (dur as usize * 1000)) as u32;
-                    println!("📈 Calculated bitrate from duration: {} kbps", calculated_bitrate);
-                    Some(calculated_bitrate)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            
+
+            let bitrate = duration.filter(|&d| d > 0).map(|d| {
+                let b = ((data.len() * 8) / (d as usize * 1000)) as u32;
+                println!("📈 Calculated bitrate from duration: {} kbps", b);
+                b
+            });
+
             (sample_rate, channels, duration, bitrate)
         };
-        
-        let result = AudioProperties {
-            sample_rate,
-            channels,
-            duration,
-            bitrate,
-        };
-        
+
+        let result = AudioProperties { sample_rate, channels, duration, bitrate };
         println!("🎯 Final symphonia result: {:?}", result);
         Some(result)
     }

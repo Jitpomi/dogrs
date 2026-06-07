@@ -4,23 +4,29 @@ use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::HookContext;
 use oauth2::basic::BasicClient;
-use oauth2::reqwest::async_http_client;
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope, TokenResponse,
-    TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
+    RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use serde_json::Value;
 
 use crate::strategy::OAuthProvider;
+
+/// A `BasicClient` with auth URL and token URL configured (type-state pattern in oauth2 5.0).
+/// HasAuthUrl=EndpointSet, HasDeviceAuthUrl=EndpointNotSet,
+/// HasIntrospectionUrl=EndpointNotSet, HasRevocationUrl=EndpointNotSet,
+/// HasTokenUrl=EndpointSet
+type ConfiguredClient = BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
 
 pub struct OAuth2AuthorizationCodeProvider<P>
 where
     P: Clone + Send + Sync + 'static,
 {
     name: String,
-    client: BasicClient,
+    client: ConfiguredClient,
     scopes: Vec<String>,
     userinfo_url: Option<String>,
+    http_client: reqwest::Client,
     _marker: PhantomData<fn() -> P>,
 }
 
@@ -38,19 +44,20 @@ where
         scopes: Vec<String>,
         userinfo_url: Option<String>,
     ) -> Result<Self> {
-        let client = BasicClient::new(
-            ClientId::new(client_id.into()),
-            Some(ClientSecret::new(client_secret.into())),
-            AuthUrl::new(auth_url.into())?,
-            Some(TokenUrl::new(token_url.into())?),
-        )
-        .set_redirect_uri(RedirectUrl::new(redirect_uri.into())?);
+        // oauth2 5.0: Client::new takes only ClientId; other endpoints are set via builder methods.
+        // Each set_*_uri call changes the type param from EndpointNotSet to EndpointSet.
+        let client = BasicClient::new(ClientId::new(client_id.into()))
+            .set_client_secret(ClientSecret::new(client_secret.into()))
+            .set_auth_uri(AuthUrl::new(auth_url.into())?)
+            .set_token_uri(TokenUrl::new(token_url.into())?)
+            .set_redirect_uri(RedirectUrl::new(redirect_uri.into())?);
 
         Ok(Self {
             name: name.into(),
             client,
             scopes,
             userinfo_url,
+            http_client: reqwest::Client::new(),
             _marker: PhantomData,
         })
     }
@@ -75,11 +82,13 @@ where
     }
 
     async fn exchange_code(&self, code: &str, _ctx: &mut HookContext<Value, P>) -> Result<String> {
+        // oauth2 5.0: pass reqwest::Client directly instead of the removed async_http_client fn
         let token = self
             .client
             .exchange_code(AuthorizationCode::new(code.to_string()))
-            .request_async(async_http_client)
-            .await?;
+            .request_async(&self.http_client)
+            .await
+            .map_err(|e| anyhow::anyhow!("Token exchange failed: {e}"))?;
 
         Ok(token.access_token().secret().to_string())
     }
@@ -93,8 +102,7 @@ where
             return Ok(None);
         };
 
-        let client = reqwest::Client::new();
-        let profile = client
+        let profile = self.http_client
             .get(url)
             .bearer_auth(access_token)
             .send()
