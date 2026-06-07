@@ -23,7 +23,8 @@ pub fn register_hooks(
     state: Arc<crate::rustfs::RustFsState>,
 ) -> Result<()> {
     app.service_hooks("music", |h| {
-        h.before_all(Arc::new(super::music_hooks::ProcessMulterParams { state }));
+        h.before_all(Arc::new(super::music_hooks::ProcessMulterParams { state: state.clone() }));
+        h.after_all(Arc::new(super::music_hooks::UploadCoverArtHook { state }));
     });
 
     Ok(())
