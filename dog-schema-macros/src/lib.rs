@@ -76,8 +76,14 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
             .into();
     };
 
-    let create_rules = collect_field_rules(&create_struct);
-    let patch_rules = patch_struct.as_ref().map(collect_field_rules);
+    let create_rules = match collect_field_rules(&create_struct) {
+        Ok(r) => r,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let patch_rules = match patch_struct.as_ref().map(collect_field_rules).transpose() {
+        Ok(r) => r,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
     // Remove internal marker attrs so they don't reach rustc.
     // They are only inputs to this macro.
@@ -164,12 +170,12 @@ struct FieldRule {
     optional: bool,
 }
 
-fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
+fn collect_field_rules(st: &syn::ItemStruct) -> Result<Vec<FieldRule>, syn::Error> {
     let mut rules = Vec::new();
 
     let fields = match &st.fields {
         syn::Fields::Named(n) => &n.named,
-        _ => return rules,
+        _ => return Ok(rules),
     };
 
     for f in fields {
@@ -234,10 +240,23 @@ fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
             }
         }
 
+        // Compile-time consistency: min_len must not exceed max_len.
+        if let (Some(mn), Some(mx)) = (rule.min_len, rule.max_len) {
+            if mn > mx {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    format!(
+                        "field `{}`: min_len({mn}) cannot exceed max_len({mx})",
+                        rule.json_key
+                    ),
+                ));
+            }
+        }
+
         rules.push(rule);
     }
 
-    rules
+    Ok(rules)
 }
 
 fn is_option_type(ty: &syn::Type) -> bool {
@@ -544,13 +563,8 @@ fn gen_validate_patch(
                 }
             }
             FieldKind::Other => {
-                quote! {
-                    if let Some(val) = obj.get(#key) {
-                        if val.is_null() {
-                            // allow null
-                        }
-                    }
-                }
+                // Patch: no type check for unknown field types — allow any value.
+                quote! {}
             }
         }
     });

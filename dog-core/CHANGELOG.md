@@ -2,7 +2,7 @@
 
 All notable changes to the `dog-core` crate will be documented in this file.
 
-## [0.1.8] — Schema Eviction (Breaking)
+## [0.1.8] — 2026-06-07 — Schema Eviction (Breaking)
 
 ### Breaking Changes
 - **Removed:** All schema validation logic (`ValidateData`, `ResolveData`, `HookMeta`,
