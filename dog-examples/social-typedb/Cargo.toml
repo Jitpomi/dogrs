@@ -6,12 +6,10 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-dog-axum = "0.1.6"
-# Workspace member; version = "0.1.6" satisfies local 0.1.8 (>=0.1.6, <0.2.0).
-dog-core = { version = "0.1.6", features = ["serde", "adapters"] }
-# Not yet on crates.io — use workspace path directly.
-dog-schema = { path = "../../dog-schema", version = "0.1.8" }
-dog-typedb = "0.1.6"
+dog-axum = { path = "../../dog-axum" }
+dog-core = { path = "../../dog-core", features = ["serde", "adapters"] }
+dog-schema = { path = "../../dog-schema" }
+dog-typedb = { path = "../../dog-typedb" }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
