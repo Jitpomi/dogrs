@@ -1747,6 +1747,8 @@ class FleetCommandPro {
                     'x-service-method': 'route'
                 },
                 body: JSON.stringify({
+                    vehicle_id: vehicleId,
+                    delivery_id: routeId,
                     from_lat: fromLat,
                     from_lng: fromLng,
                     to_lat: toLat,
