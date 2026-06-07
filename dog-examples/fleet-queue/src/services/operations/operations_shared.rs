@@ -22,11 +22,11 @@ pub fn register_hooks(
             Arc::new(super::operations_hooks::AfterRead),
         );
         h.before(
-            dog_core::ServiceMethodKind::Create,
+            dog_core::ServiceMethodKind::Custom("write"),
             Arc::new(super::operations_hooks::BeforeWrite),
         );
         h.after(
-            dog_core::ServiceMethodKind::Create,
+            dog_core::ServiceMethodKind::Custom("write"),
             Arc::new(super::operations_hooks::AfterWrite),
         );
     });

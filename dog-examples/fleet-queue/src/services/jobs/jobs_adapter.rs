@@ -36,8 +36,25 @@ impl JobsAdapter {
                     "timestamp": chrono::Utc::now().to_rfc3339()
                 }))
             }
+            "route_rebalancing" => {
+                let trigger_reason = data
+                    .get("manual_trigger")
+                    .and_then(|v| v.as_bool())
+                    .map(|is_manual| if is_manual { "manual" } else { "auto" })
+                    .unwrap_or("auto")
+                    .to_string();
+
+                self.background_system
+                    .enqueue_route_rebalancing(vec!["ALL".to_string()], 0, trigger_reason)
+                    .await?;
+
+                Ok(serde_json::json!({
+                    "status": "enqueued",
+                    "job_type": "route_rebalancing",
+                    "timestamp": chrono::Utc::now().to_rfc3339()
+                }))
+            }
             "employee_assignment"
-            | "route_rebalancing"
             | "sla_monitoring"
             | "maintenance_scheduling"
             | "compliance_monitoring" => {

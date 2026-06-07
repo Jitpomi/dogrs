@@ -17,7 +17,7 @@
 //!
 //! ## 🚀 Reference Payload Quick Start
 //!
-//! ```rust
+//! ```rust,ignore
 //! use dog_queue::prelude::*;
 //! use serde::{Deserialize, Serialize};
 //!
@@ -71,6 +71,9 @@ pub mod error;
 pub mod job;
 pub mod observability;
 pub mod types;
+
+#[cfg(test)]
+mod tests;
 
 // Optional advanced features (placeholder for future implementation)
 // #[cfg(feature = "workflows")]

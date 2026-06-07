@@ -46,8 +46,8 @@ impl Job for GPSTrackingJob {
             chrono::Utc::now().timestamp_millis()
         );
         let gps_query = format!(
-            "insert $gps isa operation, has id \"{}\", has operation-id \"{}\", has assignment-id \"{}\", has job-type \"gps_update\", has status \"operational\", has timestamp {};",
-            unique_id, unique_id, self.assignment_id, timestamp
+            "insert $gps isa operation-event, has id \"{}\", has operation-id \"{}\", has job-type \"gps_update\", has event-status \"active\", has event-time {};",
+            unique_id, self.assignment_id, timestamp
         );
 
         let gps_update = serde_json::json!({

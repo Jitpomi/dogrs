@@ -4168,9 +4168,127 @@ startRealTimeUpdates() {
         this.hideDriverAssignmentPanel();
     }
     
-    showRouteOptimization() {
-        console.log('Showing route optimization...');
+    async showRouteOptimization() {
+        console.log('Showing route optimization panel...');
         this.hideDriverAssignmentPanel();
+
+        // Remove old panel if it exists
+        const existing = document.getElementById('route-optimization-panel');
+        if (existing) { existing.remove(); }
+
+        // Fetch active assignments from API
+        let activeAssignments = [];
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/operations`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-service-method': 'read' },
+                body: JSON.stringify({
+                    query: `
+                        match
+                        $assignment (assigned-employee: $employee, assigned-vehicle: $vehicle, assigned-delivery: $delivery) isa assignment,
+                            has assignment-status "active";
+                        $vehicle has vehicle-id $vehicleId;
+                        $delivery has delivery-id $deliveryId;
+                        select $vehicleId, $deliveryId;
+                    `
+                })
+            });
+            if (response.ok) {
+                const data = await response.json();
+                if (data.ok && data.ok.answers) {
+                    activeAssignments = data.ok.answers.map(a => ({
+                        vehicle_id: a.data?.vehicleId?.value || 'Unknown',
+                        delivery_id: a.data?.deliveryId?.value || 'Unknown',
+                    }));
+                }
+            }
+        } catch(e) {
+            console.warn('Could not fetch assignments for panel:', e);
+        }
+
+        const panel = document.createElement('div');
+        panel.id = 'route-optimization-panel';
+        panel.className = 'fixed z-50 bg-white rounded-lg shadow-xl border border-gray-200 w-80';
+
+        // Position next to nav, same as driver assignment panel
+        const navPanel = document.querySelector('nav');
+        if (navPanel) {
+            const navRect = navPanel.getBoundingClientRect();
+            panel.style.left = `${navRect.right + 16}px`;
+        } else {
+            panel.style.left = '288px';
+        }
+        panel.style.top = '1rem';
+        panel.style.maxHeight = 'calc(100vh - 2rem)';
+        panel.style.overflowY = 'auto';
+
+        const assignmentRows = activeAssignments.length > 0
+            ? activeAssignments.map(a => `
+                <div class="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
+                    <span class="text-lg">🚛</span>
+                    <div class="flex-1 min-w-0">
+                        <div class="text-sm font-medium text-slate-800 truncate">${a.vehicle_id}</div>
+                        <div class="text-xs text-slate-500 truncate">→ ${a.delivery_id}</div>
+                    </div>
+                    <span class="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">active</span>
+                </div>
+            `).join('')
+            : '<p class="text-sm text-slate-400 text-center py-2">No active assignments</p>';
+
+        panel.innerHTML = `
+            <div class="p-4 border-b border-gray-100">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-lg font-semibold text-slate-900">Route Optimization</h2>
+                    <button onclick="document.getElementById('route-optimization-panel').remove()"
+                        class="text-slate-400 hover:text-slate-600 p-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <p class="text-xs text-slate-500 mt-1">Trigger background route rebalancing via dog-queue</p>
+            </div>
+
+            <div class="p-4 space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Active Assignments (${activeAssignments.length})</label>
+                    <div class="border border-gray-200 rounded-lg px-3 py-1">
+                        ${assignmentRows}
+                    </div>
+                </div>
+
+                <div class="flex gap-3 pt-2">
+                    <button id="optimize-routes-btn" onclick="window.fleetCommand.triggerRouteOptimization(this)"
+                        class="flex-1 bg-blue-500 text-white px-4 py-2 text-sm rounded-lg hover:bg-blue-600 transition-colors font-medium">
+                        ⚡ Optimize All Routes
+                    </button>
+                    <button onclick="document.getElementById('route-optimization-panel').remove()"
+                        class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                        Cancel
+                    </button>
+                </div>
+                <p class="text-xs text-slate-400 text-center">
+                    Dispatches a <code class="text-blue-500">route_rebalancing</code> job to dog-queue
+                </p>
+            </div>
+        `;
+
+        document.body.appendChild(panel);
+    }
+
+    async triggerRouteOptimization(btn) {
+        btn.disabled = true;
+        btn.className = 'flex-1 bg-slate-400 text-white px-4 py-2 text-sm rounded-lg font-medium cursor-not-allowed';
+        btn.innerHTML = '⏳ Dispatching...';
+        try {
+            await this.optimizeRoutes();
+            btn.innerHTML = '✅ Job dispatched!';
+            btn.className = 'flex-1 bg-green-500 text-white px-4 py-2 text-sm rounded-lg font-medium cursor-not-allowed';
+        } catch(e) {
+            btn.innerHTML = '❌ Failed — retry?';
+            btn.disabled = false;
+            btn.className = 'flex-1 bg-red-500 text-white px-4 py-2 text-sm rounded-lg hover:bg-red-600 transition-colors font-medium';
+        }
     }
     
     // Driver Assignment Panel

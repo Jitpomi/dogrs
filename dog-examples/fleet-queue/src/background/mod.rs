@@ -93,6 +93,20 @@ impl BackgroundSystem {
         Ok(())
     }
 
+    /// Enqueue a Route Rebalancing job
+    pub async fn enqueue_route_rebalancing(
+        &self,
+        affected_routes: Vec<String>,
+        traffic_delay_minutes: i32,
+        trigger_reason: String,
+    ) -> Result<()> {
+        let ctx = QueueCtx::new("fleet_tenant".to_string());
+        let job = RouteRebalancingJob::new(affected_routes, traffic_delay_minutes, trigger_reason);
+
+        self.adapter.enqueue(ctx, job).await?;
+        Ok(())
+    }
+
     /// Get system statistics
     pub async fn get_stats(&self) -> Result<Value> {
         Ok(serde_json::json!({
