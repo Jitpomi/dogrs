@@ -1,5 +1,3 @@
-//! Library template created with FerrisUp
-
 //! dog-core: framework-agnostic core for DogRS.
 
 pub mod app;
@@ -10,19 +8,17 @@ pub mod service;
 pub mod tenant;
 pub mod events;
 pub mod errors;
-pub mod schema;
 
 #[cfg(feature = "adapters")]
 pub mod adapters;
 
 pub use app::{DogApp, ServiceCaller};
-pub use config::{DogConfig, DogConfigSnapshot };
+pub use config::{DogConfig, DogConfigSnapshot};
 pub use hooks::{
     DogAfterHook, DogAroundHook, DogBeforeHook, DogErrorHook, HookContext, Next, ServiceHooks, HookResult,
 };
 pub use registry::DogServiceRegistry;
 pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};
 pub use tenant::{TenantContext, TenantId};
-pub use events::{DogEventHub, ServiceEventKind, ServiceEventData, method_to_standard_event, };
+pub use events::{DogEventHub, ServiceEventKind, ServiceEventData, method_to_standard_event};
 pub use errors::{DogError, ErrorKind, DogResult};
-pub use schema::{HookMeta, ResolveData, Rules, SchemaHooksExt, ValidateData, WriteMethods};

@@ -1,38 +1,45 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, spanned::Spanned, Attribute, ItemMod, LitBool, LitStr, Meta, NestedMeta};
+use syn::{parse_macro_input, spanned::Spanned, Attribute, ItemMod, LitBool, LitStr};
 
 #[proc_macro_attribute]
 pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let mut service: Option<LitStr> = None;
     let mut error_message: Option<LitStr> = None;
     let mut backend: Option<LitStr> = None;
 
+    // syn 2: parse attribute args with syn::meta::parser instead of AttributeArgs/NestedMeta
+    let schema_attr_parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("service") {
+            service = Some(meta.value()?.parse()?);
+            Ok(())
+        } else if meta.path.is_ident("error_message") {
+            error_message = Some(meta.value()?.parse()?);
+            Ok(())
+        } else if meta.path.is_ident("backend") {
+            backend = Some(meta.value()?.parse()?);
+            Ok(())
+        } else {
+            Err(meta.error("unknown #[schema] argument"))
+        }
+    });
+    parse_macro_input!(args with schema_attr_parser);
+
     let mut module = parse_macro_input!(item as ItemMod);
 
-    for arg in args {
-        match arg {
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("service") => {
-                if let syn::Lit::Str(s) = nv.lit {
-                    service = Some(s);
-                }
-            }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("error_message") => {
-                if let syn::Lit::Str(s) = nv.lit {
-                    error_message = Some(s);
-                }
-            }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("backend") => {
-                if let syn::Lit::Str(s) = nv.lit {
-                    backend = Some(s);
-                }
-            }
-            _ => {}
+    // `service` is required — emit a compile error rather than silently defaulting to ""
+    // which would produce a runtime "service not found" failure.
+    let service = match service {
+        Some(s) => s,
+        None => {
+            return syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[schema] requires a `service` argument: #[schema(service = \"my_service\")]",
+            )
+            .to_compile_error()
+            .into();
         }
-    }
-
-    let service = service.unwrap_or_else(|| LitStr::new("", proc_macro2::Span::call_site()));
+    };
     let error_message = error_message
         .unwrap_or_else(|| LitStr::new("Schema validation failed", proc_macro2::Span::call_site()));
     let backend = backend.unwrap_or_else(|| LitStr::new("built_in", proc_macro2::Span::call_site()));
@@ -64,8 +71,14 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
             .into();
     };
 
-    let create_rules = collect_field_rules(&create_struct);
-    let patch_rules = patch_struct.as_ref().map(collect_field_rules);
+    let create_rules = match collect_field_rules(&create_struct) {
+        Ok(r) => r,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let patch_rules = match patch_struct.as_ref().map(collect_field_rules).transpose() {
+        Ok(r) => r,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
     // Remove internal marker attrs so they don't reach rustc.
     // They are only inputs to this macro.
@@ -74,7 +87,7 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     let create_ident = create_struct.ident.clone();
     let patch_ident = patch_struct.as_ref().map(|s| s.ident.clone());
 
-    let resolve_create_fn = gen_resolve_create(&create_rules, &error_message);
+    let resolve_create_fn = gen_resolve_create(&create_rules);
     let validate_create_fn = gen_validate_create(&create_rules, &error_message, &backend, &create_ident);
     let validate_patch_fn = patch_rules
         .as_ref()
@@ -106,24 +119,25 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(quote!(#module))
 }
 
+// syn 2: attr.path() is now a method (was a field `attr.path` in syn 1)
 fn has_marker_attr(attrs: &[Attribute], name: &str) -> bool {
-    attrs.iter().any(|a| a.path.is_ident(name))
+    attrs.iter().any(|a| a.path().is_ident(name))
 }
 
-fn strip_internal_attrs(items: &mut Vec<syn::Item>) {
+fn strip_internal_attrs(items: &mut [syn::Item]) {
     for it in items.iter_mut() {
         if let syn::Item::Struct(s) = it {
             s.attrs.push(syn::parse_quote!(#[allow(dead_code)]));
 
-            // strip #[create]/#[patch]
+            // strip #[create]/#[patch] — syn 2: a.path() is a method
             s.attrs.retain(|a| {
-                !(a.path.is_ident("create") || a.path.is_ident("patch"))
+                !(a.path().is_ident("create") || a.path().is_ident("patch"))
             });
 
             // strip #[dog(...)] on fields
             if let syn::Fields::Named(named) = &mut s.fields {
                 for f in named.named.iter_mut() {
-                    f.attrs.retain(|a| !a.path.is_ident("dog"));
+                    f.attrs.retain(|a| !a.path().is_ident("dog"));
                 }
             }
         }
@@ -141,18 +155,23 @@ enum FieldKind {
 struct FieldRule {
     json_key: String,
     kind: FieldKind,
+    /// When true, `resolve_create` trims the stored string value.
+    ///
+    /// Note: validation (non-empty, min_len, max_len) **always** uses the trimmed
+    /// value regardless of this flag, to prevent whitespace-only submissions.
     trim: bool,
     min_len: Option<usize>,
+    max_len: Option<usize>,
     default_bool: Option<bool>,
     optional: bool,
 }
 
-fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
+fn collect_field_rules(st: &syn::ItemStruct) -> Result<Vec<FieldRule>, syn::Error> {
     let mut rules = Vec::new();
 
     let fields = match &st.fields {
         syn::Fields::Named(n) => &n.named,
-        _ => return rules,
+        _ => return Ok(rules),
     };
 
     for f in fields {
@@ -164,56 +183,73 @@ fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
             kind: field_kind(&f.ty),
             trim: false,
             min_len: None,
+            max_len: None,
             default_bool: None,
             optional: is_option_type(&f.ty),
         };
 
-        // Allow: #[dog(...)] on fields
+        // syn 2: parse #[dog(...)] using attr.parse_nested_meta() instead of
+        // attr.parse_meta() + NestedMeta iteration.
         for attr in &f.attrs {
-            if !attr.path.is_ident("dog") {
+            if !attr.path().is_ident("dog") {
                 continue;
             }
-            if let Ok(meta) = attr.parse_meta() {
-                match meta {
-                    Meta::List(list) => {
-                        for nested in list.nested {
-                            match nested {
-                                NestedMeta::Meta(Meta::Path(p)) => {
-                                    if p.is_ident("trim") {
-                                        rule.trim = true;
-                                    } else if p.is_ident("optional") {
-                                        rule.optional = true;
-                                    }
-                                }
-                                NestedMeta::Meta(Meta::List(ml)) => {
-                                    if ml.path.is_ident("min_len") {
-                                        if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
-                                            if let Ok(v) = n.base10_parse::<usize>() {
-                                                rule.min_len = Some(v);
-                                            }
-                                        }
-                                    }
-                                }
-                                NestedMeta::Meta(Meta::NameValue(nv)) => {
-                                    if nv.path.is_ident("default") {
-                                        if let syn::Lit::Bool(LitBool { value, .. }) = nv.lit {
-                                            rule.default_bool = Some(value);
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("trim") {
+                    rule.trim = true;
+                } else if meta.path.is_ident("optional") {
+                    rule.optional = true;
+                } else if meta.path.is_ident("min_len") {
+                    // #[dog(min_len(5))]  — parse the parenthesised integer
+                    let content;
+                    syn::parenthesized!(content in meta.input);
+                    let n: syn::LitInt = content.parse()?;
+                    rule.min_len = Some(n.base10_parse()?);
+                } else if meta.path.is_ident("max_len") {
+                    // #[dog(max_len(100))]
+                    let content;
+                    syn::parenthesized!(content in meta.input);
+                    let n: syn::LitInt = content.parse()?;
+                    rule.max_len = Some(n.base10_parse()?);
+                } else if meta.path.is_ident("default") {
+                    // #[dog(default = true)]
+                    // syn 2: meta.value()?.parse() — value() returns &ParseBuffer
+                    let value: LitBool = meta.value()?.parse()?;
+                    rule.default_bool = Some(value.value());
+                } else {
+                    // Silently ignore unknown #[dog] attributes (e.g. `relation`) —
+                    // they may carry metadata for other layers that this macro doesn't act on.
+                    // Consume any value token if present so the parser doesn't choke.
+                    if meta.input.peek(syn::Token![=]) {
+                        let _: syn::Token![=] = meta.input.parse()?;
+                        let _: proc_macro2::TokenTree = meta.input.parse()?;
+                    } else if meta.input.peek(syn::token::Paren) {
+                        let content;
+                        syn::parenthesized!(content in meta.input);
+                        let _: proc_macro2::TokenStream = content.parse()?;
                     }
-                    _ => {}
                 }
+                Ok(())
+            })?;
+        }
+
+        // Compile-time consistency: min_len must not exceed max_len.
+        if let (Some(mn), Some(mx)) = (rule.min_len, rule.max_len) {
+            if mn > mx {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    format!(
+                        "field `{}`: min_len({mn}) cannot exceed max_len({mx})",
+                        rule.json_key
+                    ),
+                ));
             }
         }
 
         rules.push(rule);
     }
 
-    rules
+    Ok(rules)
 }
 
 fn is_option_type(ty: &syn::Type) -> bool {
@@ -262,7 +298,12 @@ fn field_kind(ty: &syn::Type) -> FieldKind {
     }
 }
 
-fn gen_resolve_create(rules: &[FieldRule], _error_message: &LitStr) -> proc_macro2::TokenStream {
+/// Generates `resolve_create`: trims fields marked with `#[dog(trim)]` and
+/// applies `#[dog(default = ...)]` values for missing boolean fields.
+///
+/// Validation (non-empty / min_len) always trims regardless of the `trim`
+/// flag — see `gen_validate_create` and `gen_validate_patch`.
+fn gen_resolve_create(rules: &[FieldRule]) -> proc_macro2::TokenStream {
     // trim string fields + apply default bools if missing
     let trim_stmts = rules
         .iter()
@@ -286,7 +327,7 @@ fn gen_resolve_create(rules: &[FieldRule], _error_message: &LitStr) -> proc_macr
     });
 
     quote! {
-        pub fn resolve_create<P>(data: &mut serde_json::Value, _meta: &dog_core::schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        pub fn resolve_create<P>(data: &mut serde_json::Value, _meta: &dog_schema::schema_hooks::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
         where
             P: Send + Clone + 'static,
         {
@@ -312,7 +353,7 @@ fn gen_validate_create(
         return quote! {
             pub fn validate_create<P>(
                 data: &serde_json::Value,
-                _meta: &dog_core::schema::HookMeta<serde_json::Value, P>,
+                _meta: &dog_schema::schema_hooks::HookMeta<serde_json::Value, P>,
             ) -> anyhow::Result<()>
             where
                 P: Send + Clone + 'static,
@@ -326,13 +367,24 @@ fn gen_validate_create(
     let checks = rules.iter().map(|r| {
         let key = &r.json_key;
         let min_len = r.min_len;
+        let max_len = r.max_len;
 
         match r.kind {
             FieldKind::String => {
                 let min_len_check = if let Some(n) = min_len {
                     quote! {
-                        if v.chars().count() < #n {
+                        if v.trim().chars().count() < #n {
                             errs.push_field(#key, format!("must be at least {} chars", #n));
+                        }
+                    }
+                } else {
+                    quote! {}
+                };
+
+                let max_len_check = if let Some(n) = max_len {
+                    quote! {
+                        if v.trim().chars().count() > #n {
+                            errs.push_field(#key, format!("must be at most {} chars", #n));
                         }
                     }
                 } else {
@@ -346,6 +398,7 @@ fn gen_validate_create(
                                 errs.push_field(#key, "must not be empty");
                             }
                             #min_len_check
+                            #max_len_check
                         }
                     }
                 } else {
@@ -358,6 +411,7 @@ fn gen_validate_create(
                                         errs.push_field(#key, "must not be empty");
                                     }
                                     #min_len_check
+                                    #max_len_check
                                 } else {
                                     errs.push_field(#key, "must be a string");
                                 }
@@ -405,7 +459,7 @@ fn gen_validate_create(
     });
 
     quote! {
-        pub fn validate_create<P>(data: &serde_json::Value, _meta: &dog_core::schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        pub fn validate_create<P>(data: &serde_json::Value, _meta: &dog_schema::schema_hooks::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
         where
             P: Send + Clone + 'static,
         {
@@ -436,7 +490,7 @@ fn gen_validate_patch(
         return quote! {
             pub fn validate_patch<P>(
                 data: &serde_json::Value,
-                _meta: &dog_core::schema::HookMeta<serde_json::Value, P>,
+                _meta: &dog_schema::schema_hooks::HookMeta<serde_json::Value, P>,
             ) -> anyhow::Result<()>
             where
                 P: Send + Clone + 'static,
@@ -450,13 +504,24 @@ fn gen_validate_patch(
     let checks = rules.iter().map(|r| {
         let key = &r.json_key;
         let min_len = r.min_len;
+        let max_len = r.max_len;
 
         match r.kind {
             FieldKind::String => {
                 let min_len_check = if let Some(n) = min_len {
                     quote! {
-                        if v.chars().count() < #n {
+                        if v.trim().chars().count() < #n {
                             errs.push_field(#key, format!("must be at least {} chars", #n));
+                        }
+                    }
+                } else {
+                    quote! {}
+                };
+
+                let max_len_check = if let Some(n) = max_len {
+                    quote! {
+                        if v.trim().chars().count() > #n {
+                            errs.push_field(#key, format!("must be at most {} chars", #n));
                         }
                     }
                 } else {
@@ -472,6 +537,7 @@ fn gen_validate_patch(
                                 errs.push_field(#key, "must not be empty");
                             }
                             #min_len_check
+                            #max_len_check
                         } else {
                             errs.push_field(#key, "must be a string");
                         }
@@ -490,19 +556,14 @@ fn gen_validate_patch(
                 }
             }
             FieldKind::Other => {
-                quote! {
-                    if let Some(val) = obj.get(#key) {
-                        if val.is_null() {
-                            // allow null
-                        }
-                    }
-                }
+                // Patch: no type check for unknown field types — allow any value.
+                quote! {}
             }
         }
     });
 
     quote! {
-        pub fn validate_patch<P>(data: &serde_json::Value, _meta: &dog_core::schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        pub fn validate_patch<P>(data: &serde_json::Value, _meta: &dog_schema::schema_hooks::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
         where
             P: Send + Clone + 'static,
         {
@@ -540,11 +601,12 @@ fn gen_register_fn(service: &LitStr, has_patch: bool) -> proc_macro2::TokenStrea
         where
             P: Send + Clone + 'static,
         {
-            use dog_core::schema::SchemaHooksExt;
+            use dog_schema::schema_hooks::SchemaHooksExt;
 
             app.service(#svc_lit)?.hooks(|h| {
                 h.schema(|s| {
-                    s.on_create().resolve(resolve_create).validate(validate_create);
+                    s.on_create().resolve(resolve_create);
+                    s.on_create().validate(validate_create);
                     #patch
                     s.on_update().validate(validate_create);
                 });

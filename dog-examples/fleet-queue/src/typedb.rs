@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use anyhow::Result;
 use dog_core::DogApp;
-use typedb_driver::{TypeDBDriver, Credentials, DriverOptions};
+use typedb_driver::{Addresses, TypeDBDriver, Credentials, DriverOptions, DriverTlsConfig};
 use dog_typedb::{adapter::TypeDBState as TypeDBStateTrait, load_schema_from_file, execute_typedb_query};
 use super::FleetParams;
 
@@ -31,8 +31,10 @@ impl TypeDBState {
         let tls = app.get::<String>("typedb.tls").and_then(|s| s.parse().ok()).unwrap_or(false);
 
         let credentials = Credentials::new(&username, &password);
-        let options = DriverOptions::new(tls, None)?;
-        let driver = Arc::new(TypeDBDriver::new(&address, credentials, options).await?);
+        let tls_config = if tls { DriverTlsConfig::default() } else { DriverTlsConfig::disabled() };
+        let options = DriverOptions::new(tls_config);
+        let addresses = Addresses::try_from_address_str(&address).map_err(|e| anyhow::anyhow!(e))?;
+        let driver = Arc::new(TypeDBDriver::new(addresses, credentials, options).await?);
 
         // Create database if it doesn't exist
         if !driver.databases().all().await?.iter().any(|db| db.name() == database) {

@@ -567,12 +567,13 @@ impl RustFsAdapter {
 
     /// Decode audio using Symphonia to get real PCM samples
     async fn decode_audio_with_symphonia(&self, audio_data: &[u8]) -> Result<Vec<f32>> {
-        use symphonia::core::audio::{AudioBufferRef, Signal};
-        use symphonia::core::codecs::DecoderOptions;
-        use symphonia::core::formats::FormatOptions;
+        // symphonia 0.6: Hint moved to formats::probe, AudioBufferRef → GenericAudioBufferRef,
+        // DecoderOptions → AudioDecoderOptions, probe.format() → probe.probe()
+        use symphonia::core::audio::{GenericAudioBufferRef, Audio}; // Audio trait needed for iter_planes()
+        use symphonia::core::codecs::{audio::AudioDecoderOptions, CodecParameters};
+        use symphonia::core::formats::{FormatOptions, probe::Hint};
         use symphonia::core::io::MediaSourceStream;
         use symphonia::core::meta::MetadataOptions;
-        use symphonia::core::probe::Hint;
         use std::io::Cursor;
 
         let cursor = Cursor::new(audio_data.to_vec());
@@ -584,91 +585,107 @@ impl RustFsAdapter {
         let meta_opts = MetadataOptions::default();
         let fmt_opts = FormatOptions::default();
 
-        let probed = symphonia::default::get_probe()
-            .format(&hint, media_source, &fmt_opts, &meta_opts)
+        // 0.6: probe() returns Box<dyn FormatReader> directly (no .format field)
+        let mut format = symphonia::default::get_probe()
+            .probe(&hint, media_source, fmt_opts, meta_opts)
             .map_err(|e| anyhow::anyhow!("Failed to probe audio format: {}", e))?;
 
-        let mut format = probed.format;
+        // 0.6: codec_params is Option<CodecParameters::Audio(...)>
         let track = format
             .tracks()
             .iter()
-            .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+            .find(|t| matches!(&t.codec_params, Some(CodecParameters::Audio(_))))
             .ok_or_else(|| anyhow::anyhow!("No supported audio tracks found"))?;
 
-        let dec_opts = DecoderOptions::default();
+        let audio_params = match &track.codec_params {
+            Some(CodecParameters::Audio(p)) => p,
+            _ => return Err(anyhow::anyhow!("Expected audio codec parameters")),
+        };
+
+        // 0.6: use make_audio_decoder with AudioDecoderOptions
+        let dec_opts = AudioDecoderOptions::default();
         let mut decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &dec_opts)
+            .make_audio_decoder(audio_params, &dec_opts)
             .map_err(|e| anyhow::anyhow!("Failed to create decoder: {}", e))?;
 
         let track_id = track.id;
         let mut samples = Vec::new();
 
-        // Decode packets and collect samples
+        // Decode packets and collect samples.
+        // 0.6: next_packet() returns Result<Option<Packet>> — None means EOF.
         loop {
             let packet = match format.next_packet() {
-                Ok(packet) => packet,
+                Ok(Some(packet)) => packet,
+                Ok(None) => break, // EOF
                 Err(symphonia::core::errors::Error::ResetRequired) => {
-                    // Reset decoder and continue
                     decoder.reset();
                     continue;
                 }
-                Err(symphonia::core::errors::Error::IoError(e)) 
+                Err(symphonia::core::errors::Error::IoError(e))
                     if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(e) => return Err(anyhow::anyhow!("Format error: {}", e)),
             };
 
-            if packet.track_id() != track_id {
+            if packet.track_id != track_id {
                 continue;
             }
 
             match decoder.decode(&packet) {
                 Ok(audio_buf) => {
-                    // Convert audio buffer to f32 samples
-                    match audio_buf {
-                        AudioBufferRef::F32(buf) => {
-                            // For stereo, take left channel or mix to mono
-                            let chan = buf.chan(0);
-                            samples.extend_from_slice(chan);
+                    // 0.6: GenericAudioBufferRef, chan(0) → iter_planes().next()
+                    let first_chan: Vec<f32> = match audio_buf {
+                        GenericAudioBufferRef::F32(buf) => {
+                            buf.iter_planes().next().map(|p| p.to_vec()).unwrap_or_default()
                         }
-                        AudioBufferRef::U8(buf) => {
-                            let chan = buf.chan(0);
-                            samples.extend(chan.iter().map(|&s| (s as f32 - 128.0) / 128.0));
+                        GenericAudioBufferRef::U8(buf) => {
+                            buf.iter_planes().next().map(|p| {
+                                p.iter().map(|&s| (s as f32 - 128.0) / 128.0).collect()
+                            }).unwrap_or_default()
                         }
-                        AudioBufferRef::U16(buf) => {
-                            let chan = buf.chan(0);
-                            samples.extend(chan.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
+                        GenericAudioBufferRef::U16(buf) => {
+                            buf.iter_planes().next().map(|p| {
+                                p.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).collect()
+                            }).unwrap_or_default()
                         }
-                        AudioBufferRef::U24(buf) => {
-                            let chan = buf.chan(0);
-                            samples.extend(chan.iter().map(|&s| s.inner() as f32 / 8388608.0));
+                        GenericAudioBufferRef::U24(buf) => {
+                            buf.iter_planes().next().map(|p| {
+                                p.iter().map(|&s| s.inner() as f32 / 8388608.0).collect()
+                            }).unwrap_or_default()
                         }
-                        AudioBufferRef::U32(buf) => {
-                            let chan = buf.chan(0);
-                            samples.extend(chan.iter().map(|&s| (s as f32 - 2147483648.0) / 2147483648.0));
+                        GenericAudioBufferRef::U32(buf) => {
+                            buf.iter_planes().next().map(|p| {
+                                p.iter().map(|&s| (s as f64 - 2147483648.0) as f32 / 2147483648.0).collect()
+                            }).unwrap_or_default()
                         }
-                        AudioBufferRef::S8(buf) => {
-                            let chan = buf.chan(0);
-                            samples.extend(chan.iter().map(|&s| s as f32 / 128.0));
+                        GenericAudioBufferRef::S8(buf) => {
+                            buf.iter_planes().next().map(|p| {
+                                p.iter().map(|&s| s as f32 / 128.0).collect()
+                            }).unwrap_or_default()
                         }
-                        AudioBufferRef::S16(buf) => {
-                            let chan = buf.chan(0);
-                            samples.extend(chan.iter().map(|&s| s as f32 / 32768.0));
+                        GenericAudioBufferRef::S16(buf) => {
+                            buf.iter_planes().next().map(|p| {
+                                p.iter().map(|&s| s as f32 / 32768.0).collect()
+                            }).unwrap_or_default()
                         }
-                        AudioBufferRef::S24(buf) => {
-                            let chan = buf.chan(0);
-                            samples.extend(chan.iter().map(|&s| s.inner() as f32 / 8388608.0));
+                        GenericAudioBufferRef::S24(buf) => {
+                            buf.iter_planes().next().map(|p| {
+                                p.iter().map(|&s| s.inner() as f32 / 8388608.0).collect()
+                            }).unwrap_or_default()
                         }
-                        AudioBufferRef::S32(buf) => {
-                            let chan = buf.chan(0);
-                            samples.extend(chan.iter().map(|&s| s as f32 / 2147483648.0));
+                        GenericAudioBufferRef::S32(buf) => {
+                            buf.iter_planes().next().map(|p| {
+                                p.iter().map(|&s| s as f64 as f32 / 2147483648.0).collect()
+                            }).unwrap_or_default()
                         }
-                        AudioBufferRef::F64(buf) => {
-                            let chan = buf.chan(0);
-                            samples.extend(chan.iter().map(|&s| s as f32));
+                        GenericAudioBufferRef::F64(buf) => {
+                            buf.iter_planes().next().map(|p| {
+                                p.iter().map(|&s| s as f32).collect()
+                            }).unwrap_or_default()
                         }
-                    }
+                    };
+                    samples.extend(first_chan);
                 }
-                Err(symphonia::core::errors::Error::IoError(e)) 
+                Err(symphonia::core::errors::Error::IoError(e))
                     if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(symphonia::core::errors::Error::DecodeError(e)) => {
                     println!("⚠️ Decode error: {}", e);

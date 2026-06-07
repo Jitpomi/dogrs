@@ -4,24 +4,24 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.102"
 async-trait = "0.1.89"
-axum = { version = "0.8.8", features = ["macros", "json"] }
-chrono = { version = "0.4.41", features = ["serde"] }
-dog-axum = "0.1.6"
-dog-core = { version = "0.1.6", features = ["serde", "adapters"] }
-dog-schema = "0.1.6"
-dog-schema-validator = "0.1.6"
-futures = "0.3.31"
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter"] }
+axum = { version = "0.8.9", features = ["macros", "json"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+dog-axum = { path = "../../dog-axum" }
+dog-core = { path = "../../dog-core", features = ["serde", "adapters"] }
+dog-schema = { path = "../../dog-schema" }
+dog-schema-validator = { path = "../../dog-schema-validator" }
+futures = "0.3.32"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "time"] }
-uuid = { version = "1.18.1", features = ["v4", "serde"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "time"] }
+uuid = { version = "1.23.2", features = ["v4", "serde"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
 [dev-dependencies]
-anyhow = "1.0.100"
-tower = "0.5.2"
+anyhow = "1.0.102"
+tower = "0.5.3"
 http-body-util = "0.1.3"

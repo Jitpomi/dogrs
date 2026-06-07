@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use dog_core::tenant::TenantContext;
 use dog_core::{DogService, ServiceCapabilities};
-use typedb_driver::{Credentials, DriverOptions, TypeDBDriver};
+use typedb_driver::{Addresses, Credentials, DriverOptions, DriverTlsConfig, TypeDBDriver};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -196,8 +196,10 @@ pub struct TypeDBDriverFactory;
 
 impl TypeDBDriverFactory {
     pub async fn connect(address: &str, username: &str, password: &str, tls: bool) -> Result<TypeDBDriver> {
-        let options = DriverOptions::new(tls, None).map_err(|e| anyhow!(e))?;
-        TypeDBDriver::new(address, Credentials::new(username, password), options)
+        let tls_config = if tls { DriverTlsConfig::default() } else { DriverTlsConfig::disabled() };
+        let options = DriverOptions::new(tls_config);
+        let addresses = Addresses::try_from_address_str(address).map_err(|e| anyhow!(e))?;
+        TypeDBDriver::new(addresses, Credentials::new(username, password), options)
             .await
             .map_err(|e| anyhow!(e))
     }
