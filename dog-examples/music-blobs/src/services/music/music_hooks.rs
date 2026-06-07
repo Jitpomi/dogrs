@@ -18,8 +18,10 @@ impl DogBeforeHook<Value, MusicParams> for ProcessMulterParams {
                 if let Some(ref mut data) = ctx.data {
                     // Try to read the file data to check for thumbnail
                     if let Ok(file_data) = extract_file_data(data).await {
+                        println!("🎵 Hook read file data ({} bytes)", file_data.len());
                         // Extract cover thumbnail
                         if let Some((mime, img_bytes)) = crate::metadata::audio::AudioMetadataExtractor::extract_raw_album_art(&file_data) {
+                            println!("🖼️ Hook extracted album art! Mime: {}, {} bytes", mime, img_bytes.len());
                             let key = data.get("key").and_then(|k| k.as_str()).unwrap_or("unknown");
                             let cover_key = format!("{}_cover", key);
                             let bucket = std::env::var("RUSTFS_BUCKET").unwrap_or_else(|_| "music-blobs".to_string());
@@ -33,6 +35,8 @@ impl DogBeforeHook<Value, MusicParams> for ProcessMulterParams {
                                 .body(cover_stream)
                                 .send()
                                 .await;
+                            
+                            println!("✅ Hook uploaded cover art to S3!");
                                 
                             // Add album_art_url="true" to the JSON metadata so frontend knows the cover exists
                             if let Some(obj) = data.as_object_mut() {
@@ -43,8 +47,13 @@ impl DogBeforeHook<Value, MusicParams> for ProcessMulterParams {
                                     meta.insert("album_art_url".to_string(), serde_json::json!("true"));
                                     obj.insert("metadata".to_string(), serde_json::Value::Object(meta));
                                 }
+                                println!("✅ Hook injected album_art_url='true' into metadata");
                             }
+                        } else {
+                            println!("❌ Hook could not find APIC frame in MP3");
                         }
+                    } else {
+                        println!("❌ Hook failed to extract file data using temp_path");
                     }
                 }
             }
@@ -55,7 +64,7 @@ impl DogBeforeHook<Value, MusicParams> for ProcessMulterParams {
 
 async fn extract_file_data(request_data: &Value) -> Result<Vec<u8>> {
     if let Some(file) = request_data.get("file") {
-        if let Some(path) = file.get("path").and_then(|p| p.as_str()) {
+        if let Some(path) = file.get("temp_path").and_then(|p| p.as_str()) {
             return Ok(tokio::fs::read(path).await?);
         }
     }
