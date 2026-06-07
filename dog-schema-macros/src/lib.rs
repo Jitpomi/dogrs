@@ -128,7 +128,7 @@ fn has_marker_attr(attrs: &[Attribute], name: &str) -> bool {
     attrs.iter().any(|a| a.path.is_ident(name))
 }
 
-fn strip_internal_attrs(items: &mut Vec<syn::Item>) {
+fn strip_internal_attrs(items: &mut [syn::Item]) {
     for it in items.iter_mut() {
         if let syn::Item::Struct(s) = it {
             s.attrs.push(syn::parse_quote!(#[allow(dead_code)]));
@@ -197,45 +197,38 @@ fn collect_field_rules(st: &syn::ItemStruct) -> Result<Vec<FieldRule>, syn::Erro
             if !attr.path.is_ident("dog") {
                 continue;
             }
-            if let Ok(meta) = attr.parse_meta() {
-                match meta {
-                    Meta::List(list) => {
-                        for nested in list.nested {
-                            match nested {
-                                NestedMeta::Meta(Meta::Path(p)) => {
-                                    if p.is_ident("trim") {
-                                        rule.trim = true;
-                                    } else if p.is_ident("optional") {
-                                        rule.optional = true;
-                                    }
-                                }
-                                NestedMeta::Meta(Meta::List(ml)) => {
-                                    if ml.path.is_ident("min_len") {
-                                        if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
-                                            if let Ok(v) = n.base10_parse::<usize>() {
-                                                rule.min_len = Some(v);
-                                            }
-                                        }
-                                    } else if ml.path.is_ident("max_len") {
-                                        if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
-                                            if let Ok(v) = n.base10_parse::<usize>() {
-                                                rule.max_len = Some(v);
-                                            }
-                                        }
-                                    }
-                                }
-                                NestedMeta::Meta(Meta::NameValue(nv)) => {
-                                    if nv.path.is_ident("default") {
-                                        if let syn::Lit::Bool(LitBool { value, .. }) = nv.lit {
-                                            rule.default_bool = Some(value);
-                                        }
-                                    }
-                                }
-                                _ => {}
+            if let Ok(Meta::List(list)) = attr.parse_meta() {
+                for nested in list.nested {
+                    match nested {
+                        NestedMeta::Meta(Meta::Path(p)) => {
+                            if p.is_ident("trim") {
+                                rule.trim = true;
+                            } else if p.is_ident("optional") {
+                                rule.optional = true;
                             }
                         }
+                        NestedMeta::Meta(Meta::List(ml)) => {
+                            if ml.path.is_ident("min_len") {
+                                if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
+                                    if let Ok(v) = n.base10_parse::<usize>() {
+                                        rule.min_len = Some(v);
+                                    }
+                                }
+                            } else if ml.path.is_ident("max_len") {
+                                if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
+                                    if let Ok(v) = n.base10_parse::<usize>() {
+                                        rule.max_len = Some(v);
+                                    }
+                                }
+                            }
+                        }
+                        NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("default") => {
+                            if let syn::Lit::Bool(LitBool { value, .. }) = nv.lit {
+                                rule.default_bool = Some(value);
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
