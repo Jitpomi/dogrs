@@ -158,56 +158,27 @@ pub async fn execute_typedb_query(
     database: &str,
     query: &str,
 ) -> Result<Value> {
-    println!("DEBUG: execute_typedb_query called with query: {}", query);
-
     let analysis = analyze_query(query);
 
-    println!(
-        "DEBUG: Query analysis completed. Transaction type: {:?}",
-        analysis.transaction_type
-    );
-
     match analysis.transaction_type {
-        TransactionType::Read => {
-            println!("DEBUG: Dispatching to execute_read_query");
-            execute_read_query(driver, database, query).await
-        }
-        TransactionType::Write => {
-            println!("DEBUG: Dispatching to execute_write_query");
-            execute_write_query(driver, database, query).await
-        }
-        TransactionType::Schema => {
-            println!("DEBUG: Dispatching to execute_schema_query");
-            execute_schema_query(driver, database, query).await
-        }
+        TransactionType::Read => execute_read_query(driver, database, query).await,
+        TransactionType::Write => execute_write_query(driver, database, query).await,
+        TransactionType::Schema => execute_schema_query(driver, database, query).await,
     }
 }
 
 async fn execute_read_query(driver: &TypeDBDriver, database: &str, query: &str) -> Result<Value> {
-    println!("=== EXECUTE_READ_QUERY START ===");
-    println!("Query: {}", query);
-
     let tx = driver
         .transaction(database, typedb_driver::TransactionType::Read)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create read transaction: {}", e))?;
-
-    println!("=== TRANSACTION CREATED ===");
 
     let answer = tx
         .query(query)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to execute read query: {}", e))?;
 
-    println!("=== TX.QUERY() COMPLETED - ABOUT TO CALL typedb_answer_to_http_ok ===");
-
-    // Consume answer while tx is alive
-    let res = typedb_answer_to_http_ok(answer, "read", query, 10_000).await;
-
-    println!("=== typedb_answer_to_http_ok RETURNED ===");
-
-    // read tx auto-closes on drop
-    res
+    typedb_answer_to_http_ok(answer, "read", query, 10_000).await
 }
 
 /// Execute a query with forced read transaction type
@@ -217,30 +188,17 @@ pub async fn execute_read_transaction(
     database: &str,
     query: &str,
 ) -> Result<Value> {
-    println!("=== EXECUTE_READ_TRANSACTION START (FORCED READ) ===");
-    println!("Query: {}", query);
-
     let tx = driver
         .transaction(database, typedb_driver::TransactionType::Read)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create read transaction: {}", e))?;
-
-    println!("=== READ TRANSACTION CREATED ===");
 
     let answer = tx
         .query(query)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to execute query with read transaction: {}", e))?;
 
-    println!("=== TX.QUERY() COMPLETED - ABOUT TO CALL typedb_answer_to_http_ok ===");
-
-    // Consume answer while tx is alive
-    let res = typedb_answer_to_http_ok(answer, "read", query, 10_000).await;
-
-    println!("=== typedb_answer_to_http_ok RETURNED ===");
-
-    // read tx auto-closes on drop
-    res
+    typedb_answer_to_http_ok(answer, "read", query, 10_000).await
 }
 
 async fn execute_write_query(driver: &TypeDBDriver, database: &str, query: &str) -> Result<Value> {
@@ -288,35 +246,23 @@ async fn execute_schema_query(driver: &TypeDBDriver, database: &str, query: &str
     Ok(res)
 }
 
-/// Convert Rust driver QueryAnswer into TypeDB HTTP API-style { ok: { ... } }.
-/// Uses official TypeDB driver API: into_documents() and into_rows() with proper type checking.
 async fn typedb_answer_to_http_ok(
     answer: typedb_driver::answer::QueryAnswer,
     query_type: &str,
     query: &str,
     max_answers: usize,
 ) -> Result<Value> {
-    // CRITICAL DEBUG: This should appear if our function is called
-    println!("=== TYPEDB_ANSWER_TO_HTTP_OK CALLED ===");
-    println!("Query: {}", query);
-    println!("QueryType: {}", query_type);
-
-    // Use direct enum matching - this is the ONLY safe way to handle QueryAnswer
     match answer {
-        typedb_driver::answer::QueryAnswer::Ok(_) => {
-            println!("DEBUG: Processing Ok response");
-            Ok(json!({
-                "ok": {
-                    "queryType": query_type,
-                    "answerType": "ok",
-                    "answers": [],
-                    "query": query,
-                    "warning": null
-                }
-            }))
-        }
+        typedb_driver::answer::QueryAnswer::Ok(_) => Ok(json!({
+            "ok": {
+                "queryType": query_type,
+                "answerType": "ok",
+                "answers": [],
+                "query": query,
+                "warning": null
+            }
+        })),
         typedb_driver::answer::QueryAnswer::ConceptDocumentStream(_, mut stream) => {
-            println!("DEBUG: Processing ConceptDocumentStream");
             let mut answers = Vec::new();
             let mut truncated = false;
 
@@ -341,9 +287,7 @@ async fn typedb_answer_to_http_ok(
                 }
             }))
         }
-
         typedb_driver::answer::QueryAnswer::ConceptRowStream(_, mut stream) => {
-            println!("DEBUG: Processing ConceptRowStream");
             let mut answers = Vec::new();
             let mut truncated = false;
 
@@ -446,14 +390,11 @@ fn format_concept(concept: &typedb_driver::concept::Concept) -> Result<Value> {
     }
 }
 
-/// Loads TypeDB schema from multiple files (schema.tql, functions.tql, etc.)
 pub async fn load_schema_from_file(
     driver: &TypeDBDriver,
     database: &str,
     schema_paths: &[&str],
 ) -> Result<Value> {
-    println!("Loading TypeDB schema files...");
-
     let schema_files = ["schema.tql", "functions.tql"];
     let mut loaded_files = Vec::new();
     let mut responses = Vec::new();
@@ -461,7 +402,6 @@ pub async fn load_schema_from_file(
     for file_name in &schema_files {
         let mut file_content = None;
 
-        // Try to find the file in any of the provided paths
         for base_path in schema_paths {
             let full_path = if base_path.ends_with(file_name) {
                 base_path.to_string()
@@ -469,29 +409,22 @@ pub async fn load_schema_from_file(
                 format!("{}/{}", base_path.trim_end_matches('/'), file_name)
             };
 
-            println!("Checking for {} at: {}", file_name, full_path);
             if let Ok(content) = fs::read_to_string(&full_path) {
-                println!("Found {} at: {}", file_name, full_path);
                 file_content = Some(content);
                 break;
             }
         }
 
         if let Some(content) = file_content {
-            println!("Loading {} ({} characters)...", file_name, content.len());
             match execute_typedb_query(driver, database, &content).await {
                 Ok(response) => {
-                    println!("Successfully loaded {}", file_name);
                     loaded_files.push(file_name.to_string());
                     responses.push(response);
                 }
                 Err(e) => {
-                    println!("Warning: Failed to load {}: {}", file_name, e);
-                    // Continue with other files - some schema files might be optional
+                    eprintln!("Warning: Failed to load {}: {}", file_name, e);
                 }
             }
-        } else {
-            println!("File {} not found in any of the provided paths", file_name);
         }
     }
 
@@ -502,12 +435,6 @@ pub async fn load_schema_from_file(
         ));
     }
 
-    println!(
-        "TypeDB schema loading completed. Loaded files: {:?}",
-        loaded_files
-    );
-
-    // Return the last successful response, or a summary
     Ok(json!({
         "ok": {
             "message": format!("Successfully loaded {} schema files: {}", loaded_files.len(), loaded_files.join(", ")),
