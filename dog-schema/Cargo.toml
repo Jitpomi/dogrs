@@ -12,7 +12,7 @@ categories = ["data-structures", "development-tools"]
 readme = "README.md"
 
 [dependencies]
-dog-core = { path = "../dog-core", version = "0.1.8", features = ["serde"] }
+dog-core = { path = "../dog-core", version = "0.1.8", features = ["json"] }
 serde_json = "1"
 anyhow = "1"
 

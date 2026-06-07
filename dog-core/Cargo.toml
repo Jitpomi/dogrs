@@ -20,12 +20,13 @@ serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 
 [features]
-default = []
-serde = ["dep:serde", "dep:serde_json"]
+default = ["json"]
+json = ["dep:serde_json", "serde"]
+serde = ["dep:serde"]
 adapters = []
 
 [dev-dependencies]
-
+serde_json = "1"
 [lib]
 name = "dog_core"
 path = "src/lib.rs"
