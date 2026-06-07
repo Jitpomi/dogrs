@@ -36,8 +36,8 @@ impl DogService<Value, FleetParams> for VehiclesService {
         _params: FleetParams,
     ) -> Result<Value> {
         match method {
-            "read" => self.adapter.read(data.unwrap()).await,
-            "write" => self.adapter.write(data.unwrap()).await,
+            "read" => self.adapter.read(data.ok_or_else(|| DogError::new(ErrorKind::BadRequest, "Missing request body".to_string()).into_anyhow())?).await,
+            "write" => self.adapter.write(data.ok_or_else(|| DogError::new(ErrorKind::BadRequest, "Missing request body".to_string()).into_anyhow())?).await,
             _ => Err(DogError::new(
                 ErrorKind::MethodNotAllowed,
                 format!("Unknown method: {}", method),
