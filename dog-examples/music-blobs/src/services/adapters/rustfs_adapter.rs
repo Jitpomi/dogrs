@@ -878,6 +878,4 @@ impl RustFsAdapter {
         let curved = enhanced.tanh() * 0.8; // Apply curve with gentle limiting
         (curved + 1.0) / 2.0 // Map back to [0, 1]
     }
-
-
 }

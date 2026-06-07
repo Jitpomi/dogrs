@@ -494,7 +494,11 @@ impl TomTomAdapter {
             }
         }
 
-        Err(anyhow::anyhow!("No address found for coordinates: {}, {}", lat, lng))
+        Err(anyhow::anyhow!(
+            "No address found for coordinates: {}, {}",
+            lat,
+            lng
+        ))
     }
 
     /// Handle traffic check requests using TomTom Traffic Flow API

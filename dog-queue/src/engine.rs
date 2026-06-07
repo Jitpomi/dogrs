@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
-    backend::QueueBackend, codec::CodecRegistry,
-    observability::ObservabilityLayer, Job, JobId, QueueCtx, QueueError, QueueResult,
+    backend::QueueBackend, codec::CodecRegistry, observability::ObservabilityLayer, Job, JobId,
+    QueueCtx, QueueError, QueueResult,
 };
 
 /// Production-grade queue engine with multi-tenant semantics
@@ -51,7 +51,12 @@ impl<B: QueueBackend> QueueEngine<B> {
     }
 
     /// Execute job immediately (for tests/dev - bypasses durable storage)
-    pub async fn execute_now<J: Job>(&self, ctx: QueueCtx, job: J, execution_context: J::Context) -> QueueResult<J::Result> {
+    pub async fn execute_now<J: Job>(
+        &self,
+        ctx: QueueCtx,
+        job: J,
+        execution_context: J::Context,
+    ) -> QueueResult<J::Result> {
         // This is for local testing/development - direct execution
         // In production, jobs are processed by workers via dequeue
 
@@ -68,8 +73,6 @@ impl<B: QueueBackend> QueueEngine<B> {
 
         Ok(result)
     }
-
-
 
     /// Get backend reference
     pub fn backend(&self) -> &B {
