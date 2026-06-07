@@ -99,3 +99,28 @@ builder.on_str("messages.created", Arc::new(|data, ctx| { ... }));
 
 ## 🛠️ Additional Optimizations
 For schema validation macros, ensure your `register` function accepts `&mut DogAppBuilder` instead of `&DogApp`.
+
+---
+
+## 🔀 `dog-axum` Routing Decoupling: `use_service_as`
+We fixed a subtle routing issue introduced by the immutable `DogApp` architecture.
+
+### What Changed?
+Before the refactor, calling `ax.use_service("/auth", auth_svc)` dynamically mutated `DogApp` to register the service internally as `"auth"`. Because `DogApp` is now immutable, `use_service` can no longer register services. It must look them up. 
+
+Because `dog-axum` derives the lookup name from the HTTP path, `ax.use_service("/auth", ...)` searched for a service named `"auth"`. However, if the service was registered in `DogAppBuilder` under a different name (e.g. `builder.register_service("authentication", ...)`), `dog-axum` would throw a 500 error (`DogService not found`) at runtime.
+
+### The Fix
+We introduced `.use_service_as()` to `AxumApp` to permanently decouple the HTTP path from the internal service name. This acknowledges that `dog-axum` is just a transport layer mapping URLs to internal services.
+
+### How to Migrate
+If your HTTP endpoint matches the internal registered name, continue using `use_service`:
+```rust
+ax.use_service("/users", svcs.users); // Path /users looks up "users"
+```
+
+If your HTTP endpoint differs from the internal name, use `use_service_as`:
+```rust
+// Registers endpoint /auth but routes it through the internal "authentication" service
+ax.use_service_as("/auth", "authentication", svcs.auth_svc);
+```

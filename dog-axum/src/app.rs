@@ -154,14 +154,26 @@ where
         self.use_get(path, handler)
     }
 
-    pub fn use_service(mut self, path: &'static str, _service: Arc<dyn DogService<R, P>>) -> Self
+    pub fn use_service(self, path: &'static str, service: Arc<dyn DogService<R, P>>) -> Self
     where
         R: Serialize + DeserializeOwned,
         P: FromRestParams,
     {
         let name = path.trim_start_matches('/');
+        self.use_service_as(path, name, service)
+    }
 
-        let service_name = Arc::new(name.to_string());
+    pub fn use_service_as(
+        mut self,
+        path: &'static str,
+        service_name: &'static str,
+        _service: Arc<dyn DogService<R, P>>,
+    ) -> Self
+    where
+        R: Serialize + DeserializeOwned,
+        P: FromRestParams,
+    {
+        let service_name = Arc::new(service_name.to_string());
         let mut router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
 
         // Apply pending middleware to this service router
@@ -174,9 +186,9 @@ where
     }
 
     pub fn use_service_with<L>(
-        mut self,
+        self,
         path: &'static str,
-        _service: Arc<dyn DogService<R, P>>,
+        service: Arc<dyn DogService<R, P>>,
         middleware: L,
     ) -> Self
     where
@@ -189,8 +201,26 @@ where
         <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
     {
         let name = path.trim_start_matches('/');
+        self.use_service_as_with(path, name, service, middleware)
+    }
 
-        let service_name = Arc::new(name.to_string());
+    pub fn use_service_as_with<L>(
+        mut self,
+        path: &'static str,
+        service_name: &'static str,
+        _service: Arc<dyn DogService<R, P>>,
+        middleware: L,
+    ) -> Self
+    where
+        R: Serialize + DeserializeOwned,
+        P: FromRestParams,
+        L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
+        L::Service:
+            tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
+        <L::Service as tower::Service<Request<Body>>>::Future: Send,
+        <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
+    {
+        let service_name = Arc::new(service_name.to_string());
         let router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
 
         // Apply the specific middleware to this service router

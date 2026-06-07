@@ -25,7 +25,7 @@ pub async fn auth_app() -> Result<AxumApp<Value, AuthDemoParams>> {
     ax = ax
         .use_service("/messages", svcs.messages)
         .use_service("/users", svcs.users)
-        .use_service("/auth", svcs.auth_svc)
+        .use_service_as("/auth", "authentication", svcs.auth_svc)
         .use_service("/oauth", svcs.oauth);
 
     let ax = crate::auth::oauth2::google::http::mount(ax);
