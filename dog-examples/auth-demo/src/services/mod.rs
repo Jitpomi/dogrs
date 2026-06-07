@@ -3,7 +3,7 @@ use dog_core::DogService;
 use serde_json::Value;
 use std::sync::Arc;
 
-use dog_auth::AuthenticationService;
+
 
 pub mod types;
 pub use types::AuthDemoParams;
