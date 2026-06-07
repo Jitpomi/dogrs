@@ -422,7 +422,10 @@ pub async fn load_schema_from_file(
                     responses.push(response);
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to load {}: {}", file_name, e);
+                    let msg = e.to_string();
+                    if !msg.contains("already exists") {
+                        eprintln!("Warning: Failed to load {}: {}", file_name, e);
+                    }
                 }
             }
         }
