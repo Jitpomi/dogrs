@@ -1119,31 +1119,6 @@ function hideAllIndicators() {
     if (noUsersFound) noUsersFound.classList.add('hidden');
 }
 
-function getSamplePosts() {
-    const samplePosts = [
-        {
-            author: 'Mia Lewis',
-            initials: 'ML',
-            content: 'Excited to share that our ML team at Google just launched a new feature! The power of graph databases in understanding user connections is incredible. #MachineLearning #Google',
-            time: '2 hours ago'
-        },
-        {
-            author: 'Alex Chen',
-            initials: 'AC',
-            content: 'Looking for talented engineers to join our team at Google. We\'re working on some amazing projects in the AI space. DM me if interested! #Hiring #AI #Google',
-            time: '4 hours ago'
-        },
-        {
-            author: 'John Smith',
-            initials: 'JS',
-            content: 'Just had an amazing coffee chat with a friend who works at Google. The tech industry is all about connections and relationships. #Networking #TechCareers',
-            time: '6 hours ago'
-        }
-    ];
-    
-    return samplePosts.map(post => createPostCard(post.author, post.initials, post.content, post.time)).join('');
-}
-
 async function loadSuggestedConnections() {
     try {
         // Get current user dynamically
@@ -1306,38 +1281,6 @@ async function loadTrendingTopics() {
             </div>
         `;
     }
-}
-
-function getSampleTrending() {
-    return `
-        <div class="p-3 rounded-lg hover:bg-blue-50 transition-colors duration-150 cursor-pointer">
-            <div class="flex items-center justify-between">
-                <div>
-                    <div class="text-body font-semibold" style="color: var(--primary-blue);">#TechJobs</div>
-                    <div class="text-caption" style="color: var(--neutral-500);">No posts yet</div>
-                </div>
-                <i class="fas fa-arrow-up text-green-500 text-sm"></i>
-            </div>
-        </div>
-        <div class="p-3 rounded-lg hover:bg-green-50 transition-colors duration-150 cursor-pointer">
-            <div class="flex items-center justify-between">
-                <div>
-                    <div class="text-body font-semibold" style="color: var(--success-green);">#RemoteWork</div>
-                    <div class="text-caption" style="color: var(--neutral-500);">No posts yet</div>
-                </div>
-                <i class="fas fa-arrow-up text-green-500 text-sm"></i>
-            </div>
-        </div>
-        <div class="p-3 rounded-lg hover:bg-purple-50 transition-colors duration-150 cursor-pointer">
-            <div class="flex items-center justify-between">
-                <div>
-                    <div class="text-body font-semibold" style="color: #8b5cf6;">#AI</div>
-                    <div class="text-caption" style="color: var(--neutral-500);">No posts yet</div>
-                </div>
-                <i class="fas fa-arrow-up text-green-500 text-sm"></i>
-            </div>
-        </div>
-    `;
 }
 
 async function loadNetwork() {
