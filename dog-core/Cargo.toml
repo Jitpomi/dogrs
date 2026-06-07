@@ -1,6 +1,6 @@
 [package]
 name = "dog-core"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Core traits and utilities for the DogRS ecosystem - a modular Rust framework for building scalable applications"
@@ -11,26 +11,22 @@ keywords = ["framework", "async", "traits", "core"]
 categories = ["development-tools", "asynchronous"]
 readme = "README.md"
 
-[package.metadata]
-
-[package.metadata.ferrisup]
-component_type = "library"
-
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = "0.1.89"
-anyhow = "1.0.100"
-serde = { version = "1.0.228", features = ["derive"], optional = true }
-serde_json = { version = "1.0.145", optional = true }
+async-trait = "0.1"
+anyhow = "1"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 
 [features]
-default = []
-serde = ["dep:serde", "dep:serde_json"]
+default = ["json"]
+json = ["dep:serde_json", "serde"]
+serde = ["dep:serde"]
 adapters = []
 
 [dev-dependencies]
-
+serde_json = "1"
 [lib]
 name = "dog_core"
 path = "src/lib.rs"
