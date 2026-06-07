@@ -4,6 +4,11 @@ All notable changes to the `dog-core` crate will be documented in this file.
 
 ## [0.1.8] — 2026-06-07 — Schema Eviction (Breaking)
 
+> **Also in this release:** All ecosystem crates upgraded to latest dependency versions.
+> See individual changelogs: [`dog-typedb`](../dog-typedb/CHANGELOG.md),
+> [`dog-auth-oauth`](../dog-auth-oauth/CHANGELOG.md),
+> [`dog-schema-macros`](../dog-schema-macros/CHANGELOG.md).
+
 ### Breaking Changes
 - **Removed:** All schema validation logic (`ValidateData`, `ResolveData`, `HookMeta`,
   `SchemaHooksExt`, `Rules`, `WriteMethods`) has been removed from `dog-core`.
