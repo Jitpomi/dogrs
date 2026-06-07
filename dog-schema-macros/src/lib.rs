@@ -331,7 +331,7 @@ fn gen_validate_create(
             FieldKind::String => {
                 let min_len_check = if let Some(n) = min_len {
                     quote! {
-                        if v.chars().count() < #n {
+                        if v.trim().chars().count() < #n {
                             errs.push_field(#key, format!("must be at least {} chars", #n));
                         }
                     }
@@ -455,7 +455,7 @@ fn gen_validate_patch(
             FieldKind::String => {
                 let min_len_check = if let Some(n) = min_len {
                     quote! {
-                        if v.chars().count() < #n {
+                        if v.trim().chars().count() < #n {
                             errs.push_field(#key, format!("must be at least {} chars", #n));
                         }
                     }
@@ -544,7 +544,8 @@ fn gen_register_fn(service: &LitStr, has_patch: bool) -> proc_macro2::TokenStrea
 
             app.service(#svc_lit)?.hooks(|h| {
                 h.schema(|s| {
-                    s.on_create().resolve(resolve_create).validate(validate_create);
+                    s.on_create().resolve(resolve_create);
+                    s.on_create().validate(validate_create);
                     #patch
                     s.on_update().validate(validate_create);
                 });

@@ -3,6 +3,7 @@ pub use dog_schema_macros::schema;
 use dog_core::errors::DogError;
 use serde_json::{json, Map, Value};
 
+#[must_use = "call into_unprocessable_anyhow() to propagate errors"]
 #[derive(Default)]
 pub struct SchemaErrors {
     map: Map<String, Value>,
@@ -19,13 +20,15 @@ impl SchemaErrors {
 
     fn push_to(map: &mut Map<String, Value>, key: &str, msg: impl Into<String>) {
         let msg = Value::String(msg.into());
-        match map.get_mut(key) {
-            Some(Value::Array(arr)) => arr.push(msg),
-            Some(_) => {
-                map.insert(key.to_string(), Value::Array(vec![msg]));
-            }
-            None => {
-                map.insert(key.to_string(), Value::Array(vec![msg]));
+        match map
+            .entry(key.to_string())
+            .or_insert_with(|| Value::Array(Vec::new()))
+        {
+            Value::Array(arr) => arr.push(msg),
+            slot => {
+                // Defensive: key held a non-array value — replace it.
+                // This cannot happen via the public push_schema/push_field API.
+                *slot = Value::Array(vec![msg]);
             }
         }
     }
