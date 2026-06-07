@@ -39,7 +39,11 @@ pub async fn build() -> anyhow::Result<AxumApp<Value, FleetParams>> {
         .use_service("/jobs", _svcs.jobs)
         .use_service("/rules", _svcs.rules)
         .use_service("/certifications", _svcs.certifications)
-        .service("/health", || async { "ok" });
+        .service("/health", || async { "ok" })
+        .service("/config", || async {
+            let key = std::env::var("TOMTOM_API_KEY").unwrap_or_default();
+            format!("{{\"tomtomApiKey\":\"{}\"}}", key)
+        });
 
     // Start background system with built app
     background_system.start(dog_app).await?;

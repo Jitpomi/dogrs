@@ -1,7 +1,7 @@
 class FleetCommandPro {
     constructor() {
         this.apiBaseUrl = 'http://127.0.0.1:3036';
-         this.tomtomApiKey = 'c1xp5uxxF9W7z0tPjNcQC48nQlABojKH';
+        this.tomtomApiKey = null;
         this.map = null;
         this.vehicleMarkers = new Map();
         this.deliveryMarkers = new Map();
@@ -28,13 +28,14 @@ class FleetCommandPro {
     }
     
     async init() {
-        
+        const cfg = await fetch(`${this.apiBaseUrl}/config`).then(r => r.json()).catch(() => ({}));
+        this.tomtomApiKey = cfg.tomtomApiKey || '';
+
         this.setupEventListeners();
         this.initializeMap();
         await this.loadAllData();
         this.startRealTimeUpdates();
         this.updateUI();
-        
     }
     
     setupEventListeners() {
