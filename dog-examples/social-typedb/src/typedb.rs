@@ -2,7 +2,7 @@ use super::SocialParams;
 use anyhow::Result;
 use dog_typedb::{adapter::TypeDBState as TypeDBStateTrait, load_schema_from_file};
 use std::sync::Arc;
-use typedb_driver::{Credentials, DriverOptions, TypeDBDriver};
+use typedb_driver::{Addresses, Credentials, DriverOptions, DriverTlsConfig, TypeDBDriver};
 
 #[derive(Clone)]
 pub struct TypeDBState {
@@ -42,8 +42,10 @@ impl TypeDBState {
             .unwrap_or(false);
 
         let credentials = Credentials::new(&username, &password);
-        let options = DriverOptions::new(tls, None)?;
-        let driver = Arc::new(TypeDBDriver::new(&address, credentials, options).await?);
+        let tls_config = if tls { DriverTlsConfig::default() } else { DriverTlsConfig::disabled() };
+        let options = DriverOptions::new(tls_config);
+        let addresses = Addresses::try_from_address_str(&address)?;
+        let driver = Arc::new(TypeDBDriver::new(addresses, credentials, options).await?);
 
         // Create database if it doesn't exist
         if !driver

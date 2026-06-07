@@ -1,9 +1,11 @@
 use dog_blob::BlobMetadata;
 use std::io::Cursor;
 use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::codecs::CodecParameters;
+use symphonia::core::codecs::audio::CODEC_ID_NULL_AUDIO;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 
 /// Audio metadata extractor for various formats
 pub struct AudioMetadataExtractor;
@@ -112,15 +114,15 @@ impl AudioMetadataExtractor {
         let format_opts = FormatOptions::default();
         let metadata_opts = MetadataOptions::default();
 
-        let probed = match symphonia::default::get_probe().format(
+        let format = match symphonia::default::get_probe().probe(
             &hint,
             media_source,
-            &format_opts,
-            &metadata_opts,
+            format_opts,
+            metadata_opts,
         ) {
-            Ok(probed) => {
+            Ok(fmt) => {
                 println!("✅ Symphonia successfully probed the audio format");
-                probed
+                fmt
             }
             Err(e) => {
                 println!("❌ Symphonia probe failed: {:?}", e);
@@ -128,43 +130,50 @@ impl AudioMetadataExtractor {
             }
         };
 
-        let format = probed.format;
-
         // Extract track information and calculate proper duration
         let (sample_rate, channels, bitrate) = {
+            // symphonia 0.6: codec_params is Option<CodecParameters> enum;
+            // time_base and num_frames are on Track, not codec_params
             let track = format
                 .tracks()
                 .iter()
-                .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)?;
+                .find(|t| {
+                    matches!(&t.codec_params, Some(CodecParameters::Audio(p)) if p.codec != CODEC_ID_NULL_AUDIO)
+                })?;
 
-            println!("🎵 Found track with codec: {:?}", track.codec_params.codec);
+            let audio_params = match &track.codec_params {
+                Some(CodecParameters::Audio(params)) => params,
+                _ => return None,
+            };
 
-            let codec_params = &track.codec_params;
-            let sample_rate = codec_params.sample_rate;
-            let channels = codec_params.channels.map(|ch| ch.count() as u32);
+            println!("🎵 Found audio track with codec: {:?}", audio_params.codec);
+
+            let sample_rate = audio_params.sample_rate;
+            let channels = audio_params.channels.as_ref().map(|ch| ch.count() as u32);
 
             println!(
                 "📊 Codec params - Sample rate: {:?}, Channels: {:?}",
                 sample_rate, channels
             );
             println!(
-                "📊 Time base: {:?}, N frames: {:?}",
-                codec_params.time_base, codec_params.n_frames
+                "📊 Time base: {:?}, Num frames: {:?}",
+                track.time_base, track.num_frames
             );
 
-            // Calculate duration from symphonia's codec parameters
-            let duration = if let (Some(time_base), Some(n_frames)) =
-                (codec_params.time_base, codec_params.n_frames)
+            // Calculate duration from track-level time_base and num_frames (symphonia 0.6)
+            let duration = if let (Some(time_base), Some(num_frames)) =
+                (track.time_base, track.num_frames)
             {
+                // symphonia 0.6: time_base.numer/denom are NonZero<u32> — call .get()
                 let duration_seconds =
-                    (n_frames as f64 * time_base.numer as f64) / time_base.denom as f64;
+                    (num_frames as f64 * time_base.numer.get() as f64) / time_base.denom.get() as f64;
                 println!(
                     "🕐 Calculated duration from symphonia time base: {:.2}s",
                     duration_seconds
                 );
                 Some(duration_seconds as u32)
             } else {
-                println!("❌ Could not calculate duration - no time base or sample rate");
+                println!("❌ Could not calculate duration - no time base or num_frames");
                 None
             };
 

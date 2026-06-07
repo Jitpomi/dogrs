@@ -1,38 +1,52 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, spanned::Spanned, Attribute, ItemMod, LitBool, LitStr, Meta, NestedMeta,
+    parse_macro_input, spanned::Spanned, Attribute, Expr, ExprLit, ItemMod, Lit, LitBool, LitStr,
+    Meta,
 };
 
+// ---------------------------------------------------------------------------
+// Top-level attribute args parser  (#[schema(service = "...", ...)])
+// ---------------------------------------------------------------------------
+struct SchemaArgs {
+    service: Option<LitStr>,
+    error_message: Option<LitStr>,
+    backend: Option<LitStr>,
+}
+
+impl syn::parse::Parse for SchemaArgs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut service = None;
+        let mut error_message = None;
+        let mut backend = Option::None;
+
+        let metas =
+            syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated(input)?;
+        for meta in metas {
+            if let Meta::NameValue(nv) = meta {
+                let key = nv.path.get_ident().map(|i| i.to_string()).unwrap_or_default();
+                if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = nv.value {
+                    match key.as_str() {
+                        "service"       => service       = Some(s),
+                        "error_message" => error_message = Some(s),
+                        "backend"       => backend       = Some(s),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(SchemaArgs { service, error_message, backend })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #[schema] proc-macro entry point
+// ---------------------------------------------------------------------------
 #[proc_macro_attribute]
 pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
-    let mut service: Option<LitStr> = None;
-    let mut error_message: Option<LitStr> = None;
-    let mut backend: Option<LitStr> = None;
+    let SchemaArgs { service, error_message, backend } = parse_macro_input!(args as SchemaArgs);
 
     let mut module = parse_macro_input!(item as ItemMod);
-
-    for arg in args {
-        match arg {
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("service") => {
-                if let syn::Lit::Str(s) = nv.lit {
-                    service = Some(s);
-                }
-            }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("error_message") => {
-                if let syn::Lit::Str(s) = nv.lit {
-                    error_message = Some(s);
-                }
-            }
-            NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("backend") => {
-                if let syn::Lit::Str(s) = nv.lit {
-                    backend = Some(s);
-                }
-            }
-            _ => {}
-        }
-    }
 
     let service = service.unwrap_or_else(|| LitStr::new("", proc_macro2::Span::call_site()));
     let error_message = error_message
@@ -76,7 +90,6 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     let patch_rules = patch_struct.as_ref().map(collect_field_rules);
 
     // Remove internal marker attrs so they don't reach rustc.
-    // They are only inputs to this macro.
     strip_internal_attrs(items);
 
     let create_ident = create_struct.ident.clone();
@@ -97,8 +110,6 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
 
     let register_fn = gen_register_fn(&service, patch_rules.is_some());
 
-    // Append generated functions into the existing module body.
-    // (This keeps the module name stable: `posts_schema::register(...)`)
     if let Ok(it) = syn::parse2::<syn::Item>(resolve_create_fn) {
         items.push(it);
     }
@@ -117,8 +128,11 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(quote!(#module))
 }
 
+// ---------------------------------------------------------------------------
+// Attribute helpers — syn 2.x: path() is a METHOD, not a field
+// ---------------------------------------------------------------------------
 fn has_marker_attr(attrs: &[Attribute], name: &str) -> bool {
-    attrs.iter().any(|a| a.path.is_ident(name))
+    attrs.iter().any(|a| a.path().is_ident(name))
 }
 
 fn strip_internal_attrs(items: &mut [syn::Item]) {
@@ -128,18 +142,21 @@ fn strip_internal_attrs(items: &mut [syn::Item]) {
 
             // strip #[create]/#[patch]
             s.attrs
-                .retain(|a| !(a.path.is_ident("create") || a.path.is_ident("patch")));
+                .retain(|a| !(a.path().is_ident("create") || a.path().is_ident("patch")));
 
             // strip #[dog(...)] on fields
             if let syn::Fields::Named(named) = &mut s.fields {
                 for f in named.named.iter_mut() {
-                    f.attrs.retain(|a| !a.path.is_ident("dog"));
+                    f.attrs.retain(|a| !a.path().is_ident("dog"));
                 }
             }
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// FieldRule extraction
+// ---------------------------------------------------------------------------
 #[derive(Clone)]
 enum FieldKind {
     String,
@@ -180,36 +197,49 @@ fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
             optional: is_option_type(&f.ty),
         };
 
-        // Allow: #[dog(...)] on fields
+        // Parse #[dog(trim, min_len(3), default = false)] on fields
         for attr in &f.attrs {
-            if !attr.path.is_ident("dog") {
+            if !attr.path().is_ident("dog") {
                 continue;
             }
-            if let Ok(Meta::List(list)) = attr.parse_meta() {
-                for nested in list.nested {
-                    match nested {
-                        NestedMeta::Meta(Meta::Path(p)) => {
-                            if p.is_ident("trim") {
-                                rule.trim = true;
-                            } else if p.is_ident("optional") {
-                                rule.optional = true;
+            // syn 2.x: attr.meta is a field; Meta::List carries tokens
+            if let Meta::List(ref list) = attr.meta {
+                // parse the comma-separated inner meta items from tokens
+                let nested = list.parse_args_with(
+                    syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+                );
+                if let Ok(metas) = nested {
+                    for meta in metas {
+                        match meta {
+                            Meta::Path(p) => {
+                                if p.is_ident("trim") {
+                                    rule.trim = true;
+                                } else if p.is_ident("optional") {
+                                    rule.optional = true;
+                                }
                             }
-                        }
-                        NestedMeta::Meta(Meta::List(ml)) => {
-                            if ml.path.is_ident("min_len") {
-                                if let Some(NestedMeta::Lit(syn::Lit::Int(n))) = ml.nested.first() {
-                                    if let Ok(v) = n.base10_parse::<usize>() {
-                                        rule.min_len = Some(v);
+                            Meta::List(ml) => {
+                                // min_len(3)
+                                if ml.path.is_ident("min_len") {
+                                    if let Ok(n) = ml.parse_args::<syn::LitInt>() {
+                                        if let Ok(v) = n.base10_parse::<usize>() {
+                                            rule.min_len = Some(v);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        NestedMeta::Meta(Meta::NameValue(nv)) if nv.path.is_ident("default") => {
-                            if let syn::Lit::Bool(LitBool { value, .. }) = nv.lit {
-                                rule.default_bool = Some(value);
+                            // syn 2.x: MetaNameValue.value is Expr, not Lit
+                            Meta::NameValue(nv) if nv.path.is_ident("default") => {
+                                if let Expr::Lit(ExprLit {
+                                    lit: Lit::Bool(LitBool { value, .. }),
+                                    ..
+                                }) = nv.value
+                                {
+                                    rule.default_bool = Some(value);
+                                }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
             }
@@ -229,7 +259,6 @@ fn is_option_type(ty: &syn::Type) -> bool {
 }
 
 fn field_kind(ty: &syn::Type) -> FieldKind {
-    // Detect Option<T>
     let inner = match ty {
         syn::Type::Path(p) => {
             let last = p.path.segments.last();
@@ -263,8 +292,10 @@ fn field_kind(ty: &syn::Type) -> FieldKind {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Code generation — unchanged from original
+// ---------------------------------------------------------------------------
 fn gen_resolve_create(rules: &[FieldRule], _error_message: &LitStr) -> proc_macro2::TokenStream {
-    // trim string fields + apply default bools if missing
     let trim_stmts = rules
         .iter()
         .filter(|r| r.trim && matches!(r.kind, FieldKind::String))
@@ -290,7 +321,7 @@ fn gen_resolve_create(rules: &[FieldRule], _error_message: &LitStr) -> proc_macr
         });
 
     quote! {
-        pub fn resolve_create<P>(data: &mut serde_json::Value, _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        pub fn resolve_create<P>(data: &mut serde_json::Value, _meta: &dog_schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
         where
             P: Send + Clone + 'static,
         {
@@ -316,7 +347,7 @@ fn gen_validate_create(
         return quote! {
             pub fn validate_create<P>(
                 data: &serde_json::Value,
-                _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>,
+                _meta: &dog_schema::HookMeta<serde_json::Value, P>,
             ) -> anyhow::Result<()>
             where
                 P: Send + Clone + 'static,
@@ -394,7 +425,6 @@ fn gen_validate_create(
                 }
             }
             FieldKind::Other => {
-                // For MVP: only enforce presence for non-optional fields.
                 if r.optional {
                     quote! {}
                 } else {
@@ -409,7 +439,7 @@ fn gen_validate_create(
     });
 
     quote! {
-        pub fn validate_create<P>(data: &serde_json::Value, _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        pub fn validate_create<P>(data: &serde_json::Value, _meta: &dog_schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
         where
             P: Send + Clone + 'static,
         {
@@ -440,7 +470,7 @@ fn gen_validate_patch(
         return quote! {
             pub fn validate_patch<P>(
                 data: &serde_json::Value,
-                _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>,
+                _meta: &dog_schema::HookMeta<serde_json::Value, P>,
             ) -> anyhow::Result<()>
             where
                 P: Send + Clone + 'static,
@@ -506,7 +536,7 @@ fn gen_validate_patch(
     });
 
     quote! {
-        pub fn validate_patch<P>(data: &serde_json::Value, _meta: &dog_schema::hooks::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        pub fn validate_patch<P>(data: &serde_json::Value, _meta: &dog_schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
         where
             P: Send + Clone + 'static,
         {
@@ -544,7 +574,7 @@ fn gen_register_fn(service: &LitStr, has_patch: bool) -> proc_macro2::TokenStrea
         where
             P: Send + Clone + 'static,
         {
-            use dog_schema::hooks::SchemaHooksExt;
+            use dog_schema::SchemaHooksExt;
 
             builder.service_hooks(#svc_lit, |h| {
                 h.schema(|s| {
