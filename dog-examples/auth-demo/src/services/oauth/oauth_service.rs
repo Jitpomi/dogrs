@@ -1,4 +1,4 @@
-
+use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::tenant::TenantContext;
@@ -16,7 +16,8 @@ use crate::services::AuthDemoParams;
 use super::oauth_shared;
 
 pub struct OauthService {
-    app: dog_core::DogApp<Value, AuthDemoParams>,
+    auth: Arc<AuthenticationService<AuthDemoParams>>,
+    app: std::sync::OnceLock<dog_core::DogApp<Value, AuthDemoParams>>,
 }
 
 #[async_trait]
@@ -34,15 +35,15 @@ impl DogService<Value, AuthDemoParams> for OauthService {
     ) -> Result<Value> {
         match method {
             "google_login" => {
-                let url = self
-                    .app
+                let app = self.app.get().ok_or_else(|| anyhow::anyhow!("DogApp not setup"))?;
+                let url = app
                     .get::<String>("oauth.google.authorize_url")
                     .ok_or_else(|| anyhow::anyhow!("Missing oauth.google.authorize_url in app config"))?;
                 Ok(json!({ "location": url }))
             }
             "google_callback" => {
-                let auth = AuthenticationService::from_app(&self.app)
-                    .ok_or_else(|| anyhow::anyhow!("AuthenticationService missing from app state"))?;
+                let app = self.app.get().ok_or_else(|| anyhow::anyhow!("DogApp not setup"))?;
+                let auth = Arc::clone(&self.auth);
 
                 let provider = data
                     .as_ref()
@@ -67,8 +68,8 @@ impl DogService<Value, AuthDemoParams> for OauthService {
                     headers: params.headers.clone(),
                 };
 
-                let services = ServiceCaller::new(self.app.clone());
-                let config = self.app.config_snapshot();
+                let services = ServiceCaller::new(app.clone());
+                let config = app.config_snapshot();
                 let mut hook_ctx = HookContext::new(
                     tenant.clone(),
                     ServiceMethodKind::Create,
@@ -94,7 +95,14 @@ impl DogService<Value, AuthDemoParams> for OauthService {
 }
 
 impl OauthService {
-    pub fn new(app: dog_core::DogApp<Value, AuthDemoParams>) -> Self {
-        Self { app }
+    pub fn new(auth: Arc<AuthenticationService<AuthDemoParams>>) -> Self {
+        Self { 
+            auth,
+            app: std::sync::OnceLock::new(),
+        }
+    }
+
+    pub fn setup(&self, app: dog_core::DogApp<Value, AuthDemoParams>) {
+        let _ = self.app.set(app);
     }
 }

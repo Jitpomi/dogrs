@@ -21,18 +21,19 @@ pub fn crud_capabilities() -> ServiceCapabilities {
 }
 
 pub fn register_hooks(
-    app: &dog_core::DogApp<serde_json::Value, AuthDemoParams>,
+    builder: &mut dog_core::DogAppBuilder<serde_json::Value, AuthDemoParams>,
+    auth_core: Arc<dog_auth::AuthenticationService<AuthDemoParams>>,
 ) -> anyhow::Result<()> {
-    super::users_schema::register(app)?;
+    super::users_schema::register(builder)?;
 
-    let local = app
+    let local = builder
         .get::<Arc<LocalStrategy<AuthDemoParams>>>("auth.local")
         .ok_or_else(|| anyhow!("Missing auth.local in app config"))?;
 
     let jwt: Arc<dyn DogBeforeHook<Value, AuthDemoParams>> =
-        Arc::new(AuthenticateHook::from_app(app, vec!["jwt".to_string()])?);
+        Arc::new(AuthenticateHook::new(auth_core, vec!["jwt".to_string()]));
 
-    app.service("users")?.hooks(|h| {
+    builder.service_hooks("users", |h| {
         h.before_create(Arc::new(HashPasswordHook::new("password", Arc::clone(&local))));
         // Protect everything except create/find
         h.before_get(Arc::clone(&jwt));

@@ -154,13 +154,12 @@ where
         self.use_get(path, handler)
     }
 
-    pub fn use_service(mut self, path: &'static str, service: Arc<dyn DogService<R, P>>) -> Self
+    pub fn use_service(mut self, path: &'static str, _service: Arc<dyn DogService<R, P>>) -> Self
     where
         R: Serialize + DeserializeOwned,
         P: FromRestParams,
     {
         let name = path.trim_start_matches('/');
-        self.app.register_service(name, service);
 
         let service_name = Arc::new(name.to_string());
         let mut router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
@@ -174,7 +173,7 @@ where
         self
     }
 
-    pub fn use_service_with<L>(mut self, path: &'static str, service: Arc<dyn DogService<R, P>>, middleware: L) -> Self
+    pub fn use_service_with<L>(mut self, path: &'static str, _service: Arc<dyn DogService<R, P>>, middleware: L) -> Self
     where
         R: Serialize + DeserializeOwned,
         P: FromRestParams,
@@ -184,7 +183,6 @@ where
         <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
     {
         let name = path.trim_start_matches('/');
-        self.app.register_service(name, service);
 
         let service_name = Arc::new(name.to_string());
         let router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use anyhow::Result;
-use dog_core::{DogApp, DogService};
+use dog_core::DogService;
 use serde_json::Value;
 
 
@@ -21,31 +21,31 @@ pub struct AuthServices {
     pub users: Arc<dyn DogService<Value, AuthDemoParams>>,
     pub auth_svc: Arc<dyn DogService<Value, AuthDemoParams>>,
     pub oauth: Arc<dyn DogService<Value, AuthDemoParams>>,
+    pub oauth_raw: Arc<oauth::OauthService>,
 }
 
-pub fn configure(app: &DogApp<Value, AuthDemoParams>) -> Result<AuthServices> {
+pub fn configure(builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>, auth_core: Arc<AuthenticationService<AuthDemoParams>>) -> Result<AuthServices> {
     // Create and register message service
     let messages: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::new(messages::MessagesService::new());
-    app.register_service("messages", Arc::clone(&messages));
-    messages::messages_shared::register_hooks(app)?;
+    builder.register_service("messages", Arc::clone(&messages));
+    messages::messages_shared::register_hooks(builder, auth_core.clone())?;
 
     let users: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::new(users::UsersService::new());
-    app.register_service("users", Arc::clone(&users));
-    users::users_shared::register_hooks(app)?;
+    builder.register_service("users", Arc::clone(&users));
+    users::users_shared::register_hooks(builder, auth_core.clone())?;
 
     // Register authentication service
-    let auth_core = AuthenticationService::from_app(app)
-        .ok_or_else(|| anyhow::anyhow!("AuthenticationService missing from app state; did you call crate::auth::strategies(&dog_app) during startup?"))?;
-    let auth_svc: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::new(authentication::AuthService::new(auth_core));
-    app.register_service("authentication", Arc::clone(&auth_svc));
-    authentication::authentication_shared::register_hooks(app)?;
+    let auth_svc: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::new(authentication::AuthService::new(auth_core.clone()));
+    builder.register_service("authentication", Arc::clone(&auth_svc));
+    authentication::authentication_shared::register_hooks(builder)?;
 
     // Register oauth service
-    let oauth: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::new(oauth::OauthService::new(app.clone()));
-    app.register_service("oauth", Arc::clone(&oauth));
-    oauth::oauth_shared::register_hooks(app)?;
+    let oauth_raw = Arc::new(oauth::OauthService::new(auth_core.clone()));
+    let oauth: Arc<dyn DogService<Value, AuthDemoParams>> = Arc::clone(&oauth_raw) as _;
+    builder.register_service("oauth", Arc::clone(&oauth));
+    oauth::oauth_shared::register_hooks(builder)?;
 
 
-    Ok(AuthServices { messages, users, auth_svc, oauth })
+    Ok(AuthServices { messages, users, auth_svc, oauth, oauth_raw })
 }
 

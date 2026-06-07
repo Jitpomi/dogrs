@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::core::{AuthenticationBase, AuthenticationParams, AuthenticationRequest, AuthenticationResult, ConnectionEvent, JwtOverrides};
 use crate::options::AuthOptions;
+use crate::hooks::authenticate::AuthenticateHookParams;
 
 pub const AUTHENTICATION_KEY: &str = "authentication";
 pub const AUTHENTICATION_OPTIONS_KEY: &str = "authentication.options";
@@ -25,30 +26,32 @@ impl<P> AuthenticationService<P>
 where
     P: Send + Clone + 'static,
 {
-    pub fn new(app: DogApp<Value, P>, options: Option<AuthOptions>) -> Result<Self> {
-        let base = Arc::new(AuthenticationBase::new(app, AUTHENTICATION_OPTIONS_KEY, options)?);
-        Ok(Self { base })
+    pub fn builder(builder: &mut dog_core::DogAppBuilder<Value, P>, options: Option<AuthOptions>) -> Result<crate::core::AuthenticationBuilder<P>> {
+        crate::core::AuthenticationBuilder::new(builder, AUTHENTICATION_OPTIONS_KEY, options)
     }
 
-    pub fn install(app: &DogApp<Value, P>, svc: Arc<Self>) {
-        app.set(AUTHENTICATION_KEY, Arc::clone(&svc));
+    pub fn new(base: Arc<AuthenticationBase<P>>) -> Self {
+        Self { base }
     }
 
-    pub fn from_app(app: &DogApp<Value, P>) -> Option<Arc<Self>> {
-        app.get::<Arc<Self>>(AUTHENTICATION_KEY)
+    pub fn install(builder: &mut dog_core::DogAppBuilder<Value, P>, auth: Arc<AuthenticationService<P>>) -> Arc<crate::service_adapter::AuthServiceAdapter<P>>
+    where
+        P: AuthenticateHookParams,
+    {
+        let svc = Arc::new(crate::service_adapter::AuthServiceAdapter::new(auth.clone()));
+        builder.register_service(AUTHENTICATION_KEY, Arc::clone(&svc) as Arc<dyn dog_core::DogService<Value, P>>);
+        svc
+    }
+
+    pub fn from_app(_app: &DogApp<Value, P>) -> Option<Arc<Self>> {
+        None
     }
 
     pub fn configuration(&self) -> AuthOptions {
         self.base.configuration()
     }
 
-    pub fn register_strategy(
-        &self,
-        name: impl Into<String>,
-        strategy: Arc<dyn crate::core::AuthenticationStrategy<P>>,
-    ) {
-        self.base.register(name, strategy);
-    }
+
 
     pub async fn authenticate(
         &self,

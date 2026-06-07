@@ -7,7 +7,7 @@ use dog_axum::AxumApp;
 use serde_json::Value;
 
 use crate::services::AuthDemoParams;
-use dog_auth::AuthenticationService;
+
 
 use super::providers;
 
@@ -34,11 +34,11 @@ fn service_redirect_uri(app: &dog_core::DogApp<Value, AuthDemoParams>) -> anyhow
 pub async fn google_login_service_handler(
     app: Arc<dog_core::DogApp<Value, AuthDemoParams>>,
 ) -> anyhow::Result<axum::response::Redirect> {
-    let auth = AuthenticationService::from_app(app.as_ref())
-        .ok_or_else(|| anyhow::anyhow!("AuthenticationService missing from app state"))?;
 
+
+    let config = app.config_snapshot();
     let redirect_uri = service_redirect_uri(app.as_ref())?;
-    let location = providers::authorize_url_for_redirect(auth.as_ref(), &redirect_uri)?;
+    let location = providers::authorize_url_for_redirect(&config, &redirect_uri)?;
 
     Ok(axum::response::Redirect::temporary(&location))
 }

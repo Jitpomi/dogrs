@@ -1,9 +1,9 @@
 
 use std::sync::Arc;
 
-use dog_auth::{AuthenticationService, JwtStrategy};
+use dog_auth::JwtStrategy;
 
-pub fn register_jwt<P: Send + Clone + 'static>(auth: &AuthenticationService<P>) {
-    auth.register_strategy("jwt", Arc::new(JwtStrategy::new(&auth.base)));
+pub fn register_jwt<P: Send + Clone + 'static>(auth: &mut dog_auth::core::AuthenticationBuilder<P>) {
+    auth.register("jwt", Arc::new(JwtStrategy::new()));
 }
 

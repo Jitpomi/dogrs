@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use dog_core::tenant::TenantContext;
 use serde_json::Value;
 use anyhow::Result;

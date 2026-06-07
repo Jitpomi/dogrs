@@ -1,7 +1,7 @@
 // OAuth strategy.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -77,7 +77,7 @@ pub struct OAuthStrategy<P>
 where
     P: Clone + Send + Sync + 'static,
 {
-    auth: Weak<AuthenticationBase<P>>,
+
     name: String,
     options: OAuthStrategyOptions<P>,
 }
@@ -86,9 +86,8 @@ impl<P> OAuthStrategy<P>
 where
     P: Clone + Send + Sync + 'static,
 {
-    pub fn new(auth: &Arc<AuthenticationBase<P>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            auth: Arc::downgrade(auth),
             name: "oauth".to_string(),
             options: OAuthStrategyOptions::default(),
         }
@@ -162,7 +161,7 @@ where
         };
 
         let key = format!("{provider}Id");
-        let svc = ctx.services.service::<Value, P>(service_name)?;
+        let svc = ctx.services.service(service_name)?;
 
         // Minimal lookup: find all and filter.
         let all = svc.find(&ctx.tenant, ctx.params.clone()).await?;
@@ -187,7 +186,7 @@ where
             return Err(DogError::not_authenticated("Missing profile id").into_anyhow());
         };
         data.insert(format!("{provider}Id"), Value::String(pid));
-        let svc = ctx.services.service::<Value, P>(service_name)?;
+        let svc = ctx.services.service(service_name)?;
         svc.create(&ctx.tenant, Value::Object(data), ctx.params.clone()).await
     }
 
@@ -212,7 +211,7 @@ where
         if let Some(pid) = Self::profile_id(provider, profile) {
             data.insert(format!("{provider}Id"), Value::String(pid));
         }
-        let svc = ctx.services.service::<Value, P>(service_name)?;
+        let svc = ctx.services.service(service_name)?;
         svc.patch(&ctx.tenant, Some(&id), Value::Object(data), ctx.params.clone()).await
     }
 }
@@ -227,11 +226,8 @@ where
         authentication: &AuthenticationRequest,
         _params: &AuthenticationParams,
         ctx: &mut HookContext<Value, P>,
+        auth: &AuthenticationBase<P>,
     ) -> Result<AuthenticationResult> {
-        let auth = self
-            .auth
-            .upgrade()
-            .ok_or_else(|| anyhow::anyhow!("AuthenticationBase was dropped"))?;
 
         let req = self.parse_request(authentication)?;
 

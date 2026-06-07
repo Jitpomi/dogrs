@@ -14,7 +14,7 @@ pub mod errors;
 #[cfg(feature = "adapters")]
 pub mod adapters;
 
-pub use app::{DogApp, ServiceCaller};
+pub use app::{DogApp, DogAppBuilder, ServiceCaller, ServiceHandle, ServiceBuilderHandle};
 pub use config::{DogConfig, DogConfigSnapshot };
 pub use hooks::{
     DogAfterHook, DogAroundHook, DogBeforeHook, DogErrorHook, HookContext, Next, ServiceHooks, HookResult,

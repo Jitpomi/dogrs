@@ -108,6 +108,7 @@ where
     pattern: ServiceEventPattern,
     listener: EventListener<R, P>,
     once: bool,
+    called: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Minimal runtime-agnostic event hub.
@@ -178,6 +179,7 @@ where
             pattern,
             listener,
             once: false,
+            called: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
         id
     }
@@ -190,6 +192,7 @@ where
             pattern,
             listener,
             once: true,
+            called: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
         id
     }
@@ -212,70 +215,50 @@ where
         before - self.listeners.len()
     }
 
-    /// Phase 1: snapshot matching listeners + remember which `once` listener ids to remove.
     ///
-    /// NOTE: no `.await` here, so it’s safe under a read-lock.
+    /// NOTE: no `.await` here, so it’s safe under a read-lock (or entirely lock-free).
     pub fn snapshot_emit<'a>(
         &'a self,
         path: &str,
         event: &ServiceEventKind,
         data: &ServiceEventData<'a, R>,
         ctx: &HookContext<R, P>,
-    ) -> (Vec<EventListener<R, P>>, Vec<ListenerId>) {
+    ) -> Vec<EventListener<R, P>> {
         if let Some(publish) = &self.publish {
             if !(publish)(path, event, data, ctx) {
-                return (Vec::new(), Vec::new());
+                return Vec::new();
             }
         }
 
         let mut to_call: Vec<EventListener<R, P>> = Vec::new();
-        let mut once_ids: Vec<ListenerId> = Vec::new();
 
         for entry in &self.listeners {
             if entry.pattern.matches(path, event) {
-                to_call.push(entry.listener.clone());
                 if entry.once {
-                    once_ids.push(entry.id);
+                    if entry.called.swap(true, Ordering::SeqCst) {
+                        continue;
+                    }
                 }
+                to_call.push(entry.listener.clone());
             }
         }
 
-        (to_call, once_ids)
+        to_call
     }
 
-    /// Phase 3: remove `once` listeners after emit finishes.
-    ///
-    /// NOTE: no `.await`, safe under a write-lock.
-    pub fn finalize_once_removals(&mut self, once_ids: &[ListenerId]) {
-        if once_ids.is_empty() {
-            return;
-        }
-        self.listeners.retain(|e| !once_ids.contains(&e.id));
-    }
-
-    /// Optional convenience if you ever hold `&mut self` directly (tests, single-thread use, etc.)
-    /// This keeps the original API, but it is NOT required by DogApp anymore.
+    /// Optional convenience if you ever hold `&self` directly.
     pub async fn emit_async(
-        &mut self,
+        &self,
         path: &str,
         event: &ServiceEventKind,
         data: &ServiceEventData<'_, R>,
         ctx: &HookContext<R, P>,
     ) -> Result<()> {
-        // Snapshot using &self (no await)
-        let (listeners, once_ids) = {
-            // reborrow immutably for snapshot
-            let hub: &Self = &*self;
-            hub.snapshot_emit(path, event, data, ctx)
-        };
+        let listeners = self.snapshot_emit(path, event, data, ctx);
 
-        // Await listeners (no lock requirement; we already snapped)
         for f in &listeners {
             f(data, ctx).await?;
         }
-
-        // Remove once listeners (mut)
-        self.finalize_once_removals(&once_ids);
 
         Ok(())
     }

@@ -207,6 +207,10 @@ where
             config,
         }
     }
+
+    pub fn app(&self) -> &crate::DogApp<R, P> {
+        self.services.app()
+    }
 }
 
 /// Helper used by the pipeline:

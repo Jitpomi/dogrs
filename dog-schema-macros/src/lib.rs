@@ -536,13 +536,13 @@ fn gen_register_fn(service: &LitStr, has_patch: bool) -> proc_macro2::TokenStrea
     };
 
     quote! {
-        pub fn register<P>(app: &dog_core::DogApp<serde_json::Value, P>) -> anyhow::Result<()>
+        pub fn register<P>(builder: &mut dog_core::DogAppBuilder<serde_json::Value, P>) -> anyhow::Result<()>
         where
             P: Send + Clone + 'static,
         {
             use dog_schema::hooks::SchemaHooksExt;
 
-            app.service(#svc_lit)?.hooks(|h| {
+            builder.service_hooks(#svc_lit, |h| {
                 h.schema(|s| {
                     s.on_create().resolve(resolve_create).validate(validate_create);
                     #patch

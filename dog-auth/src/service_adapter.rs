@@ -15,6 +15,7 @@ where
     P: AuthenticateHookParams + Clone + Send + Sync + 'static,
 {
     auth: Arc<AuthenticationService<P>>,
+    app: std::sync::OnceLock<dog_core::DogApp<Value, P>>,
 }
 
 impl<P> AuthServiceAdapter<P>
@@ -22,7 +23,18 @@ where
     P: AuthenticateHookParams + Clone + Send + Sync + 'static,
 {
     pub fn new(auth: Arc<AuthenticationService<P>>) -> Self {
-        Self { auth }
+        Self { 
+            auth,
+            app: std::sync::OnceLock::new(),
+        }
+    }
+
+    pub fn setup(&self, app: dog_core::DogApp<Value, P>) {
+        let _ = self.app.set(app);
+    }
+
+    pub fn auth(&self) -> &Arc<AuthenticationService<P>> {
+        &self.auth
     }
 }
 
@@ -47,8 +59,9 @@ where
             headers: params.headers().clone(),
         };
 
-        let services = ServiceCaller::new(self.auth.base.app().clone());
-        let config = self.auth.base.app().config_snapshot();
+        let app = self.app.get().expect("AuthServiceAdapter must be setup with DogApp");
+        let services = ServiceCaller::new(app.clone());
+        let config = app.config_snapshot();
         let mut hook_ctx = HookContext::new(ctx.clone(), ServiceMethodKind::Create, params, services, config);
 
         self.auth
@@ -67,8 +80,9 @@ where
             headers: params.headers().clone(),
         };
 
-        let services = ServiceCaller::new(self.auth.base.app().clone());
-        let config = self.auth.base.app().config_snapshot();
+        let app = self.app.get().expect("AuthServiceAdapter must be setup with DogApp");
+        let services = ServiceCaller::new(app.clone());
+        let config = app.config_snapshot();
         let mut hook_ctx = HookContext::new(ctx.clone(), ServiceMethodKind::Remove, params, services, config);
 
         self.auth.remove(id, &auth_params, &mut hook_ctx, &strategies).await

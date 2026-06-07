@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use crate::events::PublishFn;
 use anyhow::Result;
 
@@ -17,15 +17,155 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    registry: RwLock<DogServiceRegistry<R, P>>,
-    global_hooks: RwLock<ServiceHooks<R, P>>,
-    service_hooks: RwLock<HashMap<String, ServiceHooks<R, P>>>,
-    config: RwLock<DogConfig>,
-    // Store the concrete: Arc<dyn DogService<R,P>> as Box<dyn Any>
-    any_services: RwLock<HashMap<String, Box<dyn Any + Send + Sync>>>,
-    // Arbitrary application state, stored as Arc<T> in a Box<dyn Any>
-    any_state: RwLock<HashMap<String, Box<dyn Any + Send + Sync>>>,
-    events: RwLock<DogEventHub<R, P>>,
+    registry: DogServiceRegistry<R, P>,
+    global_hooks: ServiceHooks<R, P>,
+    service_hooks: HashMap<String, ServiceHooks<R, P>>,
+    config: DogConfig,
+    any_state: HashMap<String, Box<dyn Any + Send + Sync>>,
+    events: DogEventHub<R, P>,
+}
+
+/// DogAppBuilder is the setup interface for DogRS.
+pub struct DogAppBuilder<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    registry: DogServiceRegistry<R, P>,
+    global_hooks: ServiceHooks<R, P>,
+    service_hooks: HashMap<String, ServiceHooks<R, P>>,
+    config: DogConfig,
+    any_state: HashMap<String, Box<dyn Any + Send + Sync>>,
+    events: DogEventHub<R, P>,
+}
+
+impl<R, P> Default for DogAppBuilder<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<R, P> DogAppBuilder<R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    pub fn new() -> Self {
+        Self {
+            registry: DogServiceRegistry::new(),
+            global_hooks: ServiceHooks::new(),
+            service_hooks: HashMap::new(),
+            config: DogConfig::new(),
+            any_state: HashMap::new(),
+            events: DogEventHub::new(),
+        }
+    }
+
+    pub fn config(&self) -> &crate::DogConfig {
+        &self.config
+    }
+
+    pub fn config_snapshot(&self) -> crate::DogConfigSnapshot {
+        self.config.snapshot()
+    }
+
+    pub fn get<T>(&self, key: &str) -> Option<T>
+    where
+        T: FromAppValue,
+    {
+        // Try config first
+        if let Some(s) = self.config.get(key) {
+            if let Some(v) = T::from_config(s) {
+                return Some(v);
+            }
+        }
+        // Fallback to any_state
+        self.any_state
+            .get(key)
+            .and_then(|b| T::from_any(b))
+    }
+
+    pub fn register_service<S>(&mut self, name: S, service: Arc<dyn DogService<R, P>>)
+    where
+        S: Into<String>,
+    {
+        self.registry.register(name.into(), service);
+    }
+
+    pub fn hooks<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut ServiceHooks<R, P>),
+    {
+        f(&mut self.global_hooks);
+    }
+
+    pub fn service_hooks<F>(&mut self, service_name: &str, f: F)
+    where
+        F: FnOnce(&mut ServiceHooks<R, P>),
+    {
+        let hooks = self.service_hooks.entry(service_name.to_string()).or_default();
+        f(hooks);
+    }
+
+    pub fn service(&mut self, name: &str) -> ServiceBuilderHandle<'_, R, P> {
+        ServiceBuilderHandle {
+            builder: self,
+            name: name.to_string(),
+        }
+    }
+
+    pub fn set<K, V>(&mut self, key: K, value: V)
+    where
+        K: Into<String>,
+        V: IntoAppValue,
+    {
+        match value.into_value() {
+            AppValue::Str(s) => self.config.set(key, s),
+            AppValue::Any(b) => {
+                self.any_state.insert(key.into(), b);
+            }
+        }
+    }
+
+    pub fn on(
+        &mut self,
+        path: impl Into<String>,
+        event: ServiceEventKind,
+        listener: crate::events::EventListener<R, P>,
+    ) {
+        self.events.on_exact(path, event, listener);
+    }
+
+    pub fn on_str(
+        &mut self,
+        pattern: &str,
+        listener: crate::events::EventListener<R, P>,
+    ) -> anyhow::Result<()> {
+        let pat = crate::events::parse_event_pattern(pattern)?;
+        self.events.on_pattern(pat, listener);
+        Ok(())
+    }
+
+    pub fn publish(&mut self, f: PublishFn<R, P>) {
+        self.events.set_publish(f);
+    }
+
+    pub fn build(self) -> DogApp<R, P> {
+        DogApp {
+            inner: Arc::new(DogAppInner {
+                registry: self.registry,
+                global_hooks: self.global_hooks,
+                service_hooks: self.service_hooks,
+                config: self.config,
+                any_state: self.any_state,
+                events: self.events,
+            }),
+        }
+    }
 }
 
 // Polymorphic app.set/app.get support types
@@ -113,7 +253,7 @@ where
     P: Send + Clone + 'static,
 {
     fn default() -> Self {
-        Self::new()
+        DogAppBuilder::new().build()
     }
 }
 
@@ -134,69 +274,34 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(DogAppInner {
-                registry: RwLock::new(DogServiceRegistry::new()),
-                global_hooks: RwLock::new(ServiceHooks::new()),
-                service_hooks: RwLock::new(HashMap::new()),
-                config: RwLock::new(DogConfig::new()),
-                any_services: RwLock::new(HashMap::new()),
-                any_state: RwLock::new(HashMap::new()),
-                events: RwLock::new(DogEventHub::new()),
-            }),
+    pub fn builder() -> DogAppBuilder<R, P> {
+        DogAppBuilder::new()
+    }
+
+    /// Feathers: `app.get(key)` — now polymorphic via type inference.
+    /// - `let s: Option<String> = app.get("k");` reads config.
+    /// - `let db: Option<Arc<T>> = app.get("k");` reads typed any-state.
+    pub fn get<T>(&self, key: &str) -> Option<T>
+    where
+        T: FromAppValue,
+    {
+        // Try config first
+        if let Some(s) = self.inner.config.get(key) {
+            if let Some(v) = T::from_config(s) {
+                return Some(v);
+            }
         }
-    }
-
-    pub fn register_service<S>(&self, name: S, service: Arc<dyn DogService<R, P>>)
-    where
-        S: Into<String>,
-    {
-        let name = name.into();
-
-        // typed registry
+        // Fallback to any_state
         self.inner
-            .registry
-            .write()
-            .unwrap()
-            .register(name.clone(), service.clone());
-
-        // any registry: store the concrete Arc<dyn DogService<R,P>>
-        self.inner
-            .any_services
-            .write()
-            .unwrap()
-            .insert(name, Box::new(service));
+            .any_state
+            .get(key)
+            .and_then(|b| T::from_any(b))
     }
 
-    /// Feathers: `app.hooks({ ... })`
-    pub fn hooks<F>(&self, f: F)
-    where
-        F: FnOnce(&mut ServiceHooks<R, P>),
-    {
-        let mut g = self.inner.global_hooks.write().unwrap();
-        f(&mut g);
-    }
-
-    /// Feathers: `app.service("x").hooks({ ... })`
-    pub(crate) fn configure_service_hooks<F>(&self, service_name: &str, f: F)
-    where
-        F: FnOnce(&mut ServiceHooks<R, P>),
-    {
-        let mut map = self.inner.service_hooks.write().unwrap();
-        let hooks = map
-            .entry(service_name.to_string())
-            .or_default();
-        f(hooks);
-    }
-
-    /// Feathers: `app.service("name")`
     pub fn service(&self, name: &str) -> Result<ServiceHandle<R, P>> {
         let svc = self
             .inner
             .registry
-            .read()
-            .unwrap()
             .get(name)
             .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))?
             .clone();
@@ -208,55 +313,8 @@ where
         })
     }
 
-    /// Feathers: `app.set(key, value)` — now polymorphic.
-    /// - If value is a string (`&str`/`String`), stores in config.
-    /// - If value is `Arc<T>`, stores in typed any-state.
-    pub fn set<K, V>(&self, key: K, value: V)
-    where
-        K: Into<String>,
-        V: IntoAppValue,
-    {
-        match value.into_value() {
-            AppValue::Str(s) => {
-                self.inner.config.write().unwrap().set(key, s);
-            }
-            AppValue::Any(b) => {
-                self.inner
-                    .any_state
-                    .write()
-                    .unwrap()
-                    .insert(key.into(), b);
-            }
-        }
-    }
-
-    /// Feathers: `app.get(key)` — now polymorphic via type inference.
-    /// - `let s: Option<String> = app.get("k");` reads config.
-    /// - `let db: Option<Arc<T>> = app.get("k");` reads typed any-state.
-    pub fn get<T>(&self, key: &str) -> Option<T>
-    where
-        T: FromAppValue,
-    {
-        // Try config first
-        if let Some(s) = self.inner.config.read().unwrap().get(key) {
-            if let Some(v) = T::from_config(s) {
-                return Some(v);
-            }
-        }
-        // Fallback to any_state
-        self.inner
-            .any_state
-            .read()
-            .unwrap()
-            .get(key)
-            .and_then(|b| T::from_any(b))
-    }
-
-    // Back-compat helpers remain available via generic set/get; dedicated any-state APIs removed.
-
     pub fn config_snapshot(&self) -> crate::DogConfigSnapshot {
-        let cfg = self.inner.config.read().unwrap();
-        cfg.snapshot()
+        self.inner.config.snapshot()
     }
 
 }
@@ -266,26 +324,6 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    /// app.on("messages", ServiceEventKind::Created, Arc::new(|data, ctx| { /* ... */ }));
-    pub fn on(
-        &self,
-        path: impl Into<String>,
-        event: ServiceEventKind,
-        listener: crate::events::EventListener<R, P>,
-    ) {
-        self.inner.events.write().unwrap().on_exact(path, event, listener);
-    }
-
-    pub fn on_str(
-        &self,
-        pattern: &str,
-        listener: crate::events::EventListener<R, P>,
-    ) -> anyhow::Result<()> {
-        let pat = crate::events::parse_event_pattern(pattern)?;
-        self.inner.events.write().unwrap().on_pattern(pat, listener);
-        Ok(())
-    }
-
     pub async fn emit_custom(
         &self,
         path: &str,
@@ -296,27 +334,11 @@ where
         let event = ServiceEventKind::Custom(event_name.into());
         let data = ServiceEventData::Custom(&payload);
 
-        let (listeners, once_ids) = {
-            let hub = self.inner.events.read().unwrap();
-            hub.snapshot_emit(path, &event, &data, ctx)
-        };
+        let listeners = self.inner.events.snapshot_emit(path, &event, &data, ctx);
 
         for f in &listeners {
             let _ = f(&data, ctx).await;
         }
-
-        {
-            let mut hub = self.inner.events.write().unwrap();
-            hub.finalize_once_removals(&once_ids);
-        }
-    }
-
-    pub fn publish(&self, f: PublishFn<R, P>) {
-        self.inner.events.write().unwrap().set_publish(f);
-    }
-
-    pub fn clear_publish(&self) {
-        self.inner.events.write().unwrap().clear_publish();
     }
 }
 
@@ -335,53 +357,31 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    pub fn hooks<F>(self, f: F) -> Self
-    where
-        F: FnOnce(&mut ServiceHooks<R, P>),
-    {
-        self.app.configure_service_hooks(&self.name, f);
-        self
-    }
-
     pub fn inner(&self) -> &Arc<dyn DogService<R, P>> {
         &self.service
     }
-
 }
 
-impl<R, P> ServiceHandle<R, P>
+pub struct ServiceBuilderHandle<'a, R, P>
 where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
+    builder: &'a mut DogAppBuilder<R, P>,
+    name: String,
+}
 
-    /// app.service("messages")?.on(ServiceEventKind::Created, Arc::new(|data, ctx| { /* ... */ }));
-    pub fn on(
-        &self,
-        event: ServiceEventKind,
-        listener: crate::events::EventListener<R, P>,
-    ) {
-        self.app.on(self.name.clone(), event, listener);
-    }
-    pub fn on_str(
-        &self,
-        event: &str,
-        listener: crate::events::EventListener<R, P>,
-    ) -> anyhow::Result<()> {
-        // allow "*", "created", "customThing"
-        let ev = if event.trim() == "*" {
-            crate::events::EventPat::Any
-        } else {
-            crate::events::EventPat::Exact(crate::events::parse_event_kind(event)?)
-        };
-
-        let pat = crate::events::ServiceEventPattern {
-            service: crate::events::ServiceNamePat::Exact(self.name.clone()),
-            event: ev,
-        };
-
-        self.app.inner.events.write().unwrap().on_pattern(pat, listener);
-        Ok(())
+impl<'a, R, P> ServiceBuilderHandle<'a, R, P>
+where
+    R: Send + 'static,
+    P: Send + Clone + 'static,
+{
+    pub fn hooks<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&mut ServiceHooks<R, P>),
+    {
+        self.builder.service_hooks(&self.name, f);
+        self
     }
 }
 
@@ -401,8 +401,8 @@ where
         &self,
         method: &ServiceMethodKind,
     ) -> HooksForMethod<R, P> {
-        let g = self.app.inner.global_hooks.read().unwrap();
-        let map = self.app.inner.service_hooks.read().unwrap();
+        let g = &self.app.inner.global_hooks;
+        let map = &self.app.inner.service_hooks;
         let s = map.get(&self.name);
 
         // GLOBAL
@@ -451,45 +451,75 @@ where
         let svc = self.service.clone();
         let service_call_inner = service_call.clone();
 
-        // Inner: BEFORE -> service_call -> AFTER
-        let mut next: Next<R, P> = Next {
-            call: Box::new(move |ctx: &mut HookContext<R, P>| -> HookFut<'_> {
-                let before = before.clone();
-                let after = after.clone();
-                let svc = svc.clone();
-                let service_call = service_call_inner.clone();
-
-                Box::pin(async move {
-                    for h in &before {
-                        h.run(ctx).await?;
+        let res = if around.is_empty() {
+            // FAST PATH: Zero allocations
+            for h in &before {
+                if let Err(e) = h.run(&mut ctx).await {
+                    ctx.error = Some(e);
+                    break;
+                }
+            }
+            
+            if ctx.error.is_none() {
+                if let Err(e) = (service_call_inner)(svc.clone(), &mut ctx).await {
+                    ctx.error = Some(e);
+                }
+            }
+            
+            if ctx.error.is_none() {
+                for h in after.iter().rev() {
+                    if let Err(e) = h.run(&mut ctx).await {
+                        ctx.error = Some(e);
+                        break;
                     }
-
-                    // sets ctx.result
-                    (service_call)(svc, ctx).await?;
-
-                    for h in after.iter().rev() {
-                        h.run(ctx).await?;
-                    }
-
-                    Ok(())
-                })
-            }),
-        };
-
-        // AROUND chain: first hook is outermost
-        for h in around.iter().rev() {
-            let hook = h.clone();
-            let prev = next;
-            next = Next {
+                }
+            }
+            
+            if let Some(e) = ctx.error.take() {
+                Err(e)
+            } else {
+                Ok(())
+            }
+        } else {
+            // Inner: BEFORE -> service_call -> AFTER
+            let mut next: Next<R, P> = Next {
                 call: Box::new(move |ctx: &mut HookContext<R, P>| -> HookFut<'_> {
-                    let hook = hook.clone();
-                    Box::pin(async move { hook.run(ctx, prev).await })
+                    let before = before.clone();
+                    let after = after.clone();
+                    let svc = svc.clone();
+                    let service_call = service_call_inner.clone();
+
+                    Box::pin(async move {
+                        for h in &before {
+                            h.run(ctx).await?;
+                        }
+
+                        // sets ctx.result
+                        (service_call)(svc, ctx).await?;
+
+                        for h in after.iter().rev() {
+                            h.run(ctx).await?;
+                        }
+
+                        Ok(())
+                    })
                 }),
             };
-        }
 
-        // Execute (around/before/service/after)
-        let res = next.run(&mut ctx).await;
+            // AROUND chain: first hook is outermost
+            for h in around.iter().rev() {
+                let hook = h.clone();
+                let prev = next;
+                next = Next {
+                    call: Box::new(move |ctx: &mut HookContext<R, P>| -> HookFut<'_> {
+                        let hook = hook.clone();
+                        Box::pin(async move { hook.run(ctx, prev).await })
+                    }),
+                };
+            }
+            
+            next.run(&mut ctx).await
+        };
 
         // If error, run error hooks
         if let Err(e) = res {
@@ -512,18 +542,10 @@ where
                 if let Some(result) = ctx.result.as_ref() {
                     let data = ServiceEventData::Standard(result);
 
-                    let (listeners, once_ids) = {
-                        let hub = self.app.inner.events.read().unwrap();
-                        hub.snapshot_emit(&self.name, &event, &data, &ctx)
-                    };
+                    let listeners = self.app.inner.events.snapshot_emit(&self.name, &event, &data, &ctx);
 
                     for f in &listeners {
                         let _ = f(&data, &ctx).await;
-                    }
-
-                    {
-                        let mut hub = self.app.inner.events.write().unwrap();
-                        hub.finalize_once_removals(&once_ids);
                     }
                 }
             }
@@ -833,29 +855,13 @@ where
         Self { app }
     }
 
-    pub fn service<R2, P2>(&self, name: &str) -> Result<Arc<dyn DogService<R2, P2>>>
-    where
-        R2: Send + 'static,
-        P2: Send + 'static,
-    {
-        let map = self.app.inner.any_services.read().unwrap();
+    pub fn app(&self) -> &DogApp<R, P> {
+        &self.app
+    }
 
-        // ✅ this is &Box<dyn Any + Send + Sync>
-        let any = map
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))?;
-
-        // Box<dyn Any> -> &dyn Any -> downcast_ref(...)
-        let stored = any
-            .as_ref()
-            .downcast_ref::<Arc<dyn DogService<R2, P2>>>()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "DogService type mismatch for '{name}'. \
-                     You requested a different <R,P> than what was registered."
-                )
-            })?;
-
-        Ok(stored.clone())
+    pub fn service(&self, name: &str) -> Result<Arc<dyn DogService<R, P>>> {
+        self.app.inner.registry.get(name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))
     }
 }

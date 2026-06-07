@@ -1,6 +1,6 @@
 // Local authentication strategy.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -58,7 +58,7 @@ pub struct LocalStrategy<P>
 where
     P: Send + Clone + 'static,
 {
-    auth: Weak<AuthenticationBase<P>>,
+
     name: String,
     options: LocalStrategyOptions,
     entity_resolver: Option<Arc<dyn LocalEntityResolver<P>>>,
@@ -69,9 +69,8 @@ impl<P> LocalStrategy<P>
 where
     P: Send + Clone + 'static,
 {
-    pub fn new(auth: &Arc<AuthenticationBase<P>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            auth: Arc::downgrade(auth),
             name: "local".to_string(),
             options: LocalStrategyOptions::default(),
             entity_resolver: None,
@@ -158,7 +157,7 @@ where
             return Ok(None);
         }
 
-        let svc = ctx.services.service::<Value, P>(service_name)?;
+        let svc = ctx.services.service(service_name)?;
 
         // If a query builder is provided, allow the app/adaptor to inject an efficient query/limit
         // into the params type (e.g. for Mongo/Postgres adapters).
@@ -212,13 +211,9 @@ where
         authentication: &AuthenticationRequest,
         _params: &AuthenticationParams,
         ctx: &mut HookContext<Value, P>,
+        auth: &AuthenticationBase<P>,
     ) -> Result<AuthenticationResult> {
         self.verify_configuration()?;
-
-        let auth = self
-            .auth
-            .upgrade()
-            .ok_or_else(|| anyhow::anyhow!("AuthenticationBase was dropped"))?;
 
         let cfg = auth.configuration();
         let service_name = cfg.service.clone();

@@ -1,26 +1,7 @@
 #[cfg(test)]
 mod security_tests {
-    use super::*;
-    use dog_typedb::{TypeDBAdapter, transactions::analyze_query};
+    use dog_typedb::transactions::analyze_query;
     use serde_json::json;
-    use std::sync::Arc;
-    use typedb_driver::TypeDBDriver;
-
-    // Mock TypeDBState for testing
-    struct MockTypeDBState {
-        driver: Arc<TypeDBDriver>,
-        database: String,
-    }
-
-    impl dog_typedb::adapter::TypeDBState for MockTypeDBState {
-        fn driver(&self) -> &Arc<TypeDBDriver> {
-            &self.driver
-        }
-
-        fn database(&self) -> &str {
-            &self.database
-        }
-    }
 
     #[test]
     fn test_query_analysis_detects_delete_operations() {

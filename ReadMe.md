@@ -22,6 +22,9 @@ It provides a clean core for building flexible, multi-tenant applications where 
 - **No stack lock-in**  
   DogRS keeps your core logic clean and portable.
 
+- **High-Performance Lock-Free Architecture**  
+  Thanks to the strict `DogAppBuilder` pattern, the entire dependency injection, hook registry, and configuration layers are completely frozen at runtime. Your hot paths run absolutely lock-free and scale linearly with zero thread-synchronization bottlenecks.
+
 ## 📦 Published Crates
 
 All DogRS crates are now available on [crates.io](https://crates.io):

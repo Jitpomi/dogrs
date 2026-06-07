@@ -10,7 +10,7 @@ async fn test_adapter_read_forces_read_transaction() {
     // This test verifies that adapter.read() forces TransactionType::Read
     // which will cause TypeDB to reject DELETE operations
     
-    let delete_query = "match $u isa user-account, has id \"user-eve\"; delete $u;";
+    let _delete_query = "match $u isa user-account, has id \"user-eve\"; delete $u;";
     
     // When we call execute_read_transaction (what adapter.read() now uses),
     // it should force TransactionType::Read regardless of query content

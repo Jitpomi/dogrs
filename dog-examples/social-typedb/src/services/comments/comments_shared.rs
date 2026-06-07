@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use dog_core::{ServiceCapabilities, ServiceMethodKind};
 
 pub fn capabilities() -> ServiceCapabilities {

@@ -1,6 +1,7 @@
 // JWT strategy.
 
-use std::sync::{Arc, Weak};
+use std::marker::PhantomData;
+
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -29,20 +30,21 @@ pub struct JwtStrategy<P>
 where
     P: Send + Clone + 'static,
 {
-    auth: Weak<AuthenticationBase<P>>,
+
     name: String,
     options: JwtStrategyOptions,
+    _marker: PhantomData<fn() -> P>,
 }
 
 impl<P> JwtStrategy<P>
 where
     P: Send + Clone + 'static,
 {
-    pub fn new(auth: &Arc<AuthenticationBase<P>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            auth: Arc::downgrade(auth),
             name: "jwt".to_string(),
             options: JwtStrategyOptions::default(),
+            _marker: PhantomData,
         }
     }
 
@@ -112,11 +114,8 @@ where
         authentication: &AuthenticationRequest,
         params: &AuthenticationParams,
         ctx: &mut HookContext<Value, P>,
+        auth: &AuthenticationBase<P>,
     ) -> Result<AuthenticationResult> {
-        let auth = self
-            .auth
-            .upgrade()
-            .ok_or_else(|| anyhow::anyhow!("AuthenticationBase was dropped"))?;
 
         let access_token = self
             .parse_from_request(authentication)
@@ -155,7 +154,7 @@ where
                 })?
                 .to_string();
 
-            let svc = ctx.services.service::<Value, P>(&service_name)?;
+            let svc = ctx.services.service(&service_name)?;
             let entity = svc.get(&ctx.tenant, &entity_id, ctx.params.clone()).await?;
 
             if let Some(map) = out.as_object_mut() {
