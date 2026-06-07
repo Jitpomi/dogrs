@@ -199,9 +199,8 @@ impl BlobAdapter {
             .with_attributes(put.attributes)
             .with_parts(
                 self.state.config.upload_rules.part_size,
-                put.size_hint.map(|s| {
-                    s.div_ceil(self.state.config.upload_rules.part_size) as u32
-                }),
+                put.size_hint
+                    .map(|s| s.div_ceil(self.state.config.upload_rules.part_size) as u32),
             );
 
         uploads.begin(ctx, intent).await

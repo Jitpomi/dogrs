@@ -25,32 +25,35 @@ pub fn tenant_from_headers(headers: &HeaderMap) -> TenantContext {
         .unwrap_or_else(|| TenantContext::new("default"))
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct CustomCallContext<'a, R> {
+    pub service_name: &'a str,
+    pub method: &'static str,
+    pub headers: &'a HeaderMap,
+    pub query: std::collections::HashMap<String, String>,
+    pub http_method: &'static str,
+    pub uri: &'a axum::http::Uri,
+    pub data: Option<R>,
+}
+
 pub async fn call_custom<R, P>(
     app: &DogApp<R, P>,
-    service_name: &str,
-    method: &'static str,
-    headers: &HeaderMap,
-    query: std::collections::HashMap<String, String>,
-    http_method: &'static str,
-    uri: &axum::http::Uri,
-    data: Option<R>,
+    ctx: CustomCallContext<'_, R>,
 ) -> Result<serde_json::Value, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
     P: FromRestParams + Send + Sync + Clone + 'static,
 {
-    let tenant = tenant_from_headers(headers);
+    let tenant = tenant_from_headers(ctx.headers);
 
-    let params = RestParams::from_parts("rest", headers, query, http_method, uri);
+    let params = RestParams::from_parts("rest", ctx.headers, ctx.query, ctx.http_method, ctx.uri);
     let params = P::from_rest_params(params);
 
-    let svc = app.service(service_name)?;
+    let svc = app.service(ctx.service_name)?;
 
     // Fail fast with a clear error if the service does not expose this custom method.
-    ensure_custom_method_supported(service_name, &svc, method)?;
+    ensure_custom_method_supported(ctx.service_name, &svc, ctx.method)?;
 
-    let res = svc.custom(tenant, method, data, params).await?;
+    let res = svc.custom(tenant, ctx.method, ctx.data, params).await?;
     Ok(serde_json::to_value(res).map_err(|e| anyhow::anyhow!(e))?)
 }
 
@@ -81,63 +84,27 @@ where
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn call_custom_json<R, P>(
     app: &DogApp<R, P>,
-    service_name: &str,
-    method: &'static str,
-    headers: &HeaderMap,
-    query: std::collections::HashMap<String, String>,
-    http_method: &'static str,
-    uri: &axum::http::Uri,
-    data: Option<R>,
+    ctx: CustomCallContext<'_, R>,
 ) -> Result<axum::Json<serde_json::Value>, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
     P: FromRestParams + Send + Sync + Clone + 'static,
 {
-    Ok(Json(
-        call_custom(
-            app,
-            service_name,
-            method,
-            headers,
-            query,
-            http_method,
-            uri,
-            data,
-        )
-        .await?,
-    ))
+    Ok(axum::Json(call_custom(app, ctx).await?))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn call_custom_redirect<R, P>(
     app: &DogApp<R, P>,
-    service_name: &str,
-    method: &'static str,
-    headers: &HeaderMap,
-    query: std::collections::HashMap<String, String>,
-    http_method: &'static str,
-    uri: &axum::http::Uri,
-    data: Option<R>,
+    ctx: CustomCallContext<'_, R>,
     location_key: &'static str,
 ) -> Result<Redirect, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
     P: FromRestParams + Send + Sync + Clone + 'static,
 {
-    let v = call_custom(
-        app,
-        service_name,
-        method,
-        headers,
-        query,
-        http_method,
-        uri,
-        data,
-    )
-    .await?;
+    let v = call_custom(app, ctx).await?;
     let location = v
         .get(location_key)
         .and_then(|x| x.as_str())
@@ -152,33 +119,15 @@ where
     Ok(Redirect::temporary(location))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn call_custom_redirect_location<R, P>(
     app: &DogApp<R, P>,
-    service_name: &str,
-    method: &'static str,
-    headers: &HeaderMap,
-    query: std::collections::HashMap<String, String>,
-    http_method: &'static str,
-    uri: &axum::http::Uri,
-    data: Option<R>,
+    ctx: CustomCallContext<'_, R>,
 ) -> Result<Redirect, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
     P: FromRestParams + Send + Sync + Clone + 'static,
 {
-    call_custom_redirect(
-        app,
-        service_name,
-        method,
-        headers,
-        query,
-        http_method,
-        uri,
-        data,
-        "location",
-    )
-    .await
+    call_custom_redirect(app, ctx, "location").await
 }
 
 pub fn query_to_map<T: Serialize>(query: &T) -> std::collections::HashMap<String, String> {
@@ -250,16 +199,19 @@ pub fn oauth_callback_capture_typed<T: Serialize>(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct CustomCallContextQd<'a, Q, D> {
+    pub service_name: &'a str,
+    pub method: &'static str,
+    pub headers: &'a HeaderMap,
+    pub query: &'a Q,
+    pub http_method: &'static str,
+    pub uri: &'a axum::http::Uri,
+    pub data: &'a D,
+}
+
 pub async fn call_custom_json_qd<R, P, Q, D>(
     app: &DogApp<R, P>,
-    service_name: &str,
-    method: &'static str,
-    headers: &HeaderMap,
-    query: &Q,
-    http_method: &'static str,
-    uri: &axum::http::Uri,
-    data: &D,
+    ctx: CustomCallContextQd<'_, Q, D>,
 ) -> Result<axum::Json<serde_json::Value>, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
@@ -267,33 +219,28 @@ where
     Q: Serialize,
     D: Serialize,
 {
-    let q = query_to_map(query);
-    let body: R =
-        serde_json::from_value(serde_json::to_value(data).map_err(|e| anyhow::anyhow!(e))?)
-            .map_err(|e| anyhow::anyhow!(e))?;
+    let query_map =
+        serde_json::from_value(serde_json::to_value(ctx.query).unwrap()).unwrap_or_default();
+    let r_data = Some(serde_json::from_value(serde_json::to_value(ctx.data).unwrap()).unwrap());
+
     call_custom_json(
         app,
-        service_name,
-        method,
-        headers,
-        q,
-        http_method,
-        uri,
-        Some(body),
+        CustomCallContext {
+            service_name: ctx.service_name,
+            method: ctx.method,
+            headers: ctx.headers,
+            query: query_map,
+            http_method: ctx.http_method,
+            uri: ctx.uri,
+            data: r_data,
+        },
     )
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn call_custom_redirect_qd<R, P, Q, D>(
     app: &DogApp<R, P>,
-    service_name: &str,
-    method: &'static str,
-    headers: &HeaderMap,
-    query: &Q,
-    http_method: &'static str,
-    uri: &axum::http::Uri,
-    data: &D,
+    ctx: CustomCallContextQd<'_, Q, D>,
 ) -> Result<Redirect, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
@@ -301,19 +248,21 @@ where
     Q: Serialize,
     D: Serialize,
 {
-    let q = query_to_map(query);
-    let body: R =
-        serde_json::from_value(serde_json::to_value(data).map_err(|e| anyhow::anyhow!(e))?)
-            .map_err(|e| anyhow::anyhow!(e))?;
+    let query_map =
+        serde_json::from_value(serde_json::to_value(ctx.query).unwrap()).unwrap_or_default();
+    let r_data = Some(serde_json::from_value(serde_json::to_value(ctx.data).unwrap()).unwrap());
+
     call_custom_redirect_location(
         app,
-        service_name,
-        method,
-        headers,
-        q,
-        http_method,
-        uri,
-        Some(body),
+        CustomCallContext {
+            service_name: ctx.service_name,
+            method: ctx.method,
+            headers: ctx.headers,
+            query: query_map,
+            http_method: ctx.http_method,
+            uri: ctx.uri,
+            data: r_data,
+        },
     )
     .await
 }
@@ -332,16 +281,18 @@ where
     P: FromRestParams + Send + Sync + Clone + 'static,
     Q: Serialize,
 {
-    let q = query_to_map(query);
+    let query_map = query_to_map(query);
     call_custom_json(
         app,
-        service_name,
-        method,
-        headers,
-        q,
-        http_method,
-        uri,
-        None,
+        CustomCallContext {
+            service_name,
+            method,
+            headers,
+            query: query_map,
+            http_method,
+            uri,
+            data: None,
+        },
     )
     .await
 }
@@ -360,16 +311,18 @@ where
     P: FromRestParams + Send + Sync + Clone + 'static,
     Q: Serialize,
 {
-    let q = query_to_map(query);
+    let query_map = query_to_map(query);
     call_custom_redirect_location(
         app,
-        service_name,
-        method,
-        headers,
-        q,
-        http_method,
-        uri,
-        None,
+        CustomCallContext {
+            service_name,
+            method,
+            headers,
+            query: query_map,
+            http_method,
+            uri,
+            data: None,
+        },
     )
     .await
 }
@@ -468,10 +421,21 @@ where
                     // Use clean Json extractor - multipart is handled by middleware
                     let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
                         .await // 10MB limit for JSON
-                        .map_err(|e| dog_core::errors::DogError::bad_request(format!("Failed to read request body: {}", e)).into_anyhow())?;
+                        .map_err(|e| {
+                            dog_core::errors::DogError::bad_request(format!(
+                                "Failed to read request body: {}",
+                                e
+                            ))
+                            .into_anyhow()
+                        })?;
 
-                    let data: R = serde_json::from_slice(&body_bytes)
-                        .map_err(|e| dog_core::errors::DogError::bad_request(format!("Failed to parse JSON: {}", e)).into_anyhow())?;
+                    let data: R = serde_json::from_slice(&body_bytes).map_err(|e| {
+                        dog_core::errors::DogError::bad_request(format!(
+                            "Failed to parse JSON: {}",
+                            e
+                        ))
+                        .into_anyhow()
+                    })?;
 
                     let params = RestParams::from_parts("rest", &headers, query, "POST", &uri);
                     let params = P::from_rest_params(params);

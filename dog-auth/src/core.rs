@@ -325,10 +325,8 @@ where
         }
 
         let strategy = self.strategies.get(strategy_name).ok_or_else(|| {
-            DogError::not_authenticated(format!(
-                "Unknown authentication strategy: {strategy_name}"
-            ))
-            .into_anyhow()
+            DogError::not_authenticated(format!("Unknown authentication strategy: {strategy_name}"))
+                .into_anyhow()
         })?;
 
         strategy

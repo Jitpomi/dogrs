@@ -249,8 +249,7 @@ impl BlobKeyStrategy for DefaultKeyStrategy {
             .unwrap_or_default()
             .as_secs();
 
-        let dt =
-            chrono::DateTime::from_timestamp(now as i64, 0).unwrap_or_else(chrono::Utc::now);
+        let dt = chrono::DateTime::from_timestamp(now as i64, 0).unwrap_or_else(chrono::Utc::now);
 
         format!(
             "{}/{:04}/{:02}/{}",
