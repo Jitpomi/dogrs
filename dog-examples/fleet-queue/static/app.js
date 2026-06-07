@@ -913,7 +913,6 @@ class FleetCommandPro {
     async addDeliveryMarkers() {
         if (!this.map) return;
         
-        console.log('🚚 Starting addDeliveryMarkers...');
         
         // Clear existing delivery markers
         this.deliveryMarkers.forEach(marker => marker.remove());
@@ -946,7 +945,6 @@ class FleetCommandPro {
             if (response.ok) {
                 const data = await response.json();
                 if (data.ok && data.ok.answers) {
-                    console.log(`📦 Found ${data.ok.answers.length} deliveries to display`);
                     data.ok.answers.forEach(delivery => {
                         const deliveryData = delivery.data;
                         const deliveryId = deliveryData.deliveryId?.value;
@@ -957,7 +955,6 @@ class FleetCommandPro {
                         const status = deliveryData.status?.value;
                         const priority = deliveryData.priority?.value;
                         
-                        console.log(`📍 Creating delivery marker: ${deliveryId} at (${lat}, ${lng})`);
                         
                         if (deliveryId && lat && lng) {
                             this.createDeliveryMarker(deliveryId, customer, address, lat, lng, status, priority);
@@ -1063,7 +1060,6 @@ class FleetCommandPro {
     async addAssignmentRoutes() {
         if (!this.map) return;
         
-        console.log('🛣️ Starting addAssignmentRoutes...');
         
         // Clear existing assignment routes - remove layers before sources
         this.assignmentRoutes.forEach(route => {
@@ -1099,9 +1095,7 @@ class FleetCommandPro {
             
             if (response.ok) {
                 const data = await response.json();
-                console.log('🔍 Assignment routes response:', data);
                 if (data.ok && data.ok.answers) {
-                    console.log(`🚛 Found ${data.ok.answers.length} active assignments to display`);
                     data.ok.answers.forEach((assignment, index) => {
                         const assignmentData = assignment.data;
                         const vehicleId = assignmentData.vehicleId?.value;
@@ -1111,7 +1105,6 @@ class FleetCommandPro {
                         const dLat = parseFloat(assignmentData.dLat?.value);
                         const dLng = parseFloat(assignmentData.dLng?.value);
                         
-                        console.log(`🗺️ Creating route: ${vehicleId} (${vLat}, ${vLng}) → ${deliveryId} (${dLat}, ${dLng})`);
                         
                         if (vehicleId && deliveryId && vLat && vLng && dLat && dLng) {
                             // Add small delay between route calculations to prevent API rate limiting
@@ -1137,7 +1130,6 @@ class FleetCommandPro {
         const sourceId = `assignment-route-${index}`;
         const layerId = `assignment-line-${index}`;
         
-        console.log(`🛣️ Calculating TomTom route for assignment: ${vehicleId} → ${deliveryId}`);
         
         try {
             // Use TomTom route calculation API for actual road-based routes
@@ -1148,6 +1140,8 @@ class FleetCommandPro {
                     'x-service-method': 'route'
                 },
                 body: JSON.stringify({
+                    vehicle_id: vehicleId,
+                    delivery_id: deliveryId,
                     from_lat: vLat,
                     from_lng: vLng,
                     to_lat: dLat,
@@ -1176,7 +1170,6 @@ class FleetCommandPro {
                             duration: routeData.duration_seconds || 0
                         }
                     };
-                    console.log(`✅ TomTom assignment route calculated: ${coordinates.length} points, ${(routeData.distance_meters / 1000).toFixed(1)}km`);
                 } else {
                     console.warn(`⚠️ TomTom route failed for ${vehicleId} → ${deliveryId}, falling back to straight line`);
                     routeGeoJSON = this.createStraightLineRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng);
@@ -2102,7 +2095,6 @@ class FleetCommandPro {
     async displayVehicleRoute(vehicleId) {
         if (!this.map) return;
         
-        console.log(`🛣️ Displaying route for vehicle ${vehicleId}`);
         
         try {
             // Get assignment for this specific vehicle using the working operations endpoint
@@ -2151,7 +2143,6 @@ class FleetCommandPro {
                         const deliveryTime = assignmentData.deliveryTime?.value;
                         
                         if (vLat && vLng && dLat && dLng && deliveryId) {
-                            console.log(`🗺️ Creating route: ${vehicleId} (${vLat}, ${vLng}) → ${deliveryId} (${dLat}, ${dLng})`);
                             
                             // Clear any existing tracked route and delivery marker (but preserve assignment routes)
                             this.clearTrackedRoute();
@@ -2373,7 +2364,6 @@ class FleetCommandPro {
         const sourceId = `tracked-route`;
         const layerId = `tracked-route-line`;
         
-        console.log(`🛣️ Calculating TomTom route: ${vehicleId} → ${deliveryId}`);
         
         try {
             // Use TomTom route calculation API for actual road-based routes with geometry
@@ -3386,9 +3376,8 @@ class FleetCommandPro {
     updateDispatchView() {
         this.updateAvailableDrivers();
         this.updatePendingQueue();
-        // Delivery markers now show for all deliveries
         this.addDeliveryMarkers();
-        this.addAssignmentRoutes();
+        // addAssignmentRoutes is called once during loadAllData — do not repeat here
     }
     
     updateAvailableDrivers() {
@@ -3669,7 +3658,6 @@ class FleetCommandPro {
     
     startRealTimeUpdates() {
         // Polling disabled - will use dog-realtime when implemented
-        console.log('🔄 Real-time polling disabled - awaiting dog-realtime integration');
     }
     
     setupDeliveryDetailsButton() {
@@ -4133,7 +4121,6 @@ async assignDeliveryToDriver(deliveryId, driverId) {
 
 startRealTimeUpdates() {
     // Polling disabled - will use dog-realtime when implemented
-    console.log('🔄 Real-time polling disabled - awaiting dog-realtime integration');
 }
 
     updateDriversView() {
@@ -6184,6 +6171,5 @@ startRealTimeUpdates() {
 
 // Initialize FleetCommand Pro when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('🚀 Starting FleetCommand Pro Enterprise System...');
     window.fleetCommand = new FleetCommandPro();
 });
