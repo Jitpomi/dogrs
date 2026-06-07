@@ -1598,7 +1598,6 @@ class FleetCommandPro {
     }
 
     async loadVehicleTrafficData(vehicleId, lat, lng) {
-        console.log(`🔄 Loading traffic data for vehicle ${vehicleId} - Consolidated version`);
         try {
             // Check if DOM elements exist first
             const routeStatus = document.getElementById(`route-status-${vehicleId}`);
@@ -1616,7 +1615,6 @@ class FleetCommandPro {
             
             // Get route data using consolidated function
             const routeData = await this.getActiveRouteData(vehicleId);
-            console.log('Query response for', vehicleId, ':', routeData);
             
             if (routeData.ok && routeData.ok.answers && routeData.ok.answers.length > 0) {
                 const currentRoute = routeData.ok.answers[0].data;
@@ -2121,7 +2119,6 @@ class FleetCommandPro {
             
             if (response.ok) {
                 const data = await response.json();
-                console.log(`🔍 Vehicle ${vehicleId} assignment response:`, data);
                 
                 if (data.ok && data.ok.answers && data.ok.answers.length > 0) {
                     // Find the assignment for this specific vehicle
@@ -2205,7 +2202,6 @@ class FleetCommandPro {
     async addTrackedDeliveryMarker(deliveryId, lat, lng, deliveryAddress = null, deliveryStatus = 'pending', customerName = null, packageWeight = null, deliveryTime = null) {
         if (!this.map) return;
         
-        console.log(`📦 Adding tracked delivery marker: ${deliveryId} at (${lat}, ${lng}) - CACHE_BUSTER_v20`);
         
         // Create delivery marker element
         const markerElement = document.createElement('div');
@@ -2274,11 +2270,8 @@ class FleetCommandPro {
                 console.log('❌ Reverse geocoding error, using coordinates:', geoError);
             }
         } else {
-            console.log('✅ Using provided delivery address:', finalDeliveryAddress);
         }
 
-        console.log('Final delivery address for popup:', finalDeliveryAddress);
-        console.log('Final delivery status for popup:', finalDeliveryStatus);
 
         // Add popup for delivery marker
         const popup = new tt.Popup({ 
@@ -2359,7 +2352,6 @@ class FleetCommandPro {
             popup.setLngLat([lng, lat]).addTo(this.map);
         });
         
-        console.log(`✅ Tracked delivery marker added: ${deliveryId}`);
     }
 
     async createTrackedRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng) {
@@ -2387,9 +2379,6 @@ class FleetCommandPro {
             
             if (response.ok) {
                 const routeData = await response.json();
-                console.log(`🗺️ TomTom route response:`, routeData);
-                console.log(`🔍 Response keys:`, Object.keys(routeData));
-                console.log(`🔍 Response status:`, routeData.status);
                 
                 let routeGeoJSON;
                 
@@ -2410,7 +2399,6 @@ class FleetCommandPro {
                             duration: routeData.duration_seconds || 0
                         }
                     };
-                    console.log(`✅ TomTom route calculated: ${coordinates.length} points, ${(routeData.distance_meters / 1000).toFixed(1)}km`);
                 } else {
                     console.error('❌ TomTom backend did not return route geometry');
                     console.log('Response structure:', Object.keys(routeData));
@@ -2484,7 +2472,6 @@ class FleetCommandPro {
     }
 
     enterTrackingMode(vehicleId) {
-        console.log(`🎯 Entering tracking mode for vehicle: ${vehicleId}`);
         this.trackedVehicleId = vehicleId;
         
         // Dim all other vehicles and highlight the tracked one
@@ -2564,7 +2551,6 @@ class FleetCommandPro {
             [maxLng + padding, maxLat + padding]  // Northeast
         ];
         
-        console.log(`🗺️ Fitting map to route bounds: ${vehicleId} → ${deliveryId}`);
         
         // Fit the map to show the entire route
         this.map.fitBounds(bounds, {
@@ -2673,7 +2659,6 @@ class FleetCommandPro {
             // Fit map to show the entire route
             this.fitMapToRoute(routeGeoJSON, vehicleId, deliveryId);
             
-            console.log(`✅ Tracked route added to map: ${vehicleId} → ${deliveryId}`);
             
         } catch (error) {
             console.error('Error adding tracked route to map:', error);
