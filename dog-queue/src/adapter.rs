@@ -330,20 +330,25 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
     /// reflects all cancellations that go through this adapter method.
     #[instrument(skip(self), fields(tenant_id = %ctx.tenant_id, job_id = %job_id))]
     pub async fn cancel(&self, ctx: QueueCtx, job_id: JobId) -> QueueResult<bool> {
-        // Resolve job_type BEFORE canceling — the record is still in a pre-terminal
-        // state here, so get_record() reliably succeeds.  After cancel() the record
-        // may be archived or cleaned up by backends that do not retain terminal records.
-        let job_type_str = self
+        // Resolve job_type BEFORE canceling for observability — best-effort only.
+        //
+        // Using `.ok()` instead of `.unwrap_or_default()`: if `get_record()` fails
+        // (job already terminal, backend error), we get `None` and skip the metrics
+        // increment rather than recording `job_type = ""`, which would create a phantom
+        // `""` key in `LiveMetrics::per_type` that contaminates all job-type snapshots.
+        let job_type = self
             .backend
             .get_record(ctx.clone(), job_id.clone())
             .await
-            .map(|r| r.message.job_type)
-            .unwrap_or_default();
+            .ok()
+            .map(|r| r.message.job_type);
 
         let canceled = self.backend.cancel(ctx.clone(), job_id.clone()).await?;
         if canceled {
-            self.observability
-                .record_job_canceled(&ctx, &job_id, &job_type_str);
+            // Only record metrics when we know the job type — never emit a blank key.
+            if let Some(ref jt) = job_type {
+                self.observability.record_job_canceled(&ctx, &job_id, jt);
+            }
             info!("Canceled job {}", job_id);
         }
         Ok(canceled)

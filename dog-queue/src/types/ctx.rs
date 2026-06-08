@@ -35,20 +35,23 @@ impl QueueCtx {
     }
 
     /// Add a trace ID for distributed tracing
-    pub fn with_trace_id(mut self, trace_id: String) -> Self {
-        self.trace_id = Some(trace_id);
+    pub fn with_trace_id(mut self, trace_id: impl Into<String>) -> Self {
+        self.trace_id = Some(trace_id.into());
         self
     }
 
     /// Add a request ID for request correlation
-    pub fn with_request_id(mut self, request_id: String) -> Self {
-        self.request_id = Some(request_id);
+    pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = Some(request_id.into());
         self
     }
 
-    /// Add a tag for observability
-    pub fn with_tag(mut self, key: String, value: String) -> Self {
-        self.tags.insert(key, value);
+    /// Add a single observability tag.
+    ///
+    /// Accepts any `impl Into<String>` for both key and value to avoid
+    /// unnecessary `.to_string()` calls at the call site.
+    pub fn with_tag(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.tags.insert(key.into(), value.into());
         self
     }
 
@@ -58,9 +61,13 @@ impl QueueCtx {
         self
     }
 
-    /// Get a tag value by key
-    pub fn get_tag(&self, key: &str) -> Option<&String> {
-        self.tags.get(key)
+    /// Get a tag value by key.
+    ///
+    /// Returns `Option<&str>` rather than `Option<&String>` — idiomatic Rust;
+    /// avoids the `clippy::ref_option_string` anti-pattern and composes directly
+    /// with `unwrap_or("default")` and similar `&str` idioms.
+    pub fn get_tag(&self, key: &str) -> Option<&str> {
+        self.tags.get(key).map(|s| s.as_str())
     }
 
     /// Check if a tag exists
