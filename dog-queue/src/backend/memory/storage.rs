@@ -30,12 +30,12 @@ type IdempotencyMap = HashMap<(String, String, String, String), JobId>;
 /// Entries are ordered descending by priority (Critical first, Low last).
 /// Within the same priority, insertion order is preserved (FIFO).
 ///
-/// `position(|p| new_priority > *p)` finds the first slot whose incumbent
-/// has a strictly lower priority — the new entry is inserted before it,
+/// `partition_point` uses binary search to find the insertion index,
 /// preserving FIFO order for entries of equal priority.
 ///
-/// **Performance note**: this is O(n) scan + O(n) shift — acceptable for the
-/// in-memory development backend. A production backend should use a
+/// **Performance note**: the search phase is O(log n), but `VecDeque::insert`
+/// still performs an O(n) shift. This is acceptable for a more scalable
+/// development backend. A production backend should use a
 /// `BinaryHeap` or per-priority `VecDeque` tiers for O(log n) / O(1) ops.
 pub(super) fn priority_insert(queue: &mut VecDeque<QueueEntry>, entry: QueueEntry) {
     let pos = queue.partition_point(|(p, _, _)| *p >= entry.0);
