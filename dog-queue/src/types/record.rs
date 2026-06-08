@@ -106,17 +106,17 @@ impl JobRecord {
     /// Create a new job record
     pub fn new(job_id: JobId, tenant_id: String, message: JobMessage) -> Self {
         let now = Utc::now();
-        let status = if message.run_at > now {
-            JobStatus::Scheduled
-        } else {
-            JobStatus::Enqueued
-        };
 
+        // Always start as Enqueued regardless of run_at.
+        // Delayed-job eligibility is enforced by the (priority, run_at, job_id) tuple
+        // stored in the queue entry — the dequeue scan gates on run_at <= now there.
+        // Setting Scheduled here caused data loss: dequeue phase 2 only leases
+        // Enqueued | Retrying, so delayed jobs silently fell into the tombstone arm.
         Self {
             job_id,
             tenant_id,
             message,
-            status,
+            status: JobStatus::Enqueued,
             attempt: 0,
             created_at: now,
             updated_at: now,
@@ -124,11 +124,6 @@ impl JobRecord {
             lease_token: None,
             lease_until: None,
         }
-    }
-
-    /// Check if the job can be retried
-    pub fn can_retry(&self) -> bool {
-        self.attempt < self.message.max_retries && !self.status.is_terminal()
     }
 
     /// Check if the lease has expired
@@ -181,10 +176,13 @@ impl JobRecord {
         self.updated_at = Utc::now();
     }
 
-    /// Schedule a retry
+    /// Schedule a retry.
+    ///
+    /// Does NOT increment `attempt` — that is `dequeue`'s job when the lease is
+    /// created, making `dequeue` the sole source of truth for the attempt counter.
+    /// Incrementing here AND in `dequeue` would silently halve the retry budget.
     pub fn schedule_retry(&mut self, retry_at: DateTime<Utc>) {
         self.status = JobStatus::Retrying { retry_at };
-        self.attempt += 1;
         self.lease_token = None;
         self.lease_until = None;
         self.updated_at = Utc::now();

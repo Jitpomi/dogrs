@@ -368,9 +368,11 @@ impl QueueBackend for MemoryBackend {
             return Err(QueueError::InvalidLeaseToken);
         }
 
-        // Extend lease
         if let Some(ref mut lease_until) = record.lease_until {
-            *lease_until += chrono::Duration::from_std(extra_time).unwrap();
+            let extra = chrono::Duration::from_std(extra_time).map_err(|e| {
+                QueueError::Internal(format!("Invalid heartbeat duration: {e}"))
+            })?;
+            *lease_until += extra;
             record.updated_at = now;
         }
 

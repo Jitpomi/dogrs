@@ -43,10 +43,19 @@ impl<J: Job + for<'de> Deserialize<'de>> JobHandler for ConcreteJobHandler<J> {
         let job: J = serde_json::from_slice(&message.payload_bytes)
             .map_err(|e| JobError::Permanent(format!("Failed to deserialize job: {}", e)))?;
 
-        // Downcast the context
+        // Downcast the context to the concrete type this job expects.
+        // If this fails, the worker was started with the wrong context type —
+        // include type info so the error is diagnosable rather than looking
+        // like a real job failure that burns the retry budget.
         let typed_context = context
             .downcast_ref::<J::Context>()
-            .ok_or_else(|| JobError::Permanent("Invalid context type".to_string()))?
+            .ok_or_else(|| {
+                JobError::Permanent(format!(
+                    "Context type mismatch for job '{}': expected context type '{}'",
+                    J::JOB_TYPE,
+                    std::any::type_name::<J::Context>(),
+                ))
+            })?
             .clone();
 
         // Execute the job

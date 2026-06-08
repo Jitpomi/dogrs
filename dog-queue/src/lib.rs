@@ -15,51 +15,60 @@
 //! - **Structured Observability**: Event streams and distributed tracing, not just basic metrics
 //! - **Safe Backend Migration**: Consistent semantics enable zero-downtime storage transitions
 //!
-//! ## 🚀 Reference Payload Quick Start
+//! ## Quick Start
 //!
 //! ```rust,ignore
 //! use dog_queue::prelude::*;
 //! use serde::{Deserialize, Serialize};
 //!
-//! // Reference payload - constant size serialization
+//! // Define a job — payload must be Serialize + Deserialize
 //! #[derive(Serialize, Deserialize)]
-//! struct GenerateWaveformJob {
-//!     track_id: TrackId,    // Reference, not audio data
-//!     blob_id: BlobId,      // Reference to dog-blob storage
-//!     resolution: u32,      // Small config data
+//! struct SendEmailJob {
+//!     recipient: String,
+//!     subject: String,
 //! }
 //!
-//! #[async_trait::async_trait]
-//! impl Job for GenerateWaveformJob {
-//!     type Context = AudioContext;
+//! // Shared execution context (e.g. database pool, SMTP client)
+//! #[derive(Clone)]
+//! struct AppContext {
+//!     smtp_host: String,
+//! }
+//!
+//! #[async_trait]
+//! impl Job for SendEmailJob {
+//!     type Context = AppContext;
 //!     type Result = ();
-//!     type Error = AudioError;
-//!     
-//!     // Type-safe execution with reference payloads
-//!     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, Self::Error> {
-//!         // Load audio from dog-blob using reference
-//!         let audio_data = ctx.blob_store.get(&self.blob_id).await?;
-//!         let waveform = generate_waveform(audio_data, self.resolution).await?;
-//!         
-//!         // Store result in blob metadata, not queue
-//!         ctx.blob_store.update_metadata(&self.blob_id, waveform).await?;
+//!
+//!     const JOB_TYPE: &'static str = "send_email";
+//!     const PRIORITY: JobPriority = JobPriority::Normal;
+//!     const MAX_RETRIES: u32 = 3;
+//!
+//!     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
+//!         // use ctx.smtp_host to send self.recipient / self.subject
 //!         Ok(())
 //!     }
-//!     
-//!     // Compile-time job identification
-//!     const JOB_TYPE: &'static str = "generate_waveform";
-//!     const PRIORITY: JobPriority = JobPriority::High;
 //! }
 //!
-//! // Multi-tenant queue with lease semantics
-//! let engine = QueueEngine::new(redis_backend)
-//!     .with_codec_registry()
-//!     .with_observability();
-//!     
-//! let tenant_ctx = QueueCtx::new("tenant_123".to_string())
-//!     .with_trace_id(trace_id);
-//!     
-//! let job_id = engine.enqueue(tenant_ctx, job).await?;
+//! // Wire up the adapter
+//! let backend = dog_queue::backend::memory::MemoryBackend::new();
+//! let adapter = QueueAdapter::new(backend);
+//! adapter.register_job::<SendEmailJob>().await?;
+//!
+//! // Enqueue from any tenant context
+//! let ctx = QueueCtx::new("tenant_abc".to_string());
+//! let job_id = adapter.enqueue(ctx.clone(), SendEmailJob {
+//!     recipient: "user@example.com".to_string(),
+//!     subject: "Welcome!".to_string(),
+//! }).await?;
+//!
+//! // Start a worker — it polls and dispatches jobs automatically
+//! let app_ctx = AppContext { smtp_host: "smtp.example.com".to_string() };
+//! let handle = adapter
+//!     .start_workers(ctx, app_ctx, vec!["send_email".to_string()])
+//!     .await?;
+//!
+//! // Graceful shutdown
+//! handle.shutdown().await?;
 //! ```
 
 // Production-ready architecture modules
