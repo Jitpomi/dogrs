@@ -30,13 +30,9 @@ type IdempotencyMap = HashMap<(String, String, String, String), JobId>;
 /// Entries are ordered descending by priority (Critical first, Low last).
 /// Within the same priority, insertion order is preserved (FIFO).
 ///
-/// `partition_point` uses binary search to find the insertion index,
-/// preserving FIFO order for entries of equal priority.
-///
-/// **Performance note**: the search phase is O(log n), but `VecDeque::insert`
-/// still performs an O(n) shift. This is acceptable for a more scalable
-/// development backend. A production backend should use a
-/// `BinaryHeap` or per-priority `VecDeque` tiers for O(log n) / O(1) ops.
+/// Binary-searches the insertion point in O(log n), then inserts in O(n)
+/// because VecDeque::insert may shift elements. This preserves FIFO for
+/// equal priorities while reducing the search cost.
 pub(super) fn priority_insert(queue: &mut VecDeque<QueueEntry>, entry: QueueEntry) {
     let pos = queue.partition_point(|(p, _, _)| *p >= entry.0);
     queue.insert(pos, entry);
@@ -162,8 +158,8 @@ impl QueueBackend for MemoryBackend {
         let now = Utc::now();
 
         // ── Fast-path: Advisory Read Lock ───────────────────────────────────────
-        // Prevent write-lock thundering herd by verifying if an eligible job
-        // might exist across ANY of the requested queues before upgrading to write.
+        // Advisory only: another worker may remove the candidate before we acquire
+        // the write lock, so the write phase must fully re-check eligibility.
         let has_candidate = {
             let queues_read = self.queues.read().await;
             if let Some(tq) = queues_read.get(&ctx.tenant_id) {
@@ -198,6 +194,7 @@ impl QueueBackend for MemoryBackend {
                 let mut candidate_id = None;
                 
                 if let Some(tq) = queues_lock.get_mut(&ctx.tenant_id) {
+                    let mut should_remove_queue = false;
                     if let Some(queue) = tq.get_mut(*queue_name) {
                         let pos = queue
                             .iter()
@@ -206,11 +203,12 @@ impl QueueBackend for MemoryBackend {
                             let (_, _, job_id) = queue.remove(i).unwrap();
                             candidate_id = Some(job_id);
                         }
-                        
-                        // Issue 3: Cleanup empty inner queues to prevent slow memory leaks
-                        if queue.is_empty() {
-                            tq.remove(*queue_name);
-                        }
+                        should_remove_queue = queue.is_empty();
+                    }
+                    
+                    // Issue 3: Cleanup empty inner queues to prevent slow memory leaks
+                    if should_remove_queue {
+                        tq.remove(*queue_name);
                     }
                     
                     // Issue 3: Cleanup empty tenant map
