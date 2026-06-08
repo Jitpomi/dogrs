@@ -12,18 +12,12 @@ pub struct JsonCodec;
 
 impl JobCodec for JsonCodec {
     fn encode_bytes(&self, bytes: &[u8]) -> QueueResult<Vec<u8>> {
-        // Validates well-formedness before storing. This guard is meaningful for
-        // direct callers of `encode_bytes` (i.e. custom backend implementations).
+        // No validation here: for `JsonCodec`, the caller is `CodecRegistry::encode_job`
+        // which always passes bytes from `serde_json::to_vec(job)` — already valid JSON.
         //
-        // When called via `CodecRegistry::encode_job`, the input bytes are always
-        // from `serde_json::to_vec(job)` which already guarantees valid JSON, so
-        // this scan is redundant in that specific hot path. The trade-off is
-        // acceptable: encode_bytes is a public API and must defend against direct
-        // callers. `IgnoredAny` short-circuits after structure validation without
-        // allocating a Value AST, keeping the overhead minimal.
-        serde_json::from_slice::<serde::de::IgnoredAny>(bytes).map_err(|e| {
-            QueueError::SerializationError(format!("Payload is not valid JSON: {e}"))
-        })?;
+        // Corruption in *stored* data is caught by `decode_bytes` (called at dequeue time),
+        // which is the correct, unavoidable site for that guard. Validating at encode time
+        // as well doubles the O(n) parse cost on the hot path without adding safety.
         Ok(bytes.to_vec())
     }
 
@@ -72,12 +66,21 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_rejects_non_json() {
+    fn test_encode_is_passthrough() {
+        // encode_bytes is a passthrough — it accepts any byte sequence because
+        // validation is the responsibility of decode_bytes (called at dequeue time).
+        // The encode path's input is always from serde_json::to_vec(), which is
+        // already valid JSON, so guarding here would be redundant overhead.
         let codec = JsonCodec;
         let garbage = b"\xff\xfe binary garbage \x00";
+        // encode_bytes succeeds — it does not inspect the bytes.
+        let encoded = codec.encode_bytes(garbage).unwrap();
+        assert_eq!(encoded, garbage);
+
+        // decode_bytes DOES reject non-JSON — this is where corruption matters.
         assert!(
-            codec.encode_bytes(garbage).is_err(),
-            "encode_bytes must reject non-JSON bytes"
+            codec.decode_bytes(garbage).is_err(),
+            "decode_bytes must reject non-JSON bytes"
         );
     }
 

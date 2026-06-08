@@ -33,12 +33,17 @@ pub struct JobMessage {
 
 impl JobMessage {
     /// Create a new job message
-    pub fn new(job_type: String, payload_bytes: Vec<u8>, codec: String, queue: String) -> Self {
+    pub fn new(
+        job_type: impl Into<String>,
+        payload_bytes: Vec<u8>,
+        codec: impl Into<String>,
+        queue: impl Into<String>,
+    ) -> Self {
         Self {
-            job_type,
+            job_type: job_type.into(),
             payload_bytes,
-            codec,
-            queue,
+            codec: codec.into(),
+            queue: queue.into(),
             priority: JobPriority::default(),
             max_retries: 3,
             run_at: Utc::now(),
@@ -65,8 +70,8 @@ impl JobMessage {
     }
 
     /// Set the idempotency key
-    pub fn with_idempotency_key(mut self, key: String) -> Self {
-        self.idempotency_key = Some(key);
+    pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(key.into());
         self
     }
 

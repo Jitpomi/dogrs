@@ -14,7 +14,11 @@ use serde::{Deserialize, Serialize};
 /// let caps = QueueCapabilities::all();
 /// assert!(caps.supports(QueueFeature::Cancel));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Serializes as snake_case strings matching the corresponding field names in
+/// [`QueueCapabilities`] (e.g. `QueueFeature::ScheduledAt` → `"scheduled_at"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum QueueFeature {
     /// Delayed job execution (run_at > now)
     Delayed,
@@ -49,7 +53,14 @@ pub enum QueueFeature {
 /// backend that has not explicitly declared its features, **not** as a
 /// description of a "typical" backend.  Backends that implement additional
 /// features must override [`QueueBackend::capabilities`] explicitly.
+///
+/// # Forward compatibility
+///
+/// `#[serde(default)]` on the struct ensures that new capability fields added
+/// in future versions deserialize as `false` (conservative baseline) when
+/// reading data serialized by an older version — no migration required.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct QueueCapabilities {
     /// Support for delayed job execution (run_at > now)
     pub delayed: bool,
@@ -108,6 +119,14 @@ impl QueueCapabilities {
     }
 
     /// Create minimal capabilities (basic enqueue/dequeue only).
+    ///
+    /// This is identical to [`Default::default()`] (all features `false`).
+    /// Prefer `QueueCapabilities::default()` directly for clarity.
+    #[deprecated(
+        note = "Identical to QueueCapabilities::default(). \
+                Use Default::default() for the conservative baseline or \
+                QueueCapabilities::all() for full feature support."
+    )]
     pub fn minimal() -> Self {
         Self::default()
     }
