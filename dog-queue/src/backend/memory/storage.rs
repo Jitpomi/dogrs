@@ -465,10 +465,11 @@ impl QueueBackend for MemoryBackend {
             _ => {}
         }
 
-        // Cancel the job
-        record.status = JobStatus::Canceled { canceled_at: now };
-        record.lease_token = None; // Invalidate lease
-        record.updated_at = now;
+        // Delegate to the JobRecord transition helper — consistent with complete(),
+        // fail(), and schedule_retry() used by the other ack methods. This ensures
+        // all cancellation-side effects (status, lease_token, updated_at) stay in
+        // sync with any future additions to JobRecord::cancel().
+        record.cancel();
 
         // Emit event
         let event = JobEvent::Canceled {
@@ -577,7 +578,7 @@ mod tests {
     use crate::{JobMessage, JobPriority};
 
     fn create_test_context() -> QueueCtx {
-        QueueCtx::new("test_tenant".to_string())
+        QueueCtx::new("test_tenant")
     }
 
     fn create_test_job_message() -> JobMessage {

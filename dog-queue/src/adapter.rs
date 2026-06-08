@@ -608,6 +608,15 @@ impl<C: Send + Sync + 'static> Worker<C> {
         // Reset to `None` whenever a job is successfully processed.
         let mut idle_since: Option<std::time::Instant> = None;
 
+        // Track consecutive infrastructure errors to apply exponential backoff
+        // and suppress log spam during prolonged backend outages.
+        //
+        // With flat error_backoff (1 s) and max_workers (10), a 3-hour outage would
+        // produce 10 × 3 × 3600 = 108,000 error! log lines. Exponential escalation
+        // caps at 30 s and power-of-two log sampling keeps ops informed without
+        // overwhelming log ingestion pipelines.
+        let mut consecutive_errors: u32 = 0;
+
         loop {
             tokio::select! {
                 _ = &mut shutdown_rx => {
@@ -618,11 +627,25 @@ impl<C: Send + Sync + 'static> Worker<C> {
                 result = self.process_next_job(&queue_refs) => {
                     match result {
                         Ok(true) => {
-                            // A job ran — reset the idle clock.
+                            // A job ran — reset both the idle clock and error counter.
+                            if consecutive_errors > 0 {
+                                info!(
+                                    "Backend recovered after {} consecutive error(s)",
+                                    consecutive_errors
+                                );
+                                consecutive_errors = 0;
+                            }
                             idle_since = None;
                         }
                         Ok(false) => {
-                            // No jobs available — track idle duration.
+                            // No jobs available — reset error counter, track idle duration.
+                            if consecutive_errors > 0 {
+                                info!(
+                                    "Backend recovered after {} consecutive error(s)",
+                                    consecutive_errors
+                                );
+                                consecutive_errors = 0;
+                            }
                             let idle_start = *idle_since.get_or_insert_with(std::time::Instant::now);
                             if idle_start.elapsed() >= self.adapter.config.worker_idle_timeout {
                                 info!(
@@ -650,17 +673,40 @@ impl<C: Send + Sync + 'static> Worker<C> {
                             tokio::time::sleep(sleep_duration).await;
                         }
                         Err(e) => {
-                            error!("Error processing job: {}", e);
-                            // Infrastructure error — back off before retrying to avoid
-                            // hammering a degraded backend.
-                            //
-                            // Reset `idle_since` to distinguish a degraded backend (worker
-                            // is active, just failing) from a truly idle queue (no jobs).
-                            // Without this reset, a backend outage lasting longer than
-                            // `worker_idle_timeout` would self-terminate all workers — they
-                            // would exit exactly when recovery throughput is most needed.
+                            consecutive_errors += 1;
+                            // Log every first error and subsequent powers-of-two to stay
+                            // informed without flooding log ingestion during long outages.
+                            // Pattern: error at 1, warn at 2, 4, 8, 16, … → silences
+                            // intermediate lines while preserving a clear escalation trail.
+                            if consecutive_errors == 1 {
+                                error!(
+                                    "Backend error (will back off exponentially): {}", e
+                                );
+                            } else if consecutive_errors.is_power_of_two() {
+                                warn!(
+                                    "Backend still unavailable after {} error(s): {}",
+                                    consecutive_errors, e
+                                );
+                            }
+                            // Exponential backoff capped at 30s:
+                            //   error #1 → 1s, #2 → 2s, #3 → 4s, #4 → 8s,
+                            //   #5 → 16s, #6+ → 30s (cap).
+                            // error_backoff (default 1s) is the base; min() caps at 30s.
+                            // Using saturating_pow to prevent overflow on very long outages.
+                            let exponent = consecutive_errors.saturating_sub(1).min(5);
+                            let backoff = self
+                                .adapter
+                                .config
+                                .error_backoff
+                                .saturating_mul(2u32.saturating_pow(exponent))
+                                .min(Duration::from_secs(30));
+                            // Reset idle_since: distinguish degraded backend (worker is
+                            // active, just failing) from empty queue (no jobs to process).
+                            // Without this reset, an outage longer than worker_idle_timeout
+                            // self-terminates all workers exactly when recovery throughput
+                            // is most needed.
                             idle_since = None;
-                            tokio::time::sleep(self.adapter.config.error_backoff).await;
+                            tokio::time::sleep(backoff).await;
                         }
                     }
                 }
@@ -841,15 +887,16 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     }
                     Err(QueueError::JobCanceled) => {
                         // Cancel-wins: a cancel request arrived after execute() started.
-                        // The result is discarded; the backend already set status = Canceled.
+                        //
+                        // record_job_canceled() was ALREADY called by QueueAdapter::cancel()
+                        // when it successfully set the backend status to Canceled.
+                        // Do NOT call any observability method here — that would double-count
+                        // the event, inflating both jobs_canceled and jobs_failed for a single
+                        // lifecycle event and contaminating success_rate() calculations.
                         warn!(
                             "Job {} completed execution but was canceled mid-flight — \
-                             result discarded (cancel-wins)",
+                             result discarded (cancel-wins); metrics already recorded by cancel()",
                             job_id
-                        );
-                        self.adapter.observability.record_job_failed(
-                            &self.ctx, &job_id, job_type,
-                            "Canceled mid-flight (cancel-wins)",
                         );
                     }
                     Err(QueueError::JobAlreadyTerminal) => {
@@ -933,11 +980,12 @@ impl<C: Send + Sync + 'static> Worker<C> {
             .saturating_mul(2_u64.pow(attempt.saturating_sub(1)));
         let ceiling = base.min(cap);
 
-        // Uniform sample in [0, ceiling) — each retrier picks a different slot.
-        // rand::random::<u64>() is a free function available in all rand versions;
-        // ceiling is always ≪ u64::MAX (defaults to 3600 s) so modulo bias is negligible.
+        // Uniform sample in [0, ceiling] — each retrier picks a different slot.
+        // rand::random_range is the rand 0.10 top-level API used throughout this file;
+        // consistent with the poll_jitter sampling below. Inclusive upper bound
+        // matches the documented semantics ("pick uniformly from [0, cap]").
         let jitter_secs = if ceiling > 0 {
-            rand::random::<u64>() % ceiling
+            rand::random_range(0u64..=ceiling)
         } else {
             0
         };
@@ -1005,7 +1053,7 @@ mod tests {
         // Register the job type first
         adapter.register_job::<TestJob>().await.unwrap();
 
-        let ctx = QueueCtx::new("test_tenant".to_string());
+        let ctx = QueueCtx::new("test_tenant");
         let job = TestJob {
             data: "test".to_string(),
         };
