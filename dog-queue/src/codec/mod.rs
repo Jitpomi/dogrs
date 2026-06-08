@@ -91,10 +91,25 @@ impl CodecRegistry {
         registry
     }
 
-    /// Register a new codec
-    pub fn register(&mut self, codec: Arc<dyn JobCodec>) {
+    /// Register a new codec, returning the previously-registered codec for the same
+    /// `codec_id` if one existed.
+    ///
+    /// The return value allows callers to detect silent overwrites:
+    ///
+    /// ```no_run
+    /// # use dog_queue::codec::{CodecRegistry, JobCodec};
+    /// # use std::sync::Arc;
+    /// // if register() returns Some, a codec with the same ID was replaced.
+    /// // In-flight jobs encoded with the old codec may fail to decode.
+    /// # let mut registry = CodecRegistry::new();
+    /// # let my_codec: Arc<dyn JobCodec> = Arc::new(dog_queue::JsonCodec);
+    /// if let Some(prev) = registry.register(my_codec) {
+    ///     eprintln!("Replaced codec '{}' — in-flight jobs may fail", prev.codec_id());
+    /// }
+    /// ```
+    pub fn register(&mut self, codec: Arc<dyn JobCodec>) -> Option<Arc<dyn JobCodec>> {
         let codec_id = codec.codec_id().to_string();
-        self.codecs.insert(codec_id, codec);
+        self.codecs.insert(codec_id, codec)
     }
 
     /// Get a codec by ID
@@ -141,8 +156,9 @@ impl CodecRegistry {
         let codec = self.default_codec()?;
 
         // Serialize the job to raw JSON bytes.
-        let raw =
-            serde_json::to_vec(job).map_err(|e| QueueError::SerializationError(e.to_string()))?;
+        // Use QueueError::from (the From<serde_json::Error> impl) so the error
+        // carries the category prefix ("[Syntax]", "[Data]", etc.) for diagnosability.
+        let raw = serde_json::to_vec(job).map_err(QueueError::from)?;
 
         // Pass through the codec's encode_bytes so that custom codecs (compression,
         // encryption, alternate wire formats) are actually applied.

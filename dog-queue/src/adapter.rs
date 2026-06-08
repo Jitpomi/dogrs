@@ -502,13 +502,52 @@ impl<C: Send + Sync + 'static> Worker<C> {
         // For the JSON passthrough codec this is a no-op validation; for real codecs it is
         // mandatory — without this call the handler receives still-encoded bytes and
         // serde_json::from_slice silently produces a Permanent deserialization error.
-        let decoded_bytes = self
+        //
+        // A decode failure is DETERMINISTIC — retrying will never fix a corrupt payload or
+        // codec mismatch. We therefore immediately and permanently fail the job (ack_fail with
+        // retry_at = None) rather than propagating `?` and leaving the job stranded in
+        // Processing until the reaper expires the lease, re-queues it, and the next worker
+        // burns another attempt on the same unfixable error.
+        let decoded_bytes = match self
             .adapter
             .codec_registry
             .decode_job_payload(&leased_job.record.message)
-            .map_err(|e| {
-                QueueError::Internal(format!("Codec decode failed for job {job_id}: {e}"))
-            })?;
+        {
+            Ok(b) => b,
+            Err(e) => {
+                let error_str =
+                    format!("Codec decode failed (permanent — payload is corrupt or codec mismatch): {e}");
+                error!("Job {} permanently failed: {}", job_id, error_str);
+
+                // Stop the heartbeat before touching the lease.
+                heartbeat_handle.abort();
+
+                // Permanently fail the job so it leaves Processing immediately.
+                // Ignore ack_fail errors here — we cannot do anything useful with
+                // them and the job will be reclaimed by the reaper at worst.
+                let _ = self
+                    .adapter
+                    .backend
+                    .ack_fail(
+                        self.ctx.clone(),
+                        job_id.clone(),
+                        leased_job.lease_token,
+                        error_str.clone(),
+                        None, // retry_at = None → permanent failure
+                    )
+                    .await;
+
+                self.adapter
+                    .observability
+                    .record_job_failed(&self.ctx, &job_id, job_type, &error_str)
+                    .await;
+
+                // Return Ok(true) — we did process a job (it permanently failed).
+                // Returning Ok(false) would trigger the idle timer for an empty queue;
+                // Err would trigger the error backoff; neither is correct here.
+                return Ok(true);
+            }
+        };
         let mut decoded_message = leased_job.record.message.clone();
         decoded_message.payload_bytes = decoded_bytes;
 

@@ -13,7 +13,10 @@ pub struct JsonCodec;
 impl JobCodec for JsonCodec {
     fn encode_bytes(&self, bytes: &[u8]) -> QueueResult<Vec<u8>> {
         // Validate well-formedness before storing.
-        serde_json::from_slice::<serde_json::Value>(bytes).map_err(|e| {
+        // `IgnoredAny` validates the JSON structure without allocating a `serde_json::Value`
+        // AST — it short-circuits after confirming the structure is valid, so no strings,
+        // arrays, or nested objects are heap-allocated just to be discarded immediately.
+        serde_json::from_slice::<serde::de::IgnoredAny>(bytes).map_err(|e| {
             QueueError::SerializationError(format!("Payload is not valid JSON: {e}"))
         })?;
         Ok(bytes.to_vec())
@@ -21,7 +24,8 @@ impl JobCodec for JsonCodec {
 
     fn decode_bytes(&self, bytes: &[u8]) -> QueueResult<Vec<u8>> {
         // Validate well-formedness before returning to caller.
-        serde_json::from_slice::<serde_json::Value>(bytes).map_err(|e| {
+        // `IgnoredAny` validates structure without a Value allocation (see encode_bytes).
+        serde_json::from_slice::<serde::de::IgnoredAny>(bytes).map_err(|e| {
             QueueError::SerializationError(format!("Stored payload is corrupted (not valid JSON): {e}"))
         })?;
         Ok(bytes.to_vec())
