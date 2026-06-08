@@ -28,12 +28,14 @@ impl fmt::Display for JobId {
 
 impl From<String> for JobId {
     fn from(id: String) -> Self {
+        debug_assert!(!id.is_empty(), "JobId::from called with an empty string — this will never match any stored job");
         Self(id)
     }
 }
 
 impl From<&str> for JobId {
     fn from(id: &str) -> Self {
+        debug_assert!(!id.is_empty(), "JobId::from called with an empty string — this will never match any stored job");
         Self(id.to_string())
     }
 }
@@ -79,12 +81,14 @@ impl fmt::Display for LeaseToken {
 
 impl From<String> for LeaseToken {
     fn from(token: String) -> Self {
+        debug_assert!(!token.is_empty(), "LeaseToken::from called with an empty string — this will never match any active lease");
         Self(token)
     }
 }
 
 impl From<&str> for LeaseToken {
     fn from(token: &str) -> Self {
+        debug_assert!(!token.is_empty(), "LeaseToken::from called with an empty string — this will never match any active lease");
         Self(token.to_string())
     }
 }

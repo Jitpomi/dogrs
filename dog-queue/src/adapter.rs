@@ -348,6 +348,44 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         &self.config
     }
 
+    /// Retrieve the stored result of a completed job, deserialized to `J::Result`.
+    ///
+    /// Returns `Ok(Some(result))` if the job has completed and its result was
+    /// stored.  Returns `Ok(None)` if the job completed but produced no result
+    /// (i.e. the handler returned `Ok(None)` or the backend stored an empty value).
+    ///
+    /// # Errors
+    ///
+    /// - [`QueueError::JobNotFound`] — the job ID does not exist.
+    /// - [`QueueError::BackendUnsupported`] — the backend does not implement
+    ///   [`QueueBackend::get_record`].  For `MemoryBackend` this never happens.
+    /// - [`QueueError::SerializationError`] — the stored result bytes cannot be
+    ///   deserialized to `J::Result` (e.g. a schema migration happened between
+    ///   enqueue and retrieval).
+    pub async fn get_result<J: Job>(
+        &self,
+        ctx: QueueCtx,
+        job_id: JobId,
+    ) -> QueueResult<Option<J::Result>>
+    where
+        J::Result: serde::de::DeserializeOwned,
+    {
+        let record = self.backend.get_record(ctx, job_id).await?;
+
+        let result_str = match record.result {
+            Some(ref s) if !s.is_empty() => s,
+            _ => return Ok(None),
+        };
+
+        let result: J::Result = serde_json::from_str(result_str)
+            .map_err(|e| QueueError::SerializationError(format!(
+                "Failed to deserialize stored result for job type '{}': {e}",
+                J::JOB_TYPE
+            )))?;
+
+        Ok(Some(result))
+    }
+
 }
 
 impl<B: QueueBackend> Clone for QueueAdapter<B> {

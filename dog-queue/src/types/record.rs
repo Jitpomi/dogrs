@@ -114,6 +114,16 @@ pub struct JobRecord {
     /// Last error message (if any)
     pub last_error: Option<String>,
 
+    /// JSON-serialized result returned by the job handler on successful completion.
+    ///
+    /// Populated by [`QueueBackend::ack_complete`] when the handler returns
+    /// `Ok(result)`. Retrieve and deserialize via [`QueueAdapter::get_result`].
+    ///
+    /// Uses `#[serde(default)]` so that records serialized before this field
+    /// was added can be deserialized without error.
+    #[serde(default)]
+    pub result: Option<String>,
+
     /// Current lease token (if processing).
     ///
     /// Skipped during serialization to prevent the raw proof-of-ownership token
@@ -143,6 +153,7 @@ impl JobRecord {
             created_at: now,
             updated_at: now,
             last_error: None,
+            result: None,
             lease_token: None,
         }
     }

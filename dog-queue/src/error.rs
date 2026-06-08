@@ -1,3 +1,4 @@
+use crate::types::ids::JobId;
 use thiserror::Error;
 
 /// Result type for queue operations
@@ -9,8 +10,11 @@ pub enum QueueError {
     #[error("Job not found: {0}")]
     JobNotFound(String),
 
-    #[error("Invalid lease token")]
-    InvalidLeaseToken,
+    /// Lease token mismatch — the presented token does not match the one issued
+    /// when the job was leased.  Carries the `job_id` so operators can correlate
+    /// the error to a specific job in logs without external tracing.
+    #[error("Invalid lease token for job {job_id}")]
+    InvalidLeaseToken { job_id: JobId },
 
     #[error("Lease has expired")]
     LeaseExpired,

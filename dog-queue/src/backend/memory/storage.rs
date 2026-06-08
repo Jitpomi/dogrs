@@ -236,7 +236,7 @@ impl QueueBackend for MemoryBackend {
         ctx: QueueCtx,
         job_id: JobId,
         lease_token: LeaseToken,
-        _result_ref: Option<String>,
+        result_ref: Option<String>,
     ) -> QueueResult<()> {
         let now = Utc::now();
         let mut jobs = self.jobs.write().await;
@@ -265,7 +265,7 @@ impl QueueBackend for MemoryBackend {
 
         // Verify lease token
         if record.lease_token.as_ref() != Some(&lease_token) {
-            return Err(QueueError::InvalidLeaseToken);
+            return Err(QueueError::InvalidLeaseToken { job_id: job_id.clone() });
         }
 
         // Check lease expiry
@@ -275,6 +275,9 @@ impl QueueBackend for MemoryBackend {
                 return Err(QueueError::LeaseExpired);
             }
         }
+
+        // Store the serialized result so callers can retrieve it via get_result().
+        record.result = result_ref;
 
         // Update to completed
         record.complete();
@@ -323,7 +326,7 @@ impl QueueBackend for MemoryBackend {
 
         // Verify lease token
         if record.lease_token.as_ref() != Some(&lease_token) {
-            return Err(QueueError::InvalidLeaseToken);
+            return Err(QueueError::InvalidLeaseToken { job_id: job_id.clone() });
         }
 
         // Check lease expiry
@@ -404,7 +407,7 @@ impl QueueBackend for MemoryBackend {
 
         // Verify lease token
         if record.lease_token.as_ref() != Some(&lease_token) {
-            return Err(QueueError::InvalidLeaseToken);
+            return Err(QueueError::InvalidLeaseToken { job_id: job_id.clone() });
         }
 
         // Explicitly guard that the job is still Processing before extending.

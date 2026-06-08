@@ -17,7 +17,20 @@ pub trait JobCodec: Send + Sync {
     /// Encode bytes to bytes (for raw payload handling)
     fn encode_bytes(&self, bytes: &[u8]) -> QueueResult<Vec<u8>>;
 
-    /// Decode bytes to bytes (for raw payload handling)
+    /// Decode bytes back to their original form.
+    ///
+    /// **Contract for use with `ConcreteJobHandler`**: the decoded bytes MUST be
+    /// valid JSON that `serde_json::from_slice::<J>()` can parse for the job type
+    /// `J` that will be executed.
+    ///
+    /// This means custom codecs that use non-JSON wire formats (MessagePack,
+    /// Protobuf, CBOR, etc.) **must transcode their decoded output back to JSON**
+    /// before returning.  Returning raw non-JSON bytes will cause a confusing
+    /// `serde_json` parse error deep inside `ConcreteJobHandler::execute()` rather
+    /// than a clear codec error.
+    ///
+    /// Codecs that use JSON as their wire format (e.g. `JsonCodec`) satisfy this
+    /// contract trivially.
     fn decode_bytes(&self, bytes: &[u8]) -> QueueResult<Vec<u8>>;
 
     /// Get codec identifier
