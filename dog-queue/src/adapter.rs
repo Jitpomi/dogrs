@@ -42,19 +42,36 @@ impl Default for QueueConfig {
     }
 }
 
-/// Handle for managing worker lifecycle
+/// Handle for managing the lifecycle of a worker pool.
+///
+/// Dropping this handle without calling `shutdown()` leaves the workers
+/// running until the runtime shuts down.
 pub struct WorkerHandle {
-    shutdown_tx: oneshot::Sender<()>,
-    join_handle: JoinHandle<QueueResult<()>>,
+    shutdown_txs: Vec<oneshot::Sender<()>>,
+    join_handles: Vec<JoinHandle<QueueResult<()>>>,
 }
 
 impl WorkerHandle {
-    /// Gracefully shutdown the worker
+    /// Gracefully signal all workers to stop and wait for them to finish.
     pub async fn shutdown(self) -> QueueResult<()> {
-        let _ = self.shutdown_tx.send(());
-        self.join_handle
-            .await
-            .map_err(|e| QueueError::Internal(format!("Worker join error: {}", e)))?
+        // Signal every worker first so they can all drain concurrently.
+        for tx in self.shutdown_txs {
+            let _ = tx.send(());
+        }
+        // Then await each one.  Collect all errors rather than stopping at the first.
+        let mut errors: Vec<String> = Vec::new();
+        for handle in self.join_handles {
+            match handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => errors.push(e.to_string()),
+                Err(e) => errors.push(format!("Worker panicked: {e}")),
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(QueueError::Internal(errors.join("; ")))
+        }
     }
 }
 
@@ -65,6 +82,28 @@ pub struct QueueAdapter<B: QueueBackend + ?Sized> {
     job_registry: Arc<RwLock<JobRegistry>>,
     observability: Arc<ObservabilityLayer>,
     config: QueueConfig,
+}
+impl QueueConfig {
+    /// Validate that the configuration satisfies all required invariants.
+    ///
+    /// Returns an error if:
+    /// - `max_workers` is 0 (no workers would ever start)
+    /// - `base_retry_backoff` > `max_retry_backoff` (cap is below base; every retry uses max)
+    pub fn validate(&self) -> QueueResult<()> {
+        if self.max_workers == 0 {
+            return Err(QueueError::Internal(
+                "QueueConfig: max_workers must be >= 1 (0 workers would never process jobs)"
+                    .to_string(),
+            ));
+        }
+        if self.base_retry_backoff > self.max_retry_backoff {
+            return Err(QueueError::Internal(format!(
+                "QueueConfig: base_retry_backoff ({:?}) must be <= max_retry_backoff ({:?})",
+                self.base_retry_backoff, self.max_retry_backoff,
+            )));
+        }
+    Ok(())
+    }
 }
 
 impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
@@ -110,11 +149,9 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         Ok(())
     }
 
-    /// Enqueue a job for processing
-    #[instrument(skip(self, job), fields(job_type = J::JOB_TYPE, tenant_id = %ctx.tenant_id))]
     /// Enqueue a job for immediate processing (runs now, in the job's default queue).
     ///
-    /// For delayed scheduling or custom queue routing use [`enqueue_opts`].
+    /// For delayed scheduling or custom queue routing use [`Self::enqueue_opts`].
     #[instrument(skip(self, job), fields(job_type = J::JOB_TYPE, tenant_id = %ctx.tenant_id))]
     pub async fn enqueue<J: Job>(&self, ctx: QueueCtx, job: J) -> QueueResult<JobId> {
         self.enqueue_opts(ctx, job, EnqueueOptions::default()).await
@@ -170,7 +207,29 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
             .map_err(QueueError::JobFailed)
     }
 
-    /// Start workers for processing jobs from specified queues
+    /// Erase the concrete backend type to `dyn QueueBackend + Send + Sync`.
+    ///
+    /// Used internally by `start_workers` to share one type-erased adapter
+    /// across all spawned workers.  Centralising the field copy here means a
+    /// compiler error (missing field) if `QueueAdapter` ever gains a new field.
+    fn into_dyn_shared(&self) -> QueueAdapter<dyn QueueBackend + Send + Sync>
+    where
+        B: 'static,
+    {
+        QueueAdapter {
+            backend: self.backend.clone() as Arc<dyn QueueBackend + Send + Sync>,
+            codec_registry: self.codec_registry.clone(),
+            job_registry: self.job_registry.clone(),
+            observability: self.observability.clone(),
+            config: self.config.clone(),
+        }
+    }
+
+    /// Start a pool of `config.max_workers` concurrent workers.
+    ///
+    /// All workers share the same `Arc`-wrapped state (backend, registry,
+    /// observability) and are coordinated by the returned [`WorkerHandle`].
+    /// Call [`WorkerHandle::shutdown`] to gracefully stop them all.
     #[instrument(skip(self, context), fields(tenant_id = %ctx.tenant_id, queues = ?queues))]
     pub async fn start_workers<C>(
         &self,
@@ -181,31 +240,40 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
     where
         C: Clone + Send + Sync + 'static,
     {
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        // Enforce config invariants before we start spawning.
+        self.config.validate()?;
 
-        let adapter_clone: QueueAdapter<dyn QueueBackend + Send + Sync> = QueueAdapter {
-            backend: self.backend.clone() as Arc<dyn QueueBackend + Send + Sync>,
-            codec_registry: self.codec_registry.clone(),
-            job_registry: self.job_registry.clone(),
-            observability: self.observability.clone(),
-            config: self.config.clone(),
-        };
+        let worker_count = self.config.max_workers;
+        let mut shutdown_txs = Vec::with_capacity(worker_count);
+        let mut join_handles = Vec::with_capacity(worker_count);
 
-        let worker = Worker {
-            adapter: Arc::new(adapter_clone),
-            ctx: ctx.clone(),
-            context: Arc::new(context),
-            queues,
-        };
+        // Build one type-erased adapter shared across all workers.
+        let dyn_adapter = Arc::new(self.into_dyn_shared());
 
-        let join_handle =
-            tokio::spawn(async move { worker.run(shutdown_rx).await });
+        for _ in 0..worker_count {
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        info!("Started worker for tenant: {}", ctx.tenant_id);
+            let worker = Worker {
+                adapter: dyn_adapter.clone(),
+                ctx: ctx.clone(),
+                context: Arc::new(context.clone()),
+                queues: queues.clone(),
+            };
+
+            let join_handle = tokio::spawn(async move { worker.run(shutdown_rx).await });
+
+            shutdown_txs.push(shutdown_tx);
+            join_handles.push(join_handle);
+        }
+
+        info!(
+            "Started {} worker(s) for tenant: {}",
+            worker_count, ctx.tenant_id
+        );
 
         Ok(WorkerHandle {
-            shutdown_tx,
-            join_handle,
+            shutdown_txs,
+            join_handles,
         })
     }
 

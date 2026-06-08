@@ -1,6 +1,54 @@
 use serde::{Deserialize, Serialize};
 
-/// Backend capabilities - explicit feature detection
+// ---------------------------------------------------------------------------
+// QueueFeature — type-safe feature identifier
+// ---------------------------------------------------------------------------
+
+/// Type-safe feature identifier for capability queries.
+///
+/// Replaces the previous `supports(&str)` API which silently returned `false`
+/// for typos. Use with [`QueueCapabilities::supports`]:
+///
+/// ```
+/// use dog_queue::types::{QueueCapabilities, QueueFeature};
+/// let caps = QueueCapabilities::all();
+/// assert!(caps.supports(QueueFeature::Cancel));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum QueueFeature {
+    /// Delayed job execution (run_at > now)
+    Delayed,
+    /// Scheduled job execution at specific times
+    ScheduledAt,
+    /// Job cancellation
+    Cancel,
+    /// Lease extension (heartbeat)
+    LeaseExtend,
+    /// Priority-ordered dequeue
+    Priority,
+    /// Idempotency keys for dedup
+    Idempotency,
+    /// Dead-letter queue for failed jobs
+    DeadLetterQueue,
+}
+
+// ---------------------------------------------------------------------------
+// QueueCapabilities — backend feature advertisement
+// ---------------------------------------------------------------------------
+
+/// Backend feature advertisement.
+///
+/// Each backend's [`QueueBackend::capabilities`] method returns a value that
+/// describes which optional features it actually implements.  Callers should
+/// query this before using optional operations (cancel, lease extension, etc.).
+///
+/// # Default
+///
+/// `QueueCapabilities::default()` is the **unknown/empty** baseline — all
+/// features are `false`.  It is intended as the safe conservative value for a
+/// backend that has not explicitly declared its features, **not** as a
+/// description of a "typical" backend.  Backends that implement additional
+/// features must override [`QueueBackend::capabilities`] explicitly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueCapabilities {
     /// Support for delayed job execution (run_at > now)
@@ -26,21 +74,27 @@ pub struct QueueCapabilities {
 }
 
 impl Default for QueueCapabilities {
+    /// Returns the **empty/unknown** capability set (all features `false`).
+    ///
+    /// This is the safe conservative baseline for backends that do not
+    /// explicitly declare their capabilities. It does **not** represent what a
+    /// typical backend supports — use [`QueueCapabilities::all`] or construct
+    /// a backend-specific value instead.
     fn default() -> Self {
         Self {
-            delayed: true,
-            scheduled_at: true,
+            delayed: false,
+            scheduled_at: false,
             cancel: false,
             lease_extend: false,
             priority: false,
-            idempotency: true,
+            idempotency: false,
             dead_letter_queue: false,
         }
     }
 }
 
 impl QueueCapabilities {
-    /// Create capabilities with all features enabled
+    /// Create capabilities with all features enabled.
     pub fn all() -> Self {
         Self {
             delayed: true,
@@ -53,59 +107,38 @@ impl QueueCapabilities {
         }
     }
 
-    /// Create minimal capabilities (basic enqueue/dequeue only)
+    /// Create minimal capabilities (basic enqueue/dequeue only).
     pub fn minimal() -> Self {
-        Self {
-            delayed: false,
-            scheduled_at: false,
-            cancel: false,
-            lease_extend: false,
-            priority: false,
-            idempotency: false,
-            dead_letter_queue: false,
-        }
+        Self::default()
     }
 
-    /// Check if a specific feature is supported
-    pub fn supports(&self, feature: &str) -> bool {
+    /// Check if a specific feature is supported.
+    ///
+    /// Accepts a [`QueueFeature`] value rather than a `&str` so that typos
+    /// are a compile error rather than a silent `false` return.
+    pub fn supports(&self, feature: QueueFeature) -> bool {
         match feature {
-            "delayed" => self.delayed,
-            "scheduled_at" => self.scheduled_at,
-            "cancel" => self.cancel,
-            "lease_extend" => self.lease_extend,
-            "priority" => self.priority,
-            "idempotency" => self.idempotency,
-            "dead_letter_queue" => self.dead_letter_queue,
-            _ => false,
+            QueueFeature::Delayed => self.delayed,
+            QueueFeature::ScheduledAt => self.scheduled_at,
+            QueueFeature::Cancel => self.cancel,
+            QueueFeature::LeaseExtend => self.lease_extend,
+            QueueFeature::Priority => self.priority,
+            QueueFeature::Idempotency => self.idempotency,
+            QueueFeature::DeadLetterQueue => self.dead_letter_queue,
         }
     }
 
-    /// Get list of supported features
-    pub fn supported_features(&self) -> Vec<&'static str> {
-        let mut features = Vec::new();
-
-        if self.delayed {
-            features.push("delayed");
-        }
-        if self.scheduled_at {
-            features.push("scheduled_at");
-        }
-        if self.cancel {
-            features.push("cancel");
-        }
-        if self.lease_extend {
-            features.push("lease_extend");
-        }
-        if self.priority {
-            features.push("priority");
-        }
-        if self.idempotency {
-            features.push("idempotency");
-        }
-        if self.dead_letter_queue {
-            features.push("dead_letter_queue");
-        }
-
-        features
+    /// Get list of supported features.
+    pub fn supported_features(&self) -> Vec<QueueFeature> {
+        let all = [
+            QueueFeature::Delayed,
+            QueueFeature::ScheduledAt,
+            QueueFeature::Cancel,
+            QueueFeature::LeaseExtend,
+            QueueFeature::Priority,
+            QueueFeature::Idempotency,
+            QueueFeature::DeadLetterQueue,
+        ];
+        all.into_iter().filter(|f| self.supports(*f)).collect()
     }
 }

@@ -100,7 +100,7 @@ pub use error::{JobError, QueueError, QueueResult};
 pub use job::{Job, JobRegistry};
 pub use types::{
     JobEvent, JobId, JobMessage, JobPriority, JobRecord, JobStatus, LeasedJob, QueueCapabilities,
-    QueueCtx,
+    QueueCtx, QueueFeature,
 };
 
 // Observability exports
