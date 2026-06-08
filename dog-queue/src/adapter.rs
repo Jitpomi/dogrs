@@ -17,7 +17,8 @@ use crate::{
 pub struct QueueConfig {
     /// Maximum number of concurrent workers per queue
     pub max_workers: usize,
-    /// Worker idle timeout before shutdown
+    /// How long a worker may remain idle (no jobs available) before it
+    /// self-terminates. Keeps the pool size proportional to actual load.
     pub worker_idle_timeout: Duration,
     /// Lease duration for jobs
     pub lease_duration: Duration,
@@ -33,6 +34,13 @@ pub struct QueueConfig {
     /// How long a worker backs off after an infrastructure error (e.g. backend
     /// unavailable) before retrying the dequeue loop.
     pub error_backoff: Duration,
+    /// Hard timeout for `execute_now`. `None` means no timeout is applied.
+    ///
+    /// This is intentionally separate from `lease_duration` — `execute_now`
+    /// has no backend lease and should not be constrained by lease recycling
+    /// settings. Set to `Some(Duration)` when you need a safety cap on direct
+    /// execution (e.g. in tests or one-off CLI invocations).
+    pub execute_timeout: Option<Duration>,
 }
 
 impl Default for QueueConfig {
@@ -46,6 +54,7 @@ impl Default for QueueConfig {
             base_retry_backoff: Duration::from_secs(1),
             poll_interval: Duration::from_millis(100),
             error_backoff: Duration::from_secs(1),
+            execute_timeout: None, // no timeout by default
         }
     }
 }
@@ -230,13 +239,23 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         let _ = ctx; // kept for API symmetry with enqueue
         info!("Executing job immediately: {}", J::JOB_TYPE);
 
-        // Execute with the configured lease duration as the timeout.
-        // No observability recording: no real JobId exists (job was never enqueued)
-        // and a phantom ID would produce uncorrelatable dashboard entries.
-        tokio::time::timeout(self.config.lease_duration, job.execute(execution_context))
-            .await
-            .map_err(|_| QueueError::Internal("Job execution timeout".to_string()))?
-            .map_err(QueueError::JobFailed)
+        // Execute with an optional hard timeout.
+        // `execute_timeout` is distinct from `lease_duration`: the lease controls
+        // backend claim recycling, while this timeout guards the direct execution
+        // path which has no lease, no reaper, and no heartbeat.
+        let execute_fut = job.execute(execution_context);
+        match self.config.execute_timeout {
+            Some(limit) => tokio::time::timeout(limit, execute_fut)
+                .await
+                .map_err(|_| {
+                    QueueError::Internal(format!(
+                        "execute_now timed out after {:?}",
+                        self.config.execute_timeout
+                    ))
+                })?
+                .map_err(QueueError::JobFailed),
+            None => execute_fut.await.map_err(QueueError::JobFailed),
+        }
     }
 
     /// Erase the concrete backend type to `dyn QueueBackend + Send + Sync`.
@@ -272,8 +291,9 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
     where
         C: Clone + Send + Sync + 'static,
     {
-        // Enforce config invariants before we start spawning.
-        self.config.validate()?;
+        // config.validate() is enforced at construction (with_config panics,
+        // try_with_config returns an error, new() uses a hard-coded valid default).
+        // Re-validating here would be unreachable dead code.
 
         let worker_count = self.config.max_workers;
         let mut shutdown_txs = Vec::with_capacity(worker_count);
@@ -354,11 +374,16 @@ struct Worker<C> {
 }
 
 impl<C: Send + Sync + 'static> Worker<C> {
-    /// Run the worker loop
+    /// Run the worker loop, terminating on shutdown signal or after the
+    /// configured idle timeout elapses with no jobs available.
     async fn run(self, mut shutdown_rx: oneshot::Receiver<()>) -> QueueResult<()> {
         let queue_refs: Vec<&str> = self.queues.iter().map(|s| s.as_str()).collect();
 
         info!("Worker started for queues: {:?}", self.queues);
+
+        // Track consecutive idle time so the worker can self-terminate.
+        // Reset to `None` whenever a job is successfully processed.
+        let mut idle_since: Option<std::time::Instant> = None;
 
         loop {
             tokio::select! {
@@ -369,17 +394,28 @@ impl<C: Send + Sync + 'static> Worker<C> {
 
                 result = self.process_next_job(&queue_refs) => {
                     match result {
-                        Ok(processed) => {
-                            if !processed {
-                                // No jobs available — sleep for the configured poll interval
-                                // before trying again. Tunable via QueueConfig::poll_interval.
-                                tokio::time::sleep(self.adapter.config.poll_interval).await;
+                        Ok(true) => {
+                            // A job ran — reset the idle clock.
+                            idle_since = None;
+                        }
+                        Ok(false) => {
+                            // No jobs available — track idle duration.
+                            let idle_start = *idle_since.get_or_insert_with(std::time::Instant::now);
+                            if idle_start.elapsed() >= self.adapter.config.worker_idle_timeout {
+                                info!(
+                                    "Worker idle for {:?}, shutting down",
+                                    self.adapter.config.worker_idle_timeout
+                                );
+                                break;
                             }
+                            // Sleep before next poll — tunable via QueueConfig::poll_interval.
+                            tokio::time::sleep(self.adapter.config.poll_interval).await;
                         }
                         Err(e) => {
                             error!("Error processing job: {}", e);
                             // Infrastructure error — back off before retrying to avoid
-                            // hammering a degraded backend. Tunable via QueueConfig::error_backoff.
+                            // hammering a degraded backend. Does not reset the idle clock
+                            // because the queue may still be empty.
                             tokio::time::sleep(self.adapter.config.error_backoff).await;
                         }
                     }

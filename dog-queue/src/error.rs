@@ -21,8 +21,10 @@ pub enum QueueError {
     #[error("Job is already in terminal state")]
     JobAlreadyTerminal,
 
+    /// Job execution failed; the inner `JobError` is chained as the error source
+    /// so callers can walk the full causal chain via `error.source()`.
     #[error("Job execution failed: {0}")]
-    JobFailed(JobError),
+    JobFailed(#[source] JobError),
 
     #[error("Codec not found: {0}")]
     CodecNotFound(String),
@@ -87,6 +89,9 @@ impl JobError {
 
 impl From<serde_json::Error> for QueueError {
     fn from(err: serde_json::Error) -> Self {
-        Self::SerializationError(err.to_string())
+        // Preserve the error category so downstream code and operators can
+        // distinguish deterministic failures (Syntax, Eof, Data — no point
+        // retrying) from transient failures (Io — worth retrying).
+        Self::SerializationError(format!("[{:?}] {err}", err.classify()))
     }
 }
