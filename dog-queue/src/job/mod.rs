@@ -27,21 +27,6 @@ pub trait Job: Send + Sync + Serialize + DeserializeOwned + 'static {
     /// Execute the job with the given context
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError>;
 
-    /// Get the job type identifier for dispatch
-    fn job_type(&self) -> &'static str {
-        Self::JOB_TYPE
-    }
-
-    /// Get the job priority (default: Normal)
-    fn priority(&self) -> JobPriority {
-        Self::PRIORITY
-    }
-
-    /// Get the maximum number of retry attempts (default: 3)
-    fn max_retries(&self) -> u32 {
-        Self::MAX_RETRIES
-    }
-
     /// Get idempotency key (optional)
     fn idempotency_key(&self) -> Option<String> {
         None

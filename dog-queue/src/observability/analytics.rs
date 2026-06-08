@@ -1,24 +1,23 @@
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
-use tokio::sync::broadcast;
 use tracing::debug;
 
-use crate::{JobEvent, JobId, QueueCtx};
+use crate::{JobId, QueueCtx};
 
-/// Production-grade observability layer
+/// Metrics-only observability layer.
+///
+/// Tracks job lifecycle counters via `LiveMetrics`. Event streaming uses the
+/// backend's own `event_stream()` — having a second independent broadcast channel
+/// here caused dual emission of every event and inconsistent buffer sizes.
 #[derive(Clone)]
 pub struct ObservabilityLayer {
-    event_broadcaster: broadcast::Sender<JobEvent>,
     metrics: Arc<super::LiveMetrics>,
 }
 
 impl ObservabilityLayer {
     /// Create new observability layer
     pub fn new() -> Self {
-        let (event_broadcaster, _) = broadcast::channel(10000);
-
         Self {
-            event_broadcaster,
             metrics: Arc::new(super::LiveMetrics::new()),
         }
     }
@@ -34,27 +33,13 @@ impl ObservabilityLayer {
         job_type: &str,
         queue: &str,
     ) {
-        let event = JobEvent::Enqueued {
-            job_id: job_id.clone(),
-            tenant_id: ctx.tenant_id.clone(),
-            queue: queue.to_string(),
-            job_type: job_type.to_string(),
-            at: Utc::now(),
-        };
-
-        let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_enqueued(job_type);
         debug!("Recorded job enqueued: {} ({}) queue={}", job_id, job_type, queue);
+        let _ = (ctx, job_id); // fields used for logging / future extensions
     }
 
     /// Record job completed event
     pub async fn record_job_completed(&self, _ctx: &QueueCtx, job_id: &JobId, job_type: &str) {
-        let event = JobEvent::Completed {
-            job_id: job_id.clone(),
-            at: Utc::now(),
-        };
-
-        let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_completed(job_type);
         debug!("Recorded job completed: {} ({})", job_id, job_type);
     }
@@ -70,13 +55,6 @@ impl ObservabilityLayer {
         job_type: &str,
         error: &str,
     ) {
-        let event = JobEvent::Failed {
-            job_id: job_id.clone(),
-            error: error.to_string(),
-            at: Utc::now(),
-        };
-
-        let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_failed(job_type);
         debug!("Recorded job failed: {} ({}) error={}", job_id, job_type, error);
     }
@@ -93,24 +71,11 @@ impl ObservabilityLayer {
         error: &str,
         retry_at: DateTime<Utc>,
     ) {
-        let event = JobEvent::Retrying {
-            job_id: job_id.clone(),
-            retry_at,
-            error: error.to_string(),
-            at: Utc::now(),
-        };
-
-        let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_retried(job_type);
         debug!(
             "Recorded job retrying: {} ({}) retry_at={} error={}",
             job_id, job_type, retry_at, error
         );
-    }
-
-    /// Get event stream
-    pub fn event_stream(&self) -> broadcast::Receiver<JobEvent> {
-        self.event_broadcaster.subscribe()
     }
 
     /// Get live metrics
@@ -135,23 +100,25 @@ impl PerformanceAnalytics {
         Self { observability }
     }
 
-    /// Get job processing rate (jobs per second)
-    pub fn job_processing_rate(&self) -> f64 {
-        let completed = self.observability.metrics.jobs_completed() as f64;
-        let failed = self.observability.metrics.jobs_failed() as f64;
-
-        // Simple rate calculation - in production this would be time-windowed
-        completed + failed
+    /// Total jobs processed (completed + failed) since process start.
+    ///
+    /// This is a monotonically-increasing lifetime count, **not a rate**.
+    /// To compute a true throughput (jobs/second), snapshot this value twice
+    /// with a known elapsed duration and divide the delta by the elapsed seconds.
+    pub fn total_jobs_processed(&self) -> u64 {
+        self.observability.metrics.jobs_completed() + self.observability.metrics.jobs_failed()
     }
 
-    /// Get success rate percentage
+    /// Get success rate percentage.
+    ///
+    /// Returns `0.0` when no jobs have completed or failed (no data ≠ perfect record).
     pub fn success_rate(&self) -> f64 {
         let completed = self.observability.metrics.jobs_completed() as f64;
         let failed = self.observability.metrics.jobs_failed() as f64;
         let total = completed + failed;
 
         if total == 0.0 {
-            100.0
+            0.0 // no data — not 100%
         } else {
             (completed / total) * 100.0
         }

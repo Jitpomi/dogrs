@@ -436,8 +436,24 @@ impl<C: Send + Sync + 'static> Worker<C> {
             }
         });
 
+        // Decode the payload through the registered codec before handing it to the handler.
+        // `encode_bytes` was called at enqueue time; `decode_bytes` must be called here to
+        // reverse any transformation (compression, encryption, alternate wire format).
+        // For the JSON passthrough codec this is a no-op validation; for real codecs it is
+        // mandatory — without this call the handler receives still-encoded bytes and
+        // serde_json::from_slice silently produces a Permanent deserialization error.
+        let decoded_bytes = self
+            .adapter
+            .codec_registry
+            .decode_job_payload(&leased_job.record.message)
+            .map_err(|e| {
+                QueueError::Internal(format!("Codec decode failed for job {job_id}: {e}"))
+            })?;
+        let mut decoded_message = leased_job.record.message.clone();
+        decoded_message.payload_bytes = decoded_bytes;
+
         let result = handler
-            .execute(&leased_job.record.message, self.context.clone())
+            .execute(&decoded_message, self.context.clone())
             .await;
 
         // Job finished — stop the heartbeat unconditionally.
