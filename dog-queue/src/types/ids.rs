@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 /// Unique identifier for a job
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct JobId(pub String);
+pub struct JobId(String);
 
 impl JobId {
     /// Generate a new unique job ID
@@ -23,11 +23,7 @@ impl JobId {
     }
 }
 
-impl Default for JobId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+
 
 impl fmt::Display for JobId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -49,7 +45,7 @@ impl From<&str> for JobId {
 
 /// Lease token for job processing - prevents concurrent processing
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct LeaseToken(pub String);
+pub struct LeaseToken(String);
 
 impl LeaseToken {
     /// Generate a new unique lease token
@@ -68,11 +64,7 @@ impl LeaseToken {
     }
 }
 
-impl Default for LeaseToken {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+
 
 impl fmt::Display for LeaseToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

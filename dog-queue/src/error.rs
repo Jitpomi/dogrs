@@ -22,7 +22,7 @@ pub enum QueueError {
     JobAlreadyTerminal,
 
     #[error("Job execution failed: {0}")]
-    JobFailed(#[from] JobError),
+    JobFailed(JobError),
 
     #[error("Codec not found: {0}")]
     CodecNotFound(String),
@@ -38,6 +38,9 @@ pub enum QueueError {
 
     #[error("Job type not registered: {0}")]
     JobTypeNotRegistered(String),
+
+    #[error("Job type already registered: {0}")]
+    JobTypeAlreadyRegistered(String),
 
     #[error("Worker shutdown")]
     WorkerShutdown,

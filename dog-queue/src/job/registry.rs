@@ -93,10 +93,7 @@ impl JobRegistry {
         let job_type = handler.job_type().to_string();
 
         if self.handlers.contains_key(&job_type) {
-            return Err(QueueError::Internal(format!(
-                "Job type '{}' already registered",
-                job_type
-            )));
+            return Err(QueueError::JobTypeAlreadyRegistered(job_type));
         }
 
         self.handlers.insert(job_type, handler);
