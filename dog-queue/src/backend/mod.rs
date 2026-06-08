@@ -11,6 +11,28 @@ use crate::{
     QueueCapabilities, QueueCtx, QueueError, QueueResult,
 };
 
+/// Per-job outcome from a single lease-reaper cycle.
+///
+/// Returned by [`QueueBackend::reclaim_expired_leases`] so that the adapter's
+/// integrated reaper loop can record per-type observability metrics (e.g.
+/// `jobs_failed`, `jobs_retried`) without coupling the backend to the
+/// `ObservabilityLayer`.
+#[derive(Debug)]
+pub struct ReapOutcome {
+    /// Tenant that owns the reclaimed job.
+    pub tenant_id: String,
+    /// ID of the reclaimed job.
+    pub job_id: JobId,
+    /// Job type string (from `JobMessage::job_type`).
+    pub job_type: String,
+    /// `true` when max retries were exceeded and the job was permanently failed;
+    /// `false` when the job was re-queued for retry.
+    pub permanently_failed: bool,
+    /// The scheduled retry time. `Some` when `permanently_failed = false`,
+    /// `None` when `permanently_failed = true`.
+    pub retry_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// Type alias for boxed streams (stable Rust compatible)
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send + 'static>>;
 
@@ -86,14 +108,15 @@ pub trait QueueBackend: Send + Sync {
     /// Reclaim expired leases by detecting timed-out jobs and re-queuing them for retry.
     ///
     /// Backends that manage lease expiry internally (e.g. [`MemoryBackend`]) should
-    /// override this.  The default is a no-op (`Ok(0)`) for backends that rely on an
+    /// override this.  The default is a no-op (`Ok(vec![])`) for backends that rely on an
     /// external TTL mechanism (Redis `EXPIRE`, Postgres `pg_cron`) which handles
     /// reclamation outside the Rust process.
     ///
     /// Called periodically by `QueueAdapter::start_workers` at `lease_duration / 2`
-    /// intervals.  Returns the number of leases reclaimed in this cycle.
-    async fn reclaim_expired_leases(&self) -> QueueResult<usize> {
-        Ok(0)
+    /// intervals.  Returns one [`ReapOutcome`] per reclaimed lease — the adapter uses
+    /// these to record per-type `jobs_failed` / `jobs_retried` observability metrics.
+    async fn reclaim_expired_leases(&self) -> QueueResult<Vec<ReapOutcome>> {
+        Ok(vec![])
     }
 
     /// Get backend capabilities

@@ -5,7 +5,10 @@ use tokio::time::interval;
 use tracing::{debug, info, warn};
 
 use crate::{
-    backend::memory::storage::{priority_insert, MemoryBackend},
+    backend::{
+        memory::storage::{priority_insert, MemoryBackend},
+        ReapOutcome,
+    },
     JobEvent, JobStatus, QueueResult,
 };
 
@@ -70,7 +73,7 @@ impl LeaseReaper {
                 }
                 _ = ticker.tick() => {
                     match self.reap_expired_leases().await {
-                        Ok(n) if n > 0 => info!("Reclaimed {} expired leases", n),
+                        Ok(ref outcomes) if !outcomes.is_empty() => info!("Reclaimed {} expired leases", outcomes.len()),
                         Ok(_) => debug!("No expired leases found"),
                         Err(e) => warn!("Error during lease reaping: {e}"),
                     }
@@ -92,7 +95,7 @@ impl LeaseReaper {
     /// - All `queues` insertions are batched inside a single write lock acquisition.
     /// - Retry re-enqueue uses `priority_insert` (not `push_back`) to preserve priority
     ///   ordering — a reclaimed Critical job is not placed behind Normal/Low entries.
-    pub async fn reap_expired_leases(&self) -> QueueResult<usize> {
+    pub async fn reap_expired_leases(&self) -> QueueResult<Vec<ReapOutcome>> {
         let now = Utc::now();
 
         // ── Phase 1: Collect IDs of expired leases under jobs.read() ───────────────
@@ -111,7 +114,7 @@ impl LeaseReaper {
         }; // read lock released
 
         if expired_ids.is_empty() {
-            return Ok(0);
+            return Ok(Vec::new());
         }
 
         // ── Phase 2: Mutate all expired records in ONE jobs.write() ──────────────────
@@ -120,7 +123,7 @@ impl LeaseReaper {
         // have set the status to Completed; the reaper skips those records.
         let mut to_requeue: Vec<(String, String, crate::JobPriority, crate::JobId, chrono::DateTime<Utc>)> = Vec::new();
         let mut events: Vec<JobEvent> = Vec::new();
-        let mut reclaimed_count = 0usize;
+        let mut outcomes: Vec<ReapOutcome> = Vec::new();
 
         {
             let mut jobs = self.backend.jobs.write().await;
@@ -161,6 +164,14 @@ impl LeaseReaper {
                         error: "Max retries exceeded due to lease expiry".to_string(),
                         at: now,
                     });
+
+                    outcomes.push(ReapOutcome {
+                        tenant_id: record.tenant_id.clone(),
+                        job_id: job_id.clone(),
+                        job_type: record.message.job_type.clone(),
+                        permanently_failed: true,
+                        retry_at: None,
+                    });
                 } else {
                     // Apply a minimum backoff before re-enqueue to prevent a tight
                     // retry loop when a job reliably crashes its worker (OOM, SIGKILL).
@@ -183,9 +194,15 @@ impl LeaseReaper {
                         error: "Lease expired".to_string(),
                         at: now,
                     });
-                }
 
-                reclaimed_count += 1;
+                    outcomes.push(ReapOutcome {
+                        tenant_id: record.tenant_id.clone(),
+                        job_id: job_id.clone(),
+                        job_type: record.message.job_type.clone(),
+                        permanently_failed: false,
+                        retry_at: Some(retry_at),
+                    });
+                }
             }
         } // jobs write lock released
 
@@ -206,7 +223,7 @@ impl LeaseReaper {
             let _ = self.backend.event_broadcaster.send(event);
         }
 
-        Ok(reclaimed_count)
+        Ok(outcomes)
     }
 }
 
@@ -250,7 +267,7 @@ mod tests {
     use crate::{JobMessage, JobPriority, QueueCtx};
 
     fn create_test_context() -> QueueCtx {
-        QueueCtx::new("test_tenant".to_string())
+        QueueCtx::new("test_tenant")
     }
 
     fn create_test_job_message() -> JobMessage {
@@ -288,7 +305,7 @@ mod tests {
         let reaper = LeaseReaper::new(backend.clone()).with_backoff(Duration::from_secs(0));
         let reclaimed = reaper.reap_expired_leases().await.unwrap();
 
-        assert_eq!(reclaimed, 1);
+        assert_eq!(reclaimed.len(), 1);
 
         // Job should be available for dequeue again
         let retry_leased = backend.dequeue(ctx, &["default"]).await.unwrap();
@@ -327,7 +344,7 @@ mod tests {
         let reaper = LeaseReaper::new(backend.clone()).with_backoff(Duration::ZERO);
         let reclaimed = reaper.reap_expired_leases().await.unwrap();
 
-        assert_eq!(reclaimed, 1);
+        assert_eq!(reclaimed.len(), 1);
 
         // Job should be marked as failed
         let status = backend.get_status(ctx, job_id).await.unwrap();
@@ -346,7 +363,7 @@ mod tests {
             .enqueue(ctx.clone(), create_test_job_message())
             .await
             .unwrap();
-        let leased = backend
+        let _leased = backend
             .dequeue(ctx.clone(), &["default"])
             .await
             .unwrap()
@@ -357,15 +374,14 @@ mod tests {
 
         // Simulate: worker completes the job BEFORE the reaper's write phase.
         // (In production this race is closed by checking status inside jobs.write().)
-        // We directly set the status to Completed here to simulate the race.
+        // Use record.complete() — the actual JobRecord transition helper — so the
+        // test exercises the same state transitions ack_complete would perform,
+        // including lease_token clearance. Inline status mutation would diverge
+        // if complete() gains additional side effects.
         {
             let mut jobs = backend.jobs.write().await;
             if let Some(record) = jobs.get_mut(&job_id) {
-                // Manually mark as completed (as ack_complete would do).
-                record.status = crate::JobStatus::Completed {
-                    completed_at: chrono::Utc::now(),
-                };
-                record.lease_token = None;
+                record.complete();
             }
         }
 
@@ -373,7 +389,7 @@ mod tests {
         let reaper = LeaseReaper::new(backend.clone()).with_backoff(Duration::from_secs(0));
         let reclaimed = reaper.reap_expired_leases().await.unwrap();
 
-        assert_eq!(reclaimed, 0, "reaper must not reclaim an already-completed job");
+        assert_eq!(reclaimed.len(), 0, "reaper must not reclaim an already-completed job");
 
         // Status must still be Completed, not Retrying.
         let status = backend.get_status(ctx, job_id).await.unwrap();

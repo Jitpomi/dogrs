@@ -462,10 +462,14 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         // Correlating the reaper interval with lease_duration satisfies the invariant:
         //   reaper_interval < lease_duration
         // so the reaper fires at least once within every lease window.  Backends that
-        // manage expiry externally (Redis EXPIRE, Postgres pg_cron) return Ok(0) from
+        // manage expiry externally (Redis EXPIRE, Postgres pg_cron) return Ok(vec!) from
         // reclaim_expired_leases() and pay only a trivial polling cost.
         let (reaper_shutdown_tx, mut reaper_shutdown_rx) = oneshot::channel::<()>();
         let reaper_backend = dyn_adapter.backend.clone();
+        // Clone the observability layer so the reaper can record per-type metrics for
+        // each reclaimed lease.  Without this, lease-expiry failures and retries are
+        // invisible to jobs_failed / jobs_retried counters and success_rate().
+        let reaper_observability = dyn_adapter.observability.clone();
         let reaper_interval = {
             let half_secs = self.config.lease_duration.as_secs() / 2;
             std::time::Duration::from_secs(half_secs.max(1))
@@ -484,8 +488,33 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
                     }
                     _ = ticker.tick() => {
                         match reaper_backend.reclaim_expired_leases().await {
-                            Ok(0) => {},
-                            Ok(n) => info!("Reaper: reclaimed {} expired lease(s)", n),
+                            Ok(ref outcomes) if outcomes.is_empty() => {}
+                            Ok(outcomes) => {
+                                info!("Reaper: reclaimed {} expired lease(s)", outcomes.len());
+                                // Record per-type observability metrics for each reclaimed
+                                // lease.  Previously the reaper returned only a count, so
+                                // all reaper-reclaimed failures and retries were permanently
+                                // invisible to jobs_failed / jobs_retried / success_rate().
+                                for outcome in &outcomes {
+                                    let ctx = QueueCtx::new(outcome.tenant_id.clone());
+                                    if outcome.permanently_failed {
+                                        reaper_observability.record_job_failed(
+                                            &ctx,
+                                            &outcome.job_id,
+                                            &outcome.job_type,
+                                            "Lease expired — max retries exceeded",
+                                        );
+                                    } else if let Some(retry_at) = outcome.retry_at {
+                                        reaper_observability.record_job_retrying(
+                                            &ctx,
+                                            &outcome.job_id,
+                                            &outcome.job_type,
+                                            "Lease expired — re-queued for retry",
+                                            retry_at,
+                                        );
+                                    }
+                                }
+                            }
                             Err(e) => warn!("Reaper error during reclaim: {e}"),
                         }
                     }

@@ -128,7 +128,7 @@ pub struct JobRecord {
 
 impl JobRecord {
     /// Create a new job record
-    pub fn new(job_id: JobId, tenant_id: String, message: JobMessage) -> Self {
+    pub fn new(job_id: JobId, tenant_id: impl Into<String>, message: JobMessage) -> Self {
         let now = Utc::now();
 
         // Always start as Enqueued regardless of run_at.
@@ -138,7 +138,7 @@ impl JobRecord {
         // Enqueued | Retrying, so delayed jobs silently fell into the tombstone arm.
         Self {
             job_id,
-            tenant_id,
+            tenant_id: tenant_id.into(),
             message,
             status: JobStatus::Enqueued,
             attempt: 0,
@@ -171,7 +171,25 @@ impl JobRecord {
         }
     }
 
-    /// Update the job status and timestamp
+    /// Update the job status and timestamp.
+    ///
+    /// # Deprecated
+    ///
+    /// Prefer the type-safe transition helpers: [`start_processing`](Self::start_processing),
+    /// [`complete`](Self::complete), [`fail`](Self::fail), [`cancel`](Self::cancel),
+    /// or [`schedule_retry`](Self::schedule_retry).
+    ///
+    /// `update_status` bypasses critical invariants that all transition helpers maintain:
+    /// - Does **not** clear `lease_token` on terminal transitions — a "completed" record
+    ///   can retain an active lease token, breaking the token-guard in `ack_complete`
+    ///   and `heartbeat_extend`.
+    /// - Does **not** set `last_error` for `Failed` transitions.
+    /// - Accepts any `JobStatus` from any state — no lifecycle validation.
+    #[deprecated(
+        note = "Use start_processing(), complete(), fail(), cancel(), or schedule_retry() instead. \
+                update_status() does not clear lease_token or update last_error, \
+                bypassing transition invariants."
+    )]
     pub fn update_status(&mut self, status: JobStatus) {
         self.status = status;
         self.updated_at = Utc::now();

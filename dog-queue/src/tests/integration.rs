@@ -377,7 +377,7 @@ async fn test_lease_expiry_requeues_job() {
     // dequeue-eligible.  The 1s production default is not appropriate for unit tests.
     let reaper = LeaseReaper::new(backend.clone()).with_backoff(std::time::Duration::from_secs(0));
     let reclaimed = reaper.reap_expired_leases().await.unwrap();
-    assert_eq!(reclaimed, 1, "reaper should reclaim 1 expired lease");
+    assert_eq!(reclaimed.len(), 1, "reaper should reclaim 1 expired lease");
 
     // Job should be available again
     let retry_leased = backend.dequeue(ctx, &["counting_job"]).await.unwrap();
