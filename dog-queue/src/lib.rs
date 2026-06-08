@@ -75,7 +75,6 @@
 pub mod adapter;
 pub mod backend;
 pub mod codec;
-pub mod engine;
 pub mod error;
 pub mod job;
 pub mod observability;
