@@ -1,56 +1,93 @@
 # DogRS
 
-**A modular Rust framework with multi-tenant services, hooks, and pluggable storage — built to avoid stack lock-in.**
+A modular Rust framework with multi-tenant services, hooks, and pluggable storage. Built to keep your core logic independent from your transport layer.
 
-DogRS is inspired by the simplicity of FeathersJS but reimagined for Rust.  
-It provides a clean core for building flexible, multi-tenant applications where storage, transports, and execution environments can be swapped or extended without rewriting your app.
+DogRS is inspired by the simplicity of FeathersJS, but designed for Rust. It provides a clean foundation for building flexible applications where you can easily swap storage backends, web servers, and execution environments without rewriting your business logic.
 
-## ✨ Features (Early Outline)
+## Features
 
-- **Multi-tenant services**  
-  Every request and operation runs with explicit tenant context.
+- **Multi-tenant by default**  
+  Every request and operation runs with an explicit tenant context.
 
 - **Service hooks**  
-  Before/after/around/error pipelines for validation, logging, transforms, or anything else you need.
+  Write your validation, logging, and data transformation logic once as hooks, and attach them anywhere in the request lifecycle (before/after/error).
 
 - **Pluggable storage backends**  
-  Bring your own database or use multiple ones per tenant (SQL, Mongo, TypeDB, P2P, in-memory, etc.).
+  Bring your own database or mix multiple databases per tenant (SQL, TypeDB, Memory, etc.).
 
 - **Adapter-based architecture**  
-  Use Axum today, add Warp, Actix, Serverless, or P2P transports later.
+  Expose your services using Axum today, and add WebSockets or gRPC tomorrow.
 
 - **No stack lock-in**  
-  DogRS keeps your core logic clean and portable.
+  DogRS keeps your core logic portable.
 
-- **High-Performance Lock-Free Architecture**  
-  Thanks to the strict `DogAppBuilder` pattern, the entire dependency injection, hook registry, and configuration layers are completely frozen at runtime. Your hot paths run absolutely lock-free and scale linearly with zero thread-synchronization bottlenecks.
+```mermaid
+graph TD
+    %% Adapters
+    subgraph "Adapters (The Outside World)"
+        HTTP["dog-axum<br>(HTTP REST)"]
+        WS["dog-realtime<br>(WebSockets)"]
+        CLI["Custom CLI"]
+    end
 
-## 📦 Published Crates
+    %% Core
+    subgraph "DogRS Core"
+        Core["dog-core<br>(Services & Hooks)"]
+        Events["DogEventHub<br>(Pub/Sub)"]
+    end
 
-All DogRS crates are now available on [crates.io](https://crates.io):
+    %% Storage
+    subgraph "Infrastructure"
+        DB["dog-typedb<br>(TypeDB/SQL)"]
+        Queue["dog-queue<br>(Background Jobs)"]
+    end
+
+    HTTP --> Core
+    WS --> Core
+    CLI --> Core
+    
+    Core --> Events
+    Core --> DB
+    Core --> Queue
+    
+    classDef adapter fill:#f3f4f6,stroke:#9ca3af;
+    classDef core fill:#d1fae5,stroke:#10b981;
+    classDef infra fill:#dbeafe,stroke:#3b82f6;
+    
+    class HTTP,WS,CLI adapter;
+    class Core,Events core;
+    class DB,Queue infra;
+```
+
+- **Read-Path Optimized**  
+  Using the `DogAppBuilder` pattern, the dependency injection and hook registries are frozen at startup. This means your application's hot paths scale cleanly across threads without heavy lock contention.
+
+## Published Crates
+
+All DogRS crates are available on [crates.io](https://crates.io):
 
 ### Core Framework
-- **[dog-core](https://crates.io/crates/dog-core)** `0.1.0` → Framework-agnostic core (services, hooks, tenants, storage contracts)
+- **[dog-core](https://crates.io/crates/dog-core)** → The framework-agnostic core (services, hooks, tenant contexts).
 
-### Web Framework Adapters  
-- **[dog-axum](https://crates.io/crates/dog-axum)** `0.1.0` → Axum adapter for HTTP APIs with multipart uploads and middleware
+### Web & Realtime Adapters
+- **[dog-axum](https://crates.io/crates/dog-axum)** → Mount your services as HTTP REST endpoints using Axum.
+- **dog-realtime** *(Upcoming)* → WebSocket and SSE streaming for realtime service events.
+
+### Data & Infrastructure
+- **[dog-queue](https://crates.io/crates/dog-queue)** → A multi-tenant job queue with lease-based processing, idempotency, and a unified builder API.
+- **[dog-typedb](https://crates.io/crates/dog-typedb)** → TypeDB integration with query builders and adapters.
+- **[dog-blob](https://crates.io/crates/dog-blob)** → Blob storage adapter with S3 compatibility and streaming support.
 
 ### Auth
-- **[dog-auth](https://crates.io/crates/dog-auth)** `0.1.0` → Authentication service + strategy registry (JWT issuance)
-- **[dog-auth-oauth](https://crates.io/crates/dog-auth-oauth)** `0.1.0` → Provider-agnostic OAuth strategy + orchestration
-
-### Database Adapters
-- **[dog-typedb](https://crates.io/crates/dog-typedb)** `0.1.0` → TypeDB integration with query builders and adapters
-
-### Storage & Infrastructure
-- **[dog-blob](https://crates.io/crates/dog-blob)** `0.1.0` → Production-ready blob storage with S3 compatibility and streaming
+- **[dog-auth](https://crates.io/crates/dog-auth)** → Authentication service and JWT management.
+- **[dog-auth-oauth](https://crates.io/crates/dog-auth-oauth)** → OAuth2 strategies for Google, GitHub, and others.
 
 ### Schema & Validation
-- **[dog-schema](https://crates.io/crates/dog-schema)** `0.1.0` → Schema definition and validation utilities
-- **[dog-schema-macros](https://crates.io/crates/dog-schema-macros)** `0.1.0` → Procedural macros for schema generation
-- **[dog-schema-validator](https://crates.io/crates/dog-schema-validator)** `0.1.0` → Advanced validation utilities with runtime constraints
+- **[dog-schema](https://crates.io/crates/dog-schema)** → Schema definition utilities.
+- **[dog-schema-macros](https://crates.io/crates/dog-schema-macros)** → Procedural macros for generating schemas.
+- **[dog-schema-validator](https://crates.io/crates/dog-schema-validator)** → Advanced runtime validation utilities.
 
-## 🚀 Quick Start
+## Quick Start
 
 Add DogRS crates to your project:
 
@@ -61,37 +98,28 @@ cargo add dog-core
 # Web development with Axum
 cargo add dog-axum dog-core
 
-# TypeDB integration
-cargo add dog-typedb dog-core
-
-# Blob storage
-cargo add dog-blob
-
-# Schema validation
-cargo add dog-schema dog-schema-macros dog-schema-validator
+# Background jobs
+cargo add dog-queue
 ```
 
-## 📚 Docs
+## Docs
 
+- [Design Architecture](docs/design.md)
 - [Configuration](docs/configuration.md)
 
-## 🧪 Examples
+## Examples
 
-- `dog-examples/auth-demo` includes an end-to-end OAuth2 Google login flow.
-  - Uses `dog-auth-oauth` (enable `oauth2-client` feature for the reusable `oauth2` client helper)
-  - Exposes OAuth endpoints via `dog-axum`
+Check the `dog-examples/` directory for full working applications:
+- `auth-demo` → End-to-end OAuth2 login flow.
+- `fleet-queue` → TypeDB and Axum integration.
+- `music-blobs` → Realtime streaming and blob storage.
 
-## 🚧 Status
+## Status
 
-DogRS is in active development.  
-The goal is to build a simple but powerful foundation for real-world Rust applications without forcing a fixed stack.
+DogRS is in active development. The goal is to build a simple but powerful foundation for Rust applications without forcing you into a fixed technology stack.
 
 ---
 
 <div align="center">
-
-**Made by [Jitpomi](https://github.com/Jitpomi)**
-
+Made by <a href="https://github.com/Jitpomi">Jitpomi</a>
 </div>
-
-Inspiration from: [FeathersJS](https://feathersjs.com/) and [NestJS](https://nestjs.com/).

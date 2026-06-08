@@ -14,17 +14,32 @@ A demo showcasing **dog-blob** storage capabilities with real RustFS integration
 
 This application demonstrates **dog-blob** capabilities with real RustFS storage:
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Demo Runner   │───▶│  JangoService   │───▶│   dog-blob      │
-│   (Terminal)    │    │  (Business)     │    │   (Storage)     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                                        │
-                                                        ▼
-                                               ┌─────────────────┐
-                                               │     RustFS      │
-                                               │ (S3-Compatible) │
-                                               └─────────────────┘
+```mermaid
+graph LR
+    subgraph "Client"
+        CLI["Demo Runner<br>(Terminal)"]
+    end
+    
+    subgraph "Application"
+        Jango["JangoService<br>(Business Logic)"]
+    end
+    
+    subgraph "Infrastructure"
+        Blob["dog-blob<br>(Storage Adapter)"]
+        FS["RustFS<br>(S3-Compatible)"]
+    end
+    
+    CLI -->|"Upload Track"| Jango
+    Jango -->|"Multipart Stream"| Blob
+    Blob -->|"S3 API"| FS
+    
+    classDef client fill:#f3f4f6,stroke:#9ca3af;
+    classDef app fill:#d1fae5,stroke:#10b981;
+    classDef infra fill:#dbeafe,stroke:#3b82f6;
+    
+    class CLI client;
+    class Jango app;
+    class Blob,FS infra;
 ```
 
 ### Key Components

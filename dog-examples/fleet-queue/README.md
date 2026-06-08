@@ -18,6 +18,37 @@ relation assignment,
   owns assigned-at,
   owns assignment-status;
 ```
+
+```mermaid
+graph TD
+    %% Entities
+    Driver((Employee<br>Role: Driver))
+    Vehicle((Vehicle))
+    Delivery((Delivery))
+    
+    %% Relation
+    Assignment{Assignment}
+    
+    %% Attributes
+    Status[Status]
+    Time[Assigned At]
+    
+    Assignment --- Driver
+    Assignment --- Vehicle
+    Assignment --- Delivery
+    
+    Assignment -.-> Status
+    Assignment -.-> Time
+    
+    classDef relation fill:#fef08a,stroke:#eab308,stroke-width:2px;
+    classDef entity fill:#dbeafe,stroke:#3b82f6,stroke-width:2px;
+    classDef attr fill:#f3f4f6,stroke:#9ca3af,stroke-dasharray: 5 5;
+    
+    class Assignment relation;
+    class Driver,Vehicle,Delivery entity;
+    class Status,Time attr;
+```
+
 When an assignment is created, it natively binds all three entities together. The frontend dashboard leverages this to instantly connect vehicles to their delivery destinations and calculate routes on the fly without complex `JOIN` logic.
 
 ### 2. Logic & Inference Rules (`functions.tql`)
