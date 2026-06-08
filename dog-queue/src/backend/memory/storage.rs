@@ -270,17 +270,15 @@ impl QueueBackend for MemoryBackend {
             return Err(QueueError::JobNotFound(job_id.to_string()));
         }
 
-        // Check for terminal states
+        // Cancel-wins: checked before the generic terminal-state guard so that
+        // ack_fail returns JobCanceled (not JobAlreadyTerminal) for canceled jobs,
+        // consistent with ack_complete.
         match &record.status {
-            JobStatus::Completed { .. } | JobStatus::Failed { .. } | JobStatus::Canceled { .. } => {
-                return Err(QueueError::JobAlreadyTerminal);
+            JobStatus::Canceled { .. } => return Err(QueueError::JobCanceled),
+            JobStatus::Completed { .. } | JobStatus::Failed { .. } => {
+                return Err(QueueError::JobAlreadyTerminal)
             }
             _ => {}
-        }
-
-        // Check for cancellation (cancel-wins)
-        if matches!(record.status, JobStatus::Canceled { .. }) {
-            return Err(QueueError::JobCanceled);
         }
 
         // Verify lease token

@@ -125,28 +125,28 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         Ok(job_id)
     }
 
-    /// Execute job immediately (for tests/dev - bypasses durable storage)
-    #[instrument(skip(self, job), fields(job_type = J::JOB_TYPE, tenant_id = %ctx.tenant_id))]
-    pub async fn execute_now<J: Job>(&self, ctx: QueueCtx, job: J) -> QueueResult<J::Result> {
+    /// Execute a job immediately, bypassing durable storage.
+    ///
+    /// **For development and testing only.** This path skips `enqueue`, `dequeue`,
+    /// and `ack_complete`, so the job has no `JobId` and is invisible to the normal
+    /// worker pipeline. In production always use `enqueue`.
+    #[instrument(skip(self, job, execution_context), fields(job_type = J::JOB_TYPE, tenant_id = %ctx.tenant_id))]
+    pub async fn execute_now<J: Job>(
+        &self,
+        ctx: QueueCtx,
+        job: J,
+        execution_context: J::Context,
+    ) -> QueueResult<J::Result> {
+        let _ = ctx; // kept for API symmetry with enqueue
         info!("Executing job immediately: {}", J::JOB_TYPE);
 
-        // Create execution context
-        let execution_context = self.create_execution_context::<J>(ctx.clone()).await?;
-
-        // Execute with timeout
-        let timeout_duration = Duration::from_secs(300); // Default 5 minute timeout
-        let result = tokio::time::timeout(timeout_duration, job.execute(execution_context))
+        // Execute with the configured lease duration as the timeout.
+        // No observability recording: no real JobId exists (job was never enqueued)
+        // and a phantom ID would produce uncorrelatable dashboard entries.
+        tokio::time::timeout(self.config.lease_duration, job.execute(execution_context))
             .await
             .map_err(|_| QueueError::Internal("Job execution timeout".to_string()))?
-            .map_err(QueueError::JobFailed)?;
-
-        // Record metrics
-        self.observability
-            .record_job_completed(&ctx, &JobId::new(), J::JOB_TYPE)
-            .await;
-
-        info!("Job executed successfully: {}", J::JOB_TYPE);
-        Ok(result)
+            .map_err(QueueError::JobFailed)
     }
 
     /// Start workers for processing jobs from specified queues
@@ -208,11 +208,6 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         &self.config
     }
 
-    async fn create_execution_context<J: Job>(&self, _ctx: QueueCtx) -> QueueResult<J::Context> {
-        Err(QueueError::Internal(
-            "Context creation not implemented for generic jobs".to_string(),
-        ))
-    }
 }
 
 impl<B: QueueBackend> Clone for QueueAdapter<B> {
