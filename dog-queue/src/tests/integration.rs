@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc,
 };
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration, Instant};
 
 use crate::{
     backend::memory::MemoryBackend, Job, JobError, JobPriority, QueueAdapter, QueueCtx,
@@ -66,11 +66,38 @@ impl Job for FailingJob {
     }
 }
 
-
 fn make_adapter() -> QueueAdapter<MemoryBackend> {
     QueueAdapter::new(MemoryBackend::new())
 }
 
+// ---------------------------------------------------------------------------
+// Deterministic wait helper — replaces fixed sleep() calls.
+//
+// Polls `condition` every 10 ms. Returns as soon as the condition holds.
+// Panics with `msg` if the condition does not hold within `timeout`.
+//
+// This replaces the pattern:
+//   sleep(Duration::from_millis(200)).await;
+//   assert_eq!(counter, expected);
+//
+// With:
+//   poll_until(|| counter.load() == expected, Duration::from_secs(5), "…").await;
+// ---------------------------------------------------------------------------
+async fn poll_until<F>(mut condition: F, timeout: Duration, msg: &str)
+where
+    F: FnMut() -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        if condition() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("Timed out after {:?}: {}", timeout, msg);
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 1. Full lifecycle: enqueue → worker processes → job executes
@@ -87,18 +114,21 @@ async fn test_full_lifecycle_job_executes() {
     let job = CountingJob { label: "first".to_string() };
     adapter.enqueue(ctx.clone(), job).await.unwrap();
 
-    // Start worker — it will run until we shut it down
     let handle = adapter
         .start_workers(ctx, counter.clone(), vec!["counting_job".to_string()])
         .await
         .unwrap();
 
-    // Give the worker time to process the single job
-    sleep(Duration::from_millis(200)).await;
+    let c = counter.0.clone();
+    poll_until(
+        || c.load(Ordering::SeqCst) >= 1,
+        Duration::from_secs(5),
+        "job should have executed once",
+    )
+    .await;
 
     handle.shutdown().await.unwrap();
-
-    assert_eq!(counter.0.load(Ordering::SeqCst), 1, "job should have executed once");
+    assert_eq!(counter.0.load(Ordering::SeqCst), 1, "job should have executed exactly once");
 }
 
 // ---------------------------------------------------------------------------
@@ -124,27 +154,37 @@ async fn test_multi_tenant_isolation() {
             .unwrap();
     }
 
-    // Worker for tenant B — should find nothing to do
+    // Worker for tenant B — should find nothing to do.
+    // We give it 500 ms to prove it stays idle; no deterministic completion event
+    // to wait for, so a bounded sleep is acceptable here.
     let handle_b = adapter
         .start_workers(ctx_b, counter_b.clone(), vec!["counting_job".to_string()])
         .await
         .unwrap();
-
-    sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(500)).await;
     handle_b.shutdown().await.unwrap();
 
-    // Tenant B counter must remain zero
-    assert_eq!(counter_b.0.load(Ordering::SeqCst), 0, "tenant B should not process tenant A jobs");
+    assert_eq!(
+        counter_b.0.load(Ordering::SeqCst),
+        0,
+        "tenant B should not process tenant A jobs"
+    );
 
-    // Now run tenant A's worker
+    // Now run tenant A's worker and wait deterministically for all 3 jobs.
     let handle_a = adapter
         .start_workers(ctx_a, counter_a.clone(), vec!["counting_job".to_string()])
         .await
         .unwrap();
 
-    sleep(Duration::from_millis(300)).await;
-    handle_a.shutdown().await.unwrap();
+    let ca = counter_a.0.clone();
+    poll_until(
+        || ca.load(Ordering::SeqCst) >= 3,
+        Duration::from_secs(5),
+        "tenant A should process all 3 of its jobs",
+    )
+    .await;
 
+    handle_a.shutdown().await.unwrap();
     assert_eq!(counter_a.0.load(Ordering::SeqCst), 3, "tenant A should process exactly its 3 jobs");
 }
 
@@ -224,7 +264,7 @@ async fn test_cancel_wins_semantics() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Retry on retryable failure: job gets re-queued and attempted again
+// 5. Retry on retryable failure: job exhausts MAX_RETRIES attempts
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -236,7 +276,9 @@ async fn test_retryable_failure_retries() {
     let attempt_count = Counter(Arc::new(AtomicU32::new(0)));
     let ctx = QueueCtx::new("tenant_retry".to_string());
 
-    // FailingJob::MAX_RETRIES = 2 → 1 initial + 2 retries = 3 attempts max
+    // FailingJob::MAX_RETRIES = 2 → 1 initial + 2 retries = 3 total attempts
+    let expected_attempts = FailingJob::MAX_RETRIES + 1;
+
     adapter
         .enqueue(ctx.clone(), FailingJob { permanent: false })
         .await
@@ -247,15 +289,20 @@ async fn test_retryable_failure_retries() {
         .await
         .unwrap();
 
-    // Wait long enough for up to 3 attempts with backoff
-    sleep(Duration::from_millis(500)).await;
+    let ac = attempt_count.0.clone();
+    poll_until(
+        || ac.load(Ordering::SeqCst) >= expected_attempts,
+        Duration::from_secs(10),
+        "retryable job should exhaust all retries",
+    )
+    .await;
+
     handle.shutdown().await.unwrap();
 
-    let attempts = attempt_count.0.load(Ordering::SeqCst);
-    assert!(
-        attempts >= 1,
-        "retryable job should have been attempted at least once, got {}",
-        attempts
+    assert_eq!(
+        attempt_count.0.load(Ordering::SeqCst),
+        expected_attempts,
+        "retryable job should attempt exactly 1 initial + MAX_RETRIES retries"
     );
 }
 
@@ -281,7 +328,14 @@ async fn test_permanent_failure_no_retry() {
         .await
         .unwrap();
 
-    sleep(Duration::from_millis(300)).await;
+    let ac = attempt_count.0.clone();
+    poll_until(
+        || ac.load(Ordering::SeqCst) >= 1,
+        Duration::from_secs(5),
+        "permanent failure should execute at least once",
+    )
+    .await;
+
     handle.shutdown().await.unwrap();
 
     assert_eq!(
@@ -355,8 +409,14 @@ async fn test_fifo_within_same_priority() {
         .await
         .unwrap();
 
-    sleep(Duration::from_millis(300)).await;
-    handle.shutdown().await.unwrap();
+    let c = counter.0.clone();
+    poll_until(
+        || c.load(Ordering::SeqCst) >= 5,
+        Duration::from_secs(5),
+        "all 5 jobs should execute",
+    )
+    .await;
 
+    handle.shutdown().await.unwrap();
     assert_eq!(counter.0.load(Ordering::SeqCst), 5, "all 5 jobs should execute");
 }

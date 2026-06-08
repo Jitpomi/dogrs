@@ -50,28 +50,24 @@ impl<B: QueueBackend> QueueEngine<B> {
         Ok(job_id)
     }
 
-    /// Execute job immediately (for tests/dev - bypasses durable storage)
+    /// Execute a job immediately, bypassing durable storage.
+    ///
+    /// **For development and testing only.** This path skips `enqueue`, `dequeue`,
+    /// and `ack_complete`, so the job has no `JobId` and is invisible to observability
+    /// and the normal worker pipeline. In production always use `enqueue`.
     pub async fn execute_now<J: Job>(
         &self,
         ctx: QueueCtx,
         job: J,
         execution_context: J::Context,
     ) -> QueueResult<J::Result> {
-        // This is for local testing/development - direct execution
-        // In production, jobs are processed by workers via dequeue
+        let _ = ctx; // ctx unused here; kept for API symmetry with enqueue
 
-        // Execute directly with proper error handling
-        let result = job
-            .execute(execution_context)
+        // Execute directly. No observability recording: this method has no real JobId
+        // (the job was never durably enqueued) and a phantom ID would corrupt dashboards.
+        job.execute(execution_context)
             .await
-            .map_err(QueueError::JobFailed)?;
-
-        // Emit observability event
-        self.observability
-            .record_job_completed(&ctx, &JobId::new(), J::JOB_TYPE)
-            .await;
-
-        Ok(result)
+            .map_err(QueueError::JobFailed)
     }
 
     /// Get backend reference

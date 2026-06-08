@@ -12,8 +12,13 @@ use crate::{
     QueueError, QueueResult,
 };
 
-// Type aliases to reduce complexity
-type TenantQueues = HashMap<String, HashMap<String, VecDeque<JobId>>>;
+// Type aliases to reduce complexity.
+// Each queue entry stores (priority, run_at, job_id) so that:
+//   - `enqueue` can compare priorities without locking `jobs`
+//   - `dequeue` can check eligibility (run_at <= now) without locking `jobs`
+// This eliminates all nested-lock cross-reads between `queues` and `jobs`.
+type QueueEntry = (crate::JobPriority, DateTime<Utc>, JobId);
+type TenantQueues = HashMap<String, HashMap<String, VecDeque<QueueEntry>>>;
 type IdempotencyMap = HashMap<(String, String, String, String), JobId>;
 
 /// In-memory backend for testing and development
@@ -90,25 +95,14 @@ impl QueueBackend for MemoryBackend {
         let tenant_queues = queues.entry(ctx.tenant_id.clone()).or_default();
         let queue = tenant_queues.entry(message.queue.clone()).or_default();
 
-        // Insert in priority order (higher priority first, then FIFO within priority)
+        // Insert in priority order (higher priority first, then FIFO within same priority).
+        // Priority is stored in the queue entry — no cross-lock read of `jobs` needed.
         let insert_pos = queue
             .iter()
-            .position(|existing_job_id| {
-                let jobs = self.jobs.read();
-                if let Some(existing_record) = jobs.get(existing_job_id) {
-                    // Compare priority first, then creation time
-                    match message.priority.cmp(&existing_record.message.priority) {
-                        std::cmp::Ordering::Greater => true, // Higher priority goes first
-                        std::cmp::Ordering::Less => false,
-                        std::cmp::Ordering::Equal => now < existing_record.created_at, // FIFO within same priority
-                    }
-                } else {
-                    true // If record not found, insert here
-                }
-            })
+            .position(|(existing_priority, _, _)| message.priority > *existing_priority)
             .unwrap_or(queue.len());
-
-        queue.insert(insert_pos, job_id.clone());
+        queue.insert(insert_pos, (message.priority, message.run_at, job_id.clone()));
+        drop(queues);
 
         // Update idempotency tracking
         if let Some(ref key) = message.idempotency_key {
@@ -139,69 +133,57 @@ impl QueueBackend for MemoryBackend {
     async fn dequeue(&self, ctx: QueueCtx, queues: &[&str]) -> QueueResult<Option<LeasedJob>> {
         let now = Utc::now();
 
-        // Find eligible job across specified queues
         for queue_name in queues {
-            let mut queues_lock = self.queues.write();
-            let tenant_queues = queues_lock.get_mut(&ctx.tenant_id);
+            // ── Phase 1: scan queue for eligible entry ────────────────────────────────
+            // Hold queues.write() only. `run_at` is stored in the entry, so
+            // eligibility is checked here without touching the `jobs` map.
+            // Canceled entries whose run_at has passed are removed here and
+            // discarded in phase 2 (lazy tombstone cleanup).
+            let candidate = {
+                let mut queues_lock = self.queues.write();
+                queues_lock
+                    .get_mut(&ctx.tenant_id)
+                    .and_then(|tq| tq.get_mut(*queue_name))
+                    .and_then(|queue| {
+                        let pos = queue
+                            .iter()
+                            .position(|(_, run_at, _)| *run_at <= now);
+                        pos.map(|i| {
+                            let (_, _, job_id) = queue.remove(i).unwrap();
+                            job_id
+                        })
+                    })
+            }; // queues_lock RELEASED
 
-            if let Some(tenant_queues) = tenant_queues {
-                if let Some(queue) = tenant_queues.get_mut(*queue_name) {
-                    // Find first eligible job (run_at <= now, not in terminal status)
-                    let mut job_index = None;
+            // ── Phase 2: lease the job — single jobs.write() ──────────────────────────
+            if let Some(job_id) = candidate {
+                let mut jobs = self.jobs.write();
+                if let Some(record) = jobs.get_mut(&job_id) {
+                    match &record.status {
+                        JobStatus::Enqueued | JobStatus::Retrying { .. } => {
+                            let lease_token = LeaseToken::new();
+                            let lease_until = now + chrono::Duration::seconds(300); // 5 minute lease
 
-                    for (index, job_id) in queue.iter().enumerate() {
-                        let mut jobs = self.jobs.write();
-                        if let Some(record) = jobs.get_mut(job_id) {
-                            match &record.status {
-                                JobStatus::Enqueued | JobStatus::Retrying { .. } => {
-                                    if record.status.is_eligible(now) {
-                                        job_index = Some(index);
-                                        break;
-                                    }
-                                }
-                                _ => {
-                                    // Job in non-eligible status, remove from queue
-                                    job_index = Some(index);
-                                    break;
-                                }
-                            }
+                            record.attempt += 1;
+                            record.start_processing(lease_token.clone(), lease_until);
+
+                            let event = JobEvent::Leased {
+                                job_id: job_id.clone(),
+                                lease_until,
+                                at: now,
+                            };
+                            let _ = self.event_broadcaster.send(event);
+
+                            return Ok(Some(LeasedJob {
+                                record: record.clone(),
+                                lease_token,
+                                lease_until,
+                            }));
                         }
-                    }
-
-                    if let Some(index) = job_index {
-                        let job_id = queue.remove(index).unwrap();
-                        let mut jobs = self.jobs.write();
-
-                        if let Some(record) = jobs.get_mut(&job_id) {
-                            match &record.status {
-                                JobStatus::Enqueued | JobStatus::Retrying { .. } => {
-                                    // Create lease
-                                    let lease_token = LeaseToken::new();
-                                    let lease_until = now + chrono::Duration::seconds(300); // 5 minute lease
-
-                                    // Increment attempt and start processing
-                                    record.attempt += 1;
-                                    record.start_processing(lease_token.clone(), lease_until);
-
-                                    // Emit event
-                                    let event = JobEvent::Leased {
-                                        job_id: job_id.clone(),
-                                        lease_until,
-                                        at: now,
-                                    };
-                                    let _ = self.event_broadcaster.send(event);
-
-                                    return Ok(Some(LeasedJob {
-                                        record: record.clone(),
-                                        lease_token,
-                                        lease_until,
-                                    }));
-                                }
-                                _ => {
-                                    // Job not in eligible status, continue searching
-                                    continue;
-                                }
-                            }
+                        _ => {
+                            // Job was canceled while queued — entry already removed
+                            // from the queue in phase 1 (lazy tombstone). Skip to
+                            // the next queue name.
                         }
                     }
                 }
@@ -328,13 +310,14 @@ impl QueueBackend for MemoryBackend {
             record.schedule_retry(retry_time);
             record.set_error(error.clone());
 
-            // Re-add to queue for retry
+            // Re-add to queue for retry, preserving priority ordering.
             let mut queues = self.queues.write();
+            let priority = record.message.priority;
             let tenant_queues = queues.entry(ctx.tenant_id.clone()).or_default();
             let queue = tenant_queues
                 .entry(record.message.queue.clone())
                 .or_default();
-            queue.push_back(job_id.clone());
+            queue.push_back((priority, retry_time, job_id.clone()));
 
             let event = JobEvent::Retrying {
                 job_id: job_id.clone(),

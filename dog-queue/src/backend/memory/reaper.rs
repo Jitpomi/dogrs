@@ -99,14 +99,16 @@ impl LeaseReaper {
                 .write()
                 .insert(job_id.clone(), record.clone());
 
-            // Re-add to queue if retrying
+            // Re-add to queue if retrying. Use priority from the record and
+            // run_at = now (expired jobs retry immediately).
             if matches!(new_status, JobStatus::Retrying { .. }) {
                 let mut queues = self.backend.queues.write();
+                let priority = record.message.priority;
                 let tenant_queues = queues.entry(record.tenant_id.clone()).or_default();
                 let queue = tenant_queues
                     .entry(record.message.queue.clone())
                     .or_default();
-                queue.push_back(job_id.clone());
+                queue.push_back((priority, now, job_id.clone()));
             }
 
             // Emit appropriate event
