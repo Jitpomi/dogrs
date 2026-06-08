@@ -21,6 +21,30 @@ type QueueEntry = (crate::JobPriority, DateTime<Utc>, JobId);
 type TenantQueues = HashMap<String, HashMap<String, VecDeque<QueueEntry>>>;
 type IdempotencyMap = HashMap<(String, String, String, String), JobId>;
 
+// ---------------------------------------------------------------------------
+// Priority-ordered insertion helper
+// ---------------------------------------------------------------------------
+
+/// Insert `entry` into a priority-ordered deque.
+///
+/// Entries are ordered descending by priority (Critical first, Low last).
+/// Within the same priority, insertion order is preserved (FIFO).
+///
+/// `position(|p| new_priority > *p)` finds the first slot whose incumbent
+/// has a strictly lower priority — the new entry is inserted before it,
+/// preserving FIFO order for entries of equal priority.
+///
+/// **Performance note**: this is O(n) scan + O(n) shift — acceptable for the
+/// in-memory development backend. A production backend should use a
+/// `BinaryHeap` or per-priority `VecDeque` tiers for O(log n) / O(1) ops.
+fn priority_insert(queue: &mut VecDeque<QueueEntry>, entry: QueueEntry) {
+    let pos = queue
+        .iter()
+        .position(|(p, _, _)| entry.0 > *p)
+        .unwrap_or(queue.len());
+    queue.insert(pos, entry);
+}
+
 /// In-memory backend for testing and development
 pub struct MemoryBackend {
     /// Job records indexed by job_id
@@ -65,75 +89,66 @@ impl MemoryBackend {
 #[async_trait]
 impl QueueBackend for MemoryBackend {
     async fn enqueue(&self, ctx: QueueCtx, message: JobMessage) -> QueueResult<JobId> {
-        // Check idempotency if key provided
-        if let Some(ref key) = message.idempotency_key {
-            let idempotency_scope = (
-                ctx.tenant_id.clone(),
-                message.queue.clone(),
-                message.job_type.clone(),
-                key.clone(),
-            );
+        // Compute the idempotency scope once (avoids repeated clones below).
+        let idempotency_scope: Option<(String, String, String, String)> =
+            message.idempotency_key.as_ref().map(|key| {
+                (
+                    ctx.tenant_id.clone(),
+                    message.queue.clone(),
+                    message.job_type.clone(),
+                    key.clone(),
+                )
+            });
 
-            // Acquire and immediately release the idempotency lock before reading
-            // jobs — avoid holding two locks simultaneously.
-            let existing_job_id = self.idempotency.read().get(&idempotency_scope).cloned();
+        // Acquire the idempotency write lock *before* the existence check and hold
+        // it until the new entry is committed.  This closes the TOCTOU window:
+        // two concurrent enqueues with the same key both need this lock, so only
+        // one proceeds past the check at a time.
+        //
+        // Lock ordering (always observed): idempotency → jobs → queues.
+        // No other method in this backend acquires idempotency, so no deadlock risk.
+        let mut idempotency_guard = self.idempotency.write();
 
-            if let Some(existing_job_id) = existing_job_id {
-                // Check if existing job is terminal
+        if let Some(ref scope) = idempotency_scope {
+            if let Some(existing_id) = idempotency_guard.get(scope).cloned() {
+                // Check terminal status under jobs.read().
+                // Holding idempotency.write() while acquiring jobs.read() is safe
+                // because no other code path holds jobs.write() and then tries to
+                // acquire idempotency (only enqueue does, and it's now serialised).
                 let jobs = self.jobs.read();
-                if let Some(existing_record) = jobs.get(&existing_job_id) {
-                    match existing_record.status {
-                        JobStatus::Completed { .. }
-                        | JobStatus::Failed { .. }
-                        | JobStatus::Canceled { .. } => {
-                            // Terminal job - allow new enqueue
-                        }
-                        _ => {
-                            // Non-terminal - return existing job_id
-                            return Ok(existing_job_id.clone());
-                        }
+                if let Some(record) = jobs.get(&existing_id) {
+                    if !record.status.is_terminal() {
+                        // Non-terminal — deduplicate and return the existing id.
+                        return Ok(existing_id);
                     }
+                    // Terminal — fall through and create a new job below.
                 }
+                // Existing id not found in jobs (possible after a GC pass) —
+                // fall through and re-enqueue with a fresh id.
             }
         }
 
         let job_id = JobId::new();
         let now = Utc::now();
 
-        // Create job record
+        // Create and store the job record.
         let record = JobRecord::new(job_id.clone(), ctx.tenant_id.clone(), message.clone());
-
-        // Store job record
         self.jobs.write().insert(job_id.clone(), record);
 
-        // Add to queue
+        // Insert into the priority-ordered queue.
         let mut queues = self.queues.write();
         let tenant_queues = queues.entry(ctx.tenant_id.clone()).or_default();
         let queue = tenant_queues.entry(message.queue.clone()).or_default();
-
-        // Insert in priority order (higher priority first, then FIFO within same priority).
-        // Priority is stored in the queue entry — no cross-lock read of `jobs` needed.
-        let insert_pos = queue
-            .iter()
-            .position(|(existing_priority, _, _)| message.priority > *existing_priority)
-            .unwrap_or(queue.len());
-        queue.insert(insert_pos, (message.priority, message.run_at, job_id.clone()));
+        priority_insert(queue, (message.priority, message.run_at, job_id.clone()));
         drop(queues);
 
-        // Update idempotency tracking
-        if let Some(ref key) = message.idempotency_key {
-            let idempotency_scope = (
-                ctx.tenant_id.clone(),
-                message.queue.clone(),
-                message.job_type.clone(),
-                key.clone(),
-            );
-            self.idempotency
-                .write()
-                .insert(idempotency_scope, job_id.clone());
+        // Register/update the idempotency entry (still under the write lock — no race).
+        if let Some(scope) = idempotency_scope {
+            idempotency_guard.insert(scope, job_id.clone());
         }
+        drop(idempotency_guard);
 
-        // Emit event
+        // Emit enqueue event after all locks are released.
         let event = JobEvent::Enqueued {
             job_id: job_id.clone(),
             tenant_id: ctx.tenant_id.clone(),
@@ -309,29 +324,25 @@ impl QueueBackend for MemoryBackend {
             }
         }
 
-        // Check if max retries exceeded
-        if record.attempt > record.message.max_retries {
-            record.fail(format!("Max retries exceeded: {}", error));
-
-            let event = JobEvent::Failed {
-                job_id: job_id.clone(),
-                error: format!("Max retries exceeded: {}", error),
-                at: now,
-            };
-            let _ = self.event_broadcaster.send(event);
-        } else if let Some(retry_time) = retry_at {
-            // Schedule retry
+        // The adapter is the sole authority for retry decisions: it computes
+        // retry_at = Some(time) for retryable failures within budget, and None
+        // for permanent failures or exhausted retries.  The backend trusts this
+        // decision completely — do NOT re-check attempt counts here, which would
+        // create a second source of truth and corrupt error messages.
+        if let Some(retry_time) = retry_at {
+            // Schedule retry: re-insert into the priority-ordered queue.
+            // Use priority_insert (not push_back) so the retrying job is placed
+            // at the correct position — push_back would cause priority inversion,
+            // processing Critical retries after newly-enqueued Low jobs.
             record.schedule_retry(retry_time);
             record.set_error(error.clone());
 
-            // Re-add to queue for retry, preserving priority ordering.
             let mut queues = self.queues.write();
             let priority = record.message.priority;
+            let queue_name = record.message.queue.clone();
             let tenant_queues = queues.entry(ctx.tenant_id.clone()).or_default();
-            let queue = tenant_queues
-                .entry(record.message.queue.clone())
-                .or_default();
-            queue.push_back((priority, retry_time, job_id.clone()));
+            let queue = tenant_queues.entry(queue_name).or_default();
+            priority_insert(queue, (priority, retry_time, job_id.clone()));
 
             let event = JobEvent::Retrying {
                 job_id: job_id.clone(),
@@ -341,7 +352,7 @@ impl QueueBackend for MemoryBackend {
             };
             let _ = self.event_broadcaster.send(event);
         } else {
-            // Permanent failure
+            // Permanent failure: record as-is with the verbatim error.
             record.fail(error.clone());
 
             let event = JobEvent::Failed {
@@ -499,7 +510,7 @@ mod tests {
     fn create_test_job_message() -> JobMessage {
         JobMessage {
             job_type: "test_job".to_string(),
-            payload_bytes: b"test_payload".to_vec(),
+            payload_bytes: b"{}" .to_vec(),
             codec: "json".to_string(),
             queue: "default".to_string(),
             priority: JobPriority::Normal,

@@ -61,10 +61,15 @@ impl<J: Job + for<'de> Deserialize<'de>> JobHandler for ConcreteJobHandler<J> {
         // Execute the job
         let result = job.execute(typed_context).await?;
 
-        // For now, we'll serialize the result as JSON
-        // In production, this might be stored in dog-blob and return a reference
-        let result_json = serde_json::to_string(&result)
-            .map_err(|e| JobError::Permanent(format!("Failed to serialize result: {}", e)))?;
+        // Serialize the result.  A serialization failure here is an infrastructure
+        // bug (the result type returned by execute() is not JSON-serializable), NOT
+        // a job logic failure.  Use Retryable so the job gets another attempt rather
+        // than permanently consuming its retry budget for an infrastructure problem.
+        let result_json = serde_json::to_string(&result).map_err(|e| {
+            JobError::Retryable(format!(
+                "Failed to serialize job result (infrastructure error, will retry): {e}"
+            ))
+        })?;
 
         Ok(Some(result_json))
     }
