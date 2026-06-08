@@ -385,9 +385,15 @@ impl PerformanceMetrics {
             .collect()
     }
 
-    /// All job types that have timing data.
+    /// All job types that have timing data, sorted alphabetically for
+    /// deterministic ordering.
+    ///
+    /// `HashMap` key iteration is randomized; sorting matches the established
+    /// pattern of `registered_types()` and `available_codecs()`.
     pub fn job_types(&self) -> Vec<String> {
-        self.execution_times.keys().cloned().collect()
+        let mut types: Vec<String> = self.execution_times.keys().cloned().collect();
+        types.sort_unstable();
+        types
     }
 }
 
@@ -413,16 +419,28 @@ impl MetricsCollector {
 
     /// Collect a coherent point-in-time snapshot of all metrics.
     ///
+    /// Snapshots performance metrics first (under the `Mutex`), then the
+    /// per-type counters (DashMap traversal).  This ordering guarantees that
+    /// the counter snapshot reflects a state at-or-after the performance
+    /// snapshot — any job completing between the two reads is captured in the
+    /// counter snapshot and its execution time is already in the performance
+    /// snapshot, so dashboards combining both halves remain consistent.
+    ///
     /// Uses [`LiveMetrics::snapshot_all`] to traverse the per-type DashMap
     /// exactly once, so global totals and per-type breakdown are read from
-    /// the same atomic loads — no inconsistency window.
+    /// the same atomic loads — no inconsistency window between counters.
     pub fn collect_snapshot(&self) -> MetricsSnapshot {
+        // Snapshot performance first (Mutex lock), then counter metrics (DashMap).
+        // Jobs completing between the two reads increase the counter totals
+        // but their execution times are already included in the performance
+        // snapshot — the worst-case inconsistency is a counter ahead by one job.
+        let performance = self.live_metrics.performance_metrics();
         let (global, job_types) = self.live_metrics.snapshot_all();
         MetricsSnapshot {
             timestamp: Utc::now(),
             global,
             job_types,
-            performance: self.live_metrics.performance_metrics(),
+            performance,
         }
     }
 
@@ -668,7 +686,12 @@ impl PrometheusExporter {
         for family in families {
             let _ = writeln!(out, "# HELP {} {}", family.name, family.help);
             let _ = writeln!(out, "# TYPE {} counter", family.name);
-            for (job_type, metrics) in &per_type {
+            // Sort by job type for stable, diff-friendly output across scrapes.
+            // HashMap iteration order is randomised; tests that compare full
+            // gather() output strings would otherwise be intermittently flaky.
+            let mut type_entries: Vec<(&String, &JobTypeMetrics)> = per_type.iter().collect();
+            type_entries.sort_unstable_by_key(|(k, _)| k.as_str());
+            for (job_type, metrics) in &type_entries {
                 // Escape per Prometheus text format spec:
                 // backslash → \\, double-quote → \"
                 let escaped = job_type

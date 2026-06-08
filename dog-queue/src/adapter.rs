@@ -31,6 +31,19 @@ pub struct QueueConfig {
     /// How long a worker sleeps between dequeue polls when the queue is empty.
     /// Lower values reduce job latency at the cost of more backend round-trips.
     pub poll_interval: Duration,
+    /// Random jitter added to `poll_interval` per-worker to stagger dequeue
+    /// requests across the pool.
+    ///
+    /// Each worker adds a random delay in `[0, poll_jitter]` before sleeping
+    /// `poll_interval`. With `max_workers = 10`, `poll_interval = 100ms`, and
+    /// `poll_jitter = 10ms`, workers spread their polls over a 10 ms window
+    /// instead of all hitting the backend simultaneously. Critical for
+    /// Redis/Postgres backends — without jitter, every idle worker issues a
+    /// dequeue request at the same instant, creating a thundering herd.
+    ///
+    /// Must be `<= poll_interval` (enforced by [`QueueConfig::validate`]).
+    /// Defaults to `10ms`, which is 10% of the default 100 ms poll interval.
+    pub poll_jitter: Duration,
     /// How long a worker backs off after an infrastructure error (e.g. backend
     /// unavailable) before retrying the dequeue loop.
     pub error_backoff: Duration,
@@ -64,6 +77,7 @@ impl Default for QueueConfig {
             max_retry_backoff: Duration::from_secs(3600), // 1 hour
             base_retry_backoff: Duration::from_secs(1),
             poll_interval: Duration::from_millis(100),
+            poll_jitter: Duration::from_millis(10), // 10% of poll_interval
             error_backoff: Duration::from_secs(1),
             execute_timeout: None, // no timeout by default
             max_payload_size: None, // no limit by default
@@ -79,6 +93,9 @@ impl QueueConfig {
     /// - `base_retry_backoff` > `max_retry_backoff` (cap is below base; every retry uses max)
     /// - `heartbeat_interval` >= `lease_duration` (first heartbeat arrives after lease has already
     ///   expired; the reaper reclaims the job mid-execution, causing silent double-execution)
+    /// - `poll_interval` is zero (busy-wait spin loop against the backend)
+    /// - `error_backoff` is zero (immediate tight retry loop after backend errors)
+    /// - `poll_jitter` > `poll_interval` (jitter larger than the base interval is incoherent)
     pub fn validate(&self) -> QueueResult<()> {
         if self.max_workers == 0 {
             return Err(QueueError::InvalidConfig(
@@ -98,6 +115,27 @@ impl QueueConfig {
                  otherwise the lease expires before the first heartbeat fires and \
                  the reaper reclaims the job mid-execution, causing double-execution",
                 self.heartbeat_interval, self.lease_duration,
+            )));
+        }
+        if self.poll_interval.is_zero() {
+            return Err(QueueError::InvalidConfig(
+                "poll_interval must be > 0 — a zero interval causes a busy-wait \
+                 spin loop that hammers the backend with continuous dequeue requests"
+                    .to_string(),
+            ));
+        }
+        if self.error_backoff.is_zero() {
+            return Err(QueueError::InvalidConfig(
+                "error_backoff must be > 0 — a zero interval causes a tight retry \
+                 loop immediately after backend errors with no recovery window"
+                    .to_string(),
+            ));
+        }
+        if self.poll_jitter > self.poll_interval {
+            return Err(QueueError::InvalidConfig(format!(
+                "poll_jitter ({:?}) must be <= poll_interval ({:?}) — \
+                 a jitter larger than the base interval defeats the poll cadence",
+                self.poll_jitter, self.poll_interval,
             )));
         }
         Ok(())
@@ -593,8 +631,23 @@ impl<C: Send + Sync + 'static> Worker<C> {
                                 );
                                 break;
                             }
-                            // Sleep before next poll — tunable via QueueConfig::poll_interval.
-                            tokio::time::sleep(self.adapter.config.poll_interval).await;
+                            // Sleep before next poll, adding a random jitter in
+                            // [0, poll_jitter] to stagger workers across the pool.
+                            // Without jitter, all workers wake and issue dequeue
+                            // requests at the same instant — a thundering herd for
+                            // Redis/Postgres backends.
+                            let jitter_nanos = if self.adapter.config.poll_jitter.is_zero() {
+                                0u64
+                            } else {
+                                // rand::random_range is the top-level free function
+                                // in rand 0.10 — no Rng trait import required.
+                                rand::random_range(
+                                    0u64..=self.adapter.config.poll_jitter.as_nanos() as u64
+                                )
+                            };
+                            let sleep_duration = self.adapter.config.poll_interval
+                                + Duration::from_nanos(jitter_nanos);
+                            tokio::time::sleep(sleep_duration).await;
                         }
                         Err(e) => {
                             error!("Error processing job: {}", e);
