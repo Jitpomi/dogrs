@@ -243,20 +243,17 @@ impl QueueBackend for MemoryBackend {
 
         let record = jobs
             .get_mut(&job_id)
-            .ok_or_else(|| QueueError::JobNotFound(job_id.to_string()))?;
+            .ok_or_else(|| QueueError::JobNotFound(job_id.clone()))?;
 
         // Verify tenant access
         if record.tenant_id != ctx.tenant_id {
-            return Err(QueueError::JobNotFound(job_id.to_string()));
+            return Err(QueueError::JobNotFound(job_id.clone()));
         }
 
-        // Check for cancellation (cancel-wins)
-        if matches!(record.status, JobStatus::Canceled { .. }) {
-            return Err(QueueError::JobCanceled);
-        }
-
-        // Check for other terminal states
+        // Unified terminal-state guard — mirrors ack_fail so a new terminal
+        // variant only needs to be added in one place for both methods.
         match &record.status {
+            JobStatus::Canceled { .. } => return Err(QueueError::JobCanceled),
             JobStatus::Completed { .. } | JobStatus::Failed { .. } => {
                 return Err(QueueError::JobAlreadyTerminal);
             }
@@ -268,7 +265,6 @@ impl QueueBackend for MemoryBackend {
             return Err(QueueError::InvalidLeaseToken { job_id: job_id.clone() });
         }
 
-        // Check lease expiry
         // Check lease expiry — read from the status enum (single source of truth).
         if let Some(lease_until) = record.lease_until() {
             if now > lease_until {
@@ -306,11 +302,11 @@ impl QueueBackend for MemoryBackend {
 
         let record = jobs
             .get_mut(&job_id)
-            .ok_or_else(|| QueueError::JobNotFound(job_id.to_string()))?;
+            .ok_or_else(|| QueueError::JobNotFound(job_id.clone()))?;
 
         // Verify tenant access
         if record.tenant_id != ctx.tenant_id {
-            return Err(QueueError::JobNotFound(job_id.to_string()));
+            return Err(QueueError::JobNotFound(job_id.clone()));
         }
 
         // Cancel-wins: checked before the generic terminal-state guard so that
@@ -329,7 +325,6 @@ impl QueueBackend for MemoryBackend {
             return Err(QueueError::InvalidLeaseToken { job_id: job_id.clone() });
         }
 
-        // Check lease expiry
         // Check lease expiry — read from the status enum (single source of truth).
         if let Some(lease_until) = record.lease_until() {
             if now > lease_until {
@@ -393,11 +388,11 @@ impl QueueBackend for MemoryBackend {
 
         let record = jobs
             .get_mut(&job_id)
-            .ok_or_else(|| QueueError::JobNotFound(job_id.to_string()))?;
+            .ok_or_else(|| QueueError::JobNotFound(job_id.clone()))?;
 
         // Verify tenant access
         if record.tenant_id != ctx.tenant_id {
-            return Err(QueueError::JobNotFound(job_id.to_string()));
+            return Err(QueueError::JobNotFound(job_id.clone()));
         }
 
         // Check for cancellation (cancel-wins)
@@ -455,11 +450,11 @@ impl QueueBackend for MemoryBackend {
 
         let record = jobs
             .get_mut(&job_id)
-            .ok_or_else(|| QueueError::JobNotFound(job_id.to_string()))?;
+            .ok_or_else(|| QueueError::JobNotFound(job_id.clone()))?;
 
         // Verify tenant access
         if record.tenant_id != ctx.tenant_id {
-            return Err(QueueError::JobNotFound(job_id.to_string()));
+            return Err(QueueError::JobNotFound(job_id.clone()));
         }
 
         // Check if already terminal
@@ -490,11 +485,11 @@ impl QueueBackend for MemoryBackend {
         let jobs = self.jobs.read().await;
         let record = jobs
             .get(&job_id)
-            .ok_or_else(|| QueueError::JobNotFound(job_id.to_string()))?;
+            .ok_or_else(|| QueueError::JobNotFound(job_id.clone()))?;
 
         // Verify tenant access
         if record.tenant_id != ctx.tenant_id {
-            return Err(QueueError::JobNotFound(job_id.to_string()));
+            return Err(QueueError::JobNotFound(job_id.clone()));
         }
 
         Ok(record.status.clone())
@@ -504,11 +499,11 @@ impl QueueBackend for MemoryBackend {
         let jobs = self.jobs.read().await;
         let record = jobs
             .get(&job_id)
-            .ok_or_else(|| QueueError::JobNotFound(job_id.to_string()))?;
+            .ok_or_else(|| QueueError::JobNotFound(job_id.clone()))?;
 
         // Verify tenant access
         if record.tenant_id != ctx.tenant_id {
-            return Err(QueueError::JobNotFound(job_id.to_string()));
+            return Err(QueueError::JobNotFound(job_id.clone()));
         }
 
         Ok(record.clone())
@@ -553,6 +548,26 @@ impl QueueBackend for MemoryBackend {
 impl Default for MemoryBackend {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Clone for MemoryBackend {
+    /// Clone the `MemoryBackend` handle.
+    ///
+    /// All `Arc<RwLock<…>>` fields are cloned — both the original and the clone
+    /// share the **same** underlying data (jobs, queues, idempotency map).
+    /// `broadcast::Sender::clone()` likewise shares the same broadcast channel.
+    ///
+    /// This is used by `LeaseReaper` and test helpers that need a separate handle
+    /// to the same shared backend state.
+    fn clone(&self) -> Self {
+        Self {
+            jobs: self.jobs.clone(),
+            queues: self.queues.clone(),
+            idempotency: self.idempotency.clone(),
+            event_broadcaster: self.event_broadcaster.clone(),
+            lease_duration: self.lease_duration,
+        }
     }
 }
 

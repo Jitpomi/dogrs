@@ -7,8 +7,14 @@ pub type QueueResult<T> = Result<T, QueueError>;
 /// Infrastructure errors for queue operations
 #[derive(Error, Debug, Clone)]
 pub enum QueueError {
+    /// The requested job ID does not exist in this tenant's namespace.
+    ///
+    /// Carries the typed [`JobId`] so callers can programmatically extract the
+    /// ID (for logging, retry logic, dashboards) without re-parsing a string.
+    /// Consistent with [`QueueError::InvalidLeaseToken`] which also carries
+    /// a typed [`JobId`].
     #[error("Job not found: {0}")]
-    JobNotFound(String),
+    JobNotFound(JobId),
 
     /// Lease token mismatch — the presented token does not match the one issued
     /// when the job was leased.  Carries the `job_id` so operators can correlate

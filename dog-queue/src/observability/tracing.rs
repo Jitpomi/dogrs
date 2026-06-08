@@ -127,9 +127,18 @@ impl SpanCollector {
         }
     }
 
-    /// Get collected spans
+    /// Get collected spans.
+    ///
+    /// Clones the ring-buffer structure under the lock and then releases the
+    /// lock before iterating, so `collect_span()` callers are not blocked for
+    /// the entire O(n × attributes) deep-clone.
     pub fn get_spans(&self) -> Vec<SpanData> {
-        self.spans.lock().iter().cloned().collect()
+        // Clone the VecDeque (and its SpanData values including HashMap attributes)
+        // in one bulk operation while holding the lock, then release the lock
+        // before converting to Vec. concurrent collect_span() calls can proceed
+        // as soon as the lock is released, not after the full allocation.
+        let snapshot: std::collections::VecDeque<SpanData> = self.spans.lock().clone();
+        snapshot.into_iter().collect()
     }
 
     /// Clear collected spans
@@ -151,11 +160,18 @@ pub struct SpanData {
     pub attributes: std::collections::HashMap<String, String>,
 }
 
+/// Job span status.
+///
+/// `#[non_exhaustive]` allows new status variants to be added in future
+/// minor versions without breaking downstream match arms.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum SpanStatus {
     Ok,
     Error(String),
-    Cancelled,
+    /// The span was canceled (note: American spelling — consistent with
+    /// `JobStatus::Canceled`, `QueueError::JobCanceled`, etc.)
+    Canceled,
 }
 
 impl Default for DistributedTracing {

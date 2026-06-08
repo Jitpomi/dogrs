@@ -242,18 +242,6 @@ impl MemoryBackend {
     }
 }
 
-// Need to implement Clone for MemoryBackend to support test helpers
-impl Clone for MemoryBackend {
-    fn clone(&self) -> Self {
-        Self {
-            jobs: self.jobs.clone(),
-            queues: self.queues.clone(),
-            idempotency: self.idempotency.clone(),
-            event_broadcaster: self.event_broadcaster.clone(),
-            lease_duration: self.lease_duration,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
