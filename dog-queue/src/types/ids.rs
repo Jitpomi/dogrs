@@ -12,11 +12,6 @@ impl JobId {
         Self(Uuid::new_v4().to_string())
     }
 
-    /// Create a job ID from a string
-    pub fn from_string(id: String) -> Self {
-        Self(id)
-    }
-
     /// Get the inner string value
     pub fn as_str(&self) -> &str {
         &self.0
@@ -53,11 +48,6 @@ impl LeaseToken {
         Self(Uuid::new_v4().to_string())
     }
 
-    /// Create a lease token from a string
-    pub fn from_string(token: String) -> Self {
-        Self(token)
-    }
-
     /// Get the inner string value
     pub fn as_str(&self) -> &str {
         &self.0
@@ -67,8 +57,23 @@ impl LeaseToken {
 
 
 impl fmt::Display for LeaseToken {
+    /// Displays a **redacted** form of the token to prevent leakage in logs,
+    /// error messages, and tracing spans.
+    ///
+    /// The full token value is the proof-of-ownership for a job's processing
+    /// claim — logging it verbatim would allow anyone with log access to replay
+    /// it and call `ack_complete`/`ack_fail` on jobs they do not own.
+    ///
+    /// Use [`LeaseToken::as_str`] only when the raw value is genuinely required
+    /// (e.g. for direct backend comparison).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        let s = self.0.as_str();
+        if s.len() > 8 {
+            write!(f, "{}…{}", &s[..4], &s[s.len() - 4..])
+        } else {
+            // Shorter than expected (not a UUID) — redact entirely.
+            write!(f, "[redacted]")
+        }
     }
 }
 

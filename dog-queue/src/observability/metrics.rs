@@ -1,8 +1,9 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 // ---------------------------------------------------------------------------
@@ -51,17 +52,16 @@ impl Default for PerTypeCounters {
 
 /// Live metrics collector for queue operations.
 ///
-/// Global counters use `AtomicU64` for wait-free reads/writes.
 /// Per-job-type counters use a `DashMap` of per-entry `AtomicU64`s so that
 /// `increment_*` methods are completely synchronous — no `tokio::spawn`,
-/// no lock contention, no ordering surprises between global and per-type reads.
+/// no lock contention, no ordering surprises.
+///
+/// Global totals (e.g. [`Self::jobs_enqueued`]) are computed by summing over
+/// per-type entries at read time rather than maintaining a redundant global
+/// `AtomicU64`. This eliminates the two-phase write window (global counter
+/// advanced before per-type, or vice-versa) that could produce inconsistent
+/// snapshots. The O(n_job_types) read cost is acceptable for observability.
 pub struct LiveMetrics {
-    jobs_enqueued: AtomicU64,
-    jobs_completed: AtomicU64,
-    jobs_failed: AtomicU64,
-    jobs_retried: AtomicU64,
-    jobs_canceled: AtomicU64,
-
     /// Per-job-type counters. DashMap gives lock-free shard access.
     per_type: DashMap<String, PerTypeCounters>,
 
@@ -73,11 +73,6 @@ pub struct LiveMetrics {
 impl LiveMetrics {
     pub fn new() -> Self {
         Self {
-            jobs_enqueued: AtomicU64::new(0),
-            jobs_completed: AtomicU64::new(0),
-            jobs_failed: AtomicU64::new(0),
-            jobs_retried: AtomicU64::new(0),
-            jobs_canceled: AtomicU64::new(0),
             per_type: DashMap::new(),
             performance: Arc::new(RwLock::new(PerformanceMetrics::new())),
         }
@@ -86,7 +81,6 @@ impl LiveMetrics {
     // --- increment methods (synchronous, no spawns) -----------------------
 
     pub fn increment_jobs_enqueued(&self, job_type: &str) {
-        self.jobs_enqueued.fetch_add(1, Ordering::Relaxed);
         self.per_type
             .entry(job_type.to_string())
             .or_default()
@@ -95,7 +89,6 @@ impl LiveMetrics {
     }
 
     pub fn increment_jobs_completed(&self, job_type: &str) {
-        self.jobs_completed.fetch_add(1, Ordering::Relaxed);
         self.per_type
             .entry(job_type.to_string())
             .or_default()
@@ -104,7 +97,6 @@ impl LiveMetrics {
     }
 
     pub fn increment_jobs_failed(&self, job_type: &str) {
-        self.jobs_failed.fetch_add(1, Ordering::Relaxed);
         self.per_type
             .entry(job_type.to_string())
             .or_default()
@@ -113,7 +105,6 @@ impl LiveMetrics {
     }
 
     pub fn increment_jobs_retried(&self, job_type: &str) {
-        self.jobs_retried.fetch_add(1, Ordering::Relaxed);
         self.per_type
             .entry(job_type.to_string())
             .or_default()
@@ -122,7 +113,6 @@ impl LiveMetrics {
     }
 
     pub fn increment_jobs_canceled(&self, job_type: &str) {
-        self.jobs_canceled.fetch_add(1, Ordering::Relaxed);
         self.per_type
             .entry(job_type.to_string())
             .or_default()
@@ -130,26 +120,30 @@ impl LiveMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    // --- global getters (synchronous) -------------------------------------
+    // --- global getters: derived by summing per-type (no separate AtomicU64) ---
+    //
+    // Summing at read time guarantees that global totals are always consistent
+    // with per-type breakdown in a single snapshot — there is no window where
+    // the global counter is ahead or behind.
 
     pub fn jobs_enqueued(&self) -> u64 {
-        self.jobs_enqueued.load(Ordering::Relaxed)
+        self.per_type.iter().map(|e| e.enqueued.load(Ordering::Relaxed)).sum()
     }
 
     pub fn jobs_completed(&self) -> u64 {
-        self.jobs_completed.load(Ordering::Relaxed)
+        self.per_type.iter().map(|e| e.completed.load(Ordering::Relaxed)).sum()
     }
 
     pub fn jobs_failed(&self) -> u64 {
-        self.jobs_failed.load(Ordering::Relaxed)
+        self.per_type.iter().map(|e| e.failed.load(Ordering::Relaxed)).sum()
     }
 
     pub fn jobs_retried(&self) -> u64 {
-        self.jobs_retried.load(Ordering::Relaxed)
+        self.per_type.iter().map(|e| e.retried.load(Ordering::Relaxed)).sum()
     }
 
     pub fn jobs_canceled(&self) -> u64 {
-        self.jobs_canceled.load(Ordering::Relaxed)
+        self.per_type.iter().map(|e| e.canceled.load(Ordering::Relaxed)).sum()
     }
 
     // --- per-type getters (synchronous — no .await needed) ----------------
@@ -238,6 +232,9 @@ impl JobTypeMetrics {
 ///
 /// Uses `VecDeque` so that evicting the oldest entry when the ring buffer is
 /// full is O(1) (`pop_front`) rather than O(n) (`Vec::remove(0)`).
+///
+/// Stores `std::time::Duration` (always non-negative, no chrono dependency)
+/// rather than `chrono::Duration` (signed, allows negative values).
 #[derive(Debug, Clone)]
 pub struct PerformanceMetrics {
     execution_times: HashMap<String, VecDeque<Duration>>,
@@ -271,11 +268,14 @@ impl PerformanceMetrics {
         if times.is_empty() {
             return None;
         }
-        let total_ms: i64 = times.iter().map(|d| d.num_milliseconds()).sum();
-        Some(Duration::milliseconds(total_ms / times.len() as i64))
+        let total_nanos: u128 = times.iter().map(|d| d.as_nanos()).sum();
+        Some(Duration::from_nanos((total_nanos / times.len() as u128) as u64))
     }
 
     /// Percentile execution time for a job type (e.g. 50.0 for p50).
+    ///
+    /// Returns `None` if there is no timing data for the job type or if
+    /// `percentile` is outside `[0.0, 100.0]`.
     pub fn percentile_execution_time(&self, job_type: &str, percentile: f64) -> Option<Duration> {
         self.percentiles(job_type, &[percentile])
             .into_iter()
@@ -289,20 +289,28 @@ impl PerformanceMetrics {
     /// several quantiles are needed at once (e.g. p50 + p95 + p99 for dashboards).
     ///
     /// Returns one `Option<Duration>` per input percentile, in the same order.
-    /// Returns `None` for a given percentile if there is no timing data for the
-    /// job type.
+    /// Returns `None` for a given percentile if:
+    /// - There is no timing data for the job type.
+    /// - The percentile value is outside `[0.0, 100.0]` (programming error — callers
+    ///   should validate before calling).
     pub fn percentiles(&self, job_type: &str, percentiles: &[f64]) -> Vec<Option<Duration>> {
         let times = match self.execution_times.get(job_type) {
             Some(t) if !t.is_empty() => t,
             _ => return vec![None; percentiles.len()],
         };
         // Sort once for all requested percentiles.
+        // std::time::Duration implements Ord — sort_unstable is correct and faster.
         let mut sorted: Vec<Duration> = times.iter().cloned().collect();
-        sorted.sort_by_key(|d| d.num_milliseconds());
+        sorted.sort_unstable();
         let n = sorted.len();
         percentiles
             .iter()
             .map(|&p| {
+                // Validate range — a percentile outside [0, 100] is a programming error;
+                // return None rather than an out-of-bounds or misleading in-bounds index.
+                if !(0.0..=100.0).contains(&p) {
+                    return None;
+                }
                 let index = ((p / 100.0) * (n - 1) as f64).round() as usize;
                 sorted.get(index).cloned()
             })
@@ -435,15 +443,15 @@ mod tests {
     async fn test_performance_metrics() {
         let mut perf = PerformanceMetrics::new();
 
-        perf.record_execution_time("test_job", Duration::milliseconds(100));
-        perf.record_execution_time("test_job", Duration::milliseconds(200));
-        perf.record_execution_time("test_job", Duration::milliseconds(300));
+        perf.record_execution_time("test_job", Duration::from_millis(100));
+        perf.record_execution_time("test_job", Duration::from_millis(200));
+        perf.record_execution_time("test_job", Duration::from_millis(300));
 
         let avg = perf.average_execution_time("test_job").unwrap();
-        assert_eq!(avg.num_milliseconds(), 200);
+        assert_eq!(avg.as_millis(), 200);
 
         let p50 = perf.percentile_execution_time("test_job", 50.0).unwrap();
-        assert_eq!(p50.num_milliseconds(), 200);
+        assert_eq!(p50.as_millis(), 200);
     }
 
     #[test]
@@ -451,7 +459,7 @@ mod tests {
         let mut perf = PerformanceMetrics::new();
         // Insert 1100 entries — ring buffer should cap at 1000
         for i in 0..1100u64 {
-            perf.record_execution_time("job", Duration::milliseconds(i as i64));
+            perf.record_execution_time("job", Duration::from_millis(i));
         }
         assert_eq!(
             perf.execution_times["job"].len(),
@@ -460,7 +468,7 @@ mod tests {
         );
         // The oldest 100 should have been evicted; first entry is ms=100
         assert_eq!(
-            perf.execution_times["job"][0].num_milliseconds(),
+            perf.execution_times["job"][0].as_millis(),
             100,
             "oldest entries are evicted first"
         );
