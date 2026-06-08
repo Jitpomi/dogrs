@@ -175,10 +175,10 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
             ctx: ctx.clone(),
             context: Arc::new(context),
             queues,
-            shutdown_rx: Some(shutdown_rx),
         };
 
-        let join_handle = tokio::spawn(async move { worker.run().await });
+        let join_handle =
+            tokio::spawn(async move { worker.run(shutdown_rx).await });
 
         info!("Started worker for tenant: {}", ctx.tenant_id);
 
@@ -228,13 +228,13 @@ struct Worker<C> {
     ctx: QueueCtx,
     context: Arc<C>,
     queues: Vec<String>,
-    shutdown_rx: Option<oneshot::Receiver<()>>,
+    // NOTE: shutdown_rx is NOT stored here — it is passed directly to run()
+    // so that process_next_job can borrow self without a partial-move conflict.
 }
 
 impl<C: Send + Sync + 'static> Worker<C> {
     /// Run the worker loop
-    async fn run(mut self) -> QueueResult<()> {
-        let mut shutdown_rx = self.shutdown_rx.take().unwrap();
+    async fn run(self, mut shutdown_rx: oneshot::Receiver<()>) -> QueueResult<()> {
         let queue_refs: Vec<&str> = self.queues.iter().map(|s| s.as_str()).collect();
 
         info!("Worker started for queues: {:?}", self.queues);
@@ -285,12 +285,18 @@ impl<C: Send + Sync + 'static> Worker<C> {
 
         debug!("Processing job {} of type {}", job_id, job_type);
 
-        // Get job registry
-        let registry = self.adapter.job_registry.read().await;
+        // Clone the handler under the registry lock, then release the lock before
+        // executing. This prevents long-running jobs from blocking register_job()
+        // which needs the write lock.
+        let handler = {
+            let registry = self.adapter.job_registry.read().await;
+            registry.get_handler(job_type).ok_or_else(|| {
+                QueueError::Internal(format!("No handler registered for job type '{job_type}'"))
+            })?
+        }; // read lock released here
 
-        // Execute job through registry
-        let result = registry
-            .execute_job(&leased_job.record.message, self.context.clone())
+        let result = handler
+            .execute(&leased_job.record.message, self.context.clone())
             .await;
 
         match result {

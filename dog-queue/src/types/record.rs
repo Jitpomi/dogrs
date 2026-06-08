@@ -156,24 +156,21 @@ impl JobRecord {
 
     /// Complete the job successfully
     pub fn complete(&mut self) {
-        self.status = JobStatus::Completed {
-            completed_at: Utc::now(),
-        };
+        let now = Utc::now();
+        self.status = JobStatus::Completed { completed_at: now };
         self.lease_token = None;
         self.lease_until = None;
-        self.updated_at = Utc::now();
+        self.updated_at = now;
     }
 
     /// Fail the job permanently
     pub fn fail(&mut self, error: String) {
-        self.status = JobStatus::Failed {
-            failed_at: Utc::now(),
-            error: error.clone(),
-        };
+        let now = Utc::now();
+        self.status = JobStatus::Failed { failed_at: now, error: error.clone() };
         self.last_error = Some(error);
         self.lease_token = None;
         self.lease_until = None;
-        self.updated_at = Utc::now();
+        self.updated_at = now;
     }
 
     /// Schedule a retry.
@@ -190,12 +187,11 @@ impl JobRecord {
 
     /// Cancel the job
     pub fn cancel(&mut self) {
-        self.status = JobStatus::Canceled {
-            canceled_at: Utc::now(),
-        };
+        let now = Utc::now();
+        self.status = JobStatus::Canceled { canceled_at: now };
         self.lease_token = None;
         self.lease_until = None;
-        self.updated_at = Utc::now();
+        self.updated_at = now;
     }
 }
 

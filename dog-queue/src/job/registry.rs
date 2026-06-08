@@ -116,6 +116,15 @@ impl JobRegistry {
         handler.execute(message, context).await
     }
 
+    /// Get a cloned handler for the given job type.
+    ///
+    /// The caller should clone the handler under the registry lock, drop the lock,
+    /// then call `handler.execute(...)` — this prevents long-running jobs from
+    /// blocking `register_job()` (which needs the write lock).
+    pub fn get_handler(&self, job_type: &str) -> Option<Arc<dyn JobHandler>> {
+        self.handlers.get(job_type).cloned()
+    }
+
     /// Check if a job type is registered
     pub fn is_registered(&self, job_type: &str) -> bool {
         self.handlers.contains_key(job_type)

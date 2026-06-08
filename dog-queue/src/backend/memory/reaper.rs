@@ -26,28 +26,38 @@ impl LeaseReaper {
         Self { backend, interval }
     }
 
-    /// Start the reaper background task
-    pub async fn start(self) -> QueueResult<()> {
+    /// Start the reaper background task.
+    ///
+    /// Runs until `shutdown_rx` fires, then exits cleanly.
+    /// Callers should use `tokio::spawn` and keep the `oneshot::Sender` to trigger shutdown:
+    /// ```ignore
+    /// let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    /// tokio::spawn(reaper.start(shutdown_rx));
+    /// // Later:
+    /// let _ = shutdown_tx.send(());
+    /// ```
+    pub async fn start(self, mut shutdown_rx: tokio::sync::oneshot::Receiver<()>) -> QueueResult<()> {
         let mut ticker = interval(self.interval);
 
         info!("Starting lease reaper with interval: {:?}", self.interval);
 
         loop {
-            ticker.tick().await;
-
-            match self.reap_expired_leases().await {
-                Ok(reclaimed_count) => {
-                    if reclaimed_count > 0 {
-                        info!("Reclaimed {} expired leases", reclaimed_count);
-                    } else {
-                        debug!("No expired leases found");
-                    }
+            tokio::select! {
+                _ = &mut shutdown_rx => {
+                    info!("Lease reaper shutting down gracefully");
+                    break;
                 }
-                Err(e) => {
-                    warn!("Error during lease reaping: {}", e);
+                _ = ticker.tick() => {
+                    match self.reap_expired_leases().await {
+                        Ok(n) if n > 0 => info!("Reclaimed {} expired leases", n),
+                        Ok(_) => debug!("No expired leases found"),
+                        Err(e) => warn!("Error during lease reaping: {e}"),
+                    }
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Run one reaper cycle (for testing)
@@ -72,8 +82,10 @@ impl LeaseReaper {
         for (job_id, mut record) in expired_jobs {
             debug!("Reclaiming expired lease for job: {}", job_id);
 
-            // Update job status back to retrying or enqueued
-            let new_status = if record.attempt >= record.message.max_retries {
+            // Update job status back to retrying or enqueued.
+            // Use the same > semantics as adapter (attempt <= max_retries = retry allowed)
+            // so the reaper doesn't steal the last retry from a lease-expired job.
+            let new_status = if record.attempt > record.message.max_retries {
                 // Max retries exceeded - mark as failed
                 JobStatus::Failed {
                     failed_at: now,
@@ -175,6 +187,7 @@ impl Clone for MemoryBackend {
             queues: self.queues.clone(),
             idempotency: self.idempotency.clone(),
             event_broadcaster: self.event_broadcaster.clone(),
+            lease_duration: self.lease_duration,
         }
     }
 }
@@ -246,16 +259,16 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // Simulate job running for too long (lease expires after max retries)
+        // Force lease expiry
+        backend.force_lease_expiry(job_id.clone()).await.unwrap();
+
+        // Set attempt past max_retries (attempt=2 > max_retries=1) to exercise the fail path.
         {
             let mut jobs = backend.jobs.write();
             if let Some(record) = jobs.get_mut(&job_id) {
-                record.attempt = 1; // Already at max retries
+                record.attempt = 2;
             }
         }
-
-        // Force lease expiry
-        backend.force_lease_expiry(job_id.clone()).await.unwrap();
 
         // Run reaper
         let reaper = LeaseReaper::new(backend.clone());

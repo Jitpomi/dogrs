@@ -34,6 +34,10 @@ pub struct MemoryBackend {
 
     /// Event broadcaster for observability
     pub(crate) event_broadcaster: broadcast::Sender<JobEvent>,
+
+    /// How long a dequeued lease is valid. Defaults to 5 minutes.
+    /// Set via `MemoryBackend::with_lease_duration`.
+    pub(crate) lease_duration: chrono::Duration,
 }
 
 impl MemoryBackend {
@@ -45,7 +49,16 @@ impl MemoryBackend {
             queues: Arc::new(RwLock::new(HashMap::new())),
             idempotency: Arc::new(RwLock::new(HashMap::new())),
             event_broadcaster,
+            lease_duration: chrono::Duration::seconds(300), // 5-minute default
         }
+    }
+
+    /// Override the default 5-minute lease duration.
+    /// Use a shorter value (e.g. 30 s) in tests to exercise the reaper.
+    pub fn with_lease_duration(mut self, duration: std::time::Duration) -> Self {
+        self.lease_duration = chrono::Duration::from_std(duration)
+            .expect("lease_duration is out of chrono::Duration range");
+        self
     }
 }
 
@@ -61,11 +74,14 @@ impl QueueBackend for MemoryBackend {
                 key.clone(),
             );
 
-            let idempotency = self.idempotency.read();
-            if let Some(existing_job_id) = idempotency.get(&idempotency_scope) {
+            // Acquire and immediately release the idempotency lock before reading
+            // jobs — avoid holding two locks simultaneously.
+            let existing_job_id = self.idempotency.read().get(&idempotency_scope).cloned();
+
+            if let Some(existing_job_id) = existing_job_id {
                 // Check if existing job is terminal
                 let jobs = self.jobs.read();
-                if let Some(existing_record) = jobs.get(existing_job_id) {
+                if let Some(existing_record) = jobs.get(&existing_job_id) {
                     match existing_record.status {
                         JobStatus::Completed { .. }
                         | JobStatus::Failed { .. }
@@ -162,7 +178,7 @@ impl QueueBackend for MemoryBackend {
                     match &record.status {
                         JobStatus::Enqueued | JobStatus::Retrying { .. } => {
                             let lease_token = LeaseToken::new();
-                            let lease_until = now + chrono::Duration::seconds(300); // 5 minute lease
+                            let lease_until = now + self.lease_duration;
 
                             record.attempt += 1;
                             record.start_processing(lease_token.clone(), lease_until);
