@@ -1,6 +1,5 @@
 pub mod json;
 
-
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -192,11 +191,7 @@ impl CodecRegistry {
     /// Payload size enforcement (against `QueueConfig::max_payload_size`) is
     /// performed by the adapter in `enqueue_opts()` after this method returns,
     /// not here — this method does not have access to the adapter configuration.
-    pub fn encode_job<J: Job>(
-        &self,
-        job: &J,
-        opts: EnqueueOptions,
-    ) -> QueueResult<JobMessage> {
+    pub fn encode_job<J: Job>(&self, job: &J, opts: EnqueueOptions) -> QueueResult<JobMessage> {
         let codec = self.default_codec()?;
 
         // Serialize the job to raw JSON bytes.

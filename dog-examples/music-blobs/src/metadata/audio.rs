@@ -1,9 +1,9 @@
 use dog_blob::BlobMetadata;
 use std::io::Cursor;
-use symphonia::core::formats::FormatOptions;
-use symphonia::core::formats::probe::Hint;
-use symphonia::core::codecs::CodecParameters;
 use symphonia::core::codecs::audio::CODEC_ID_NULL_AUDIO;
+use symphonia::core::codecs::CodecParameters;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
@@ -161,21 +161,20 @@ impl AudioMetadataExtractor {
             );
 
             // Calculate duration from track-level time_base and num_frames (symphonia 0.6)
-            let duration = if let (Some(time_base), Some(num_frames)) =
-                (track.time_base, track.num_frames)
-            {
-                // symphonia 0.6: time_base.numer/denom are NonZero<u32> — call .get()
-                let duration_seconds =
-                    (num_frames as f64 * time_base.numer.get() as f64) / time_base.denom.get() as f64;
-                println!(
-                    "🕐 Calculated duration from symphonia time base: {:.2}s",
-                    duration_seconds
-                );
-                Some(duration_seconds as u32)
-            } else {
-                println!("❌ Could not calculate duration - no time base or num_frames");
-                None
-            };
+            let duration =
+                if let (Some(time_base), Some(num_frames)) = (track.time_base, track.num_frames) {
+                    // symphonia 0.6: time_base.numer/denom are NonZero<u32> — call .get()
+                    let duration_seconds = (num_frames as f64 * time_base.numer.get() as f64)
+                        / time_base.denom.get() as f64;
+                    println!(
+                        "🕐 Calculated duration from symphonia time base: {:.2}s",
+                        duration_seconds
+                    );
+                    Some(duration_seconds as u32)
+                } else {
+                    println!("❌ Could not calculate duration - no time base or num_frames");
+                    None
+                };
 
             // Calculate bitrate from file size and duration
             let bitrate = if let Some(dur) = duration {

@@ -37,7 +37,11 @@ impl LeaseReaper {
 
     /// Create reaper with custom interval
     pub fn with_interval(backend: Arc<MemoryBackend>, interval: Duration) -> Self {
-        Self { backend, interval, base_retry_backoff: chrono::Duration::seconds(1) }
+        Self {
+            backend,
+            interval,
+            base_retry_backoff: chrono::Duration::seconds(1),
+        }
     }
 
     /// Set the minimum backoff applied to jobs re-queued after lease expiry.
@@ -45,8 +49,8 @@ impl LeaseReaper {
     /// Call this after [`Self::new`] or [`Self::with_interval`] to override the
     /// 1-second default, for example with the adapter's `base_retry_backoff`.
     pub fn with_backoff(mut self, backoff: std::time::Duration) -> Self {
-        self.base_retry_backoff = chrono::Duration::from_std(backoff)
-            .unwrap_or(chrono::Duration::seconds(1));
+        self.base_retry_backoff =
+            chrono::Duration::from_std(backoff).unwrap_or(chrono::Duration::seconds(1));
         self
     }
 
@@ -60,7 +64,10 @@ impl LeaseReaper {
     /// // Later:
     /// let _ = shutdown_tx.send(());
     /// ```
-    pub async fn start(self, mut shutdown_rx: tokio::sync::oneshot::Receiver<()>) -> QueueResult<()> {
+    pub async fn start(
+        self,
+        mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    ) -> QueueResult<()> {
         let mut ticker = interval(self.interval);
 
         info!("Starting lease reaper with interval: {:?}", self.interval);
@@ -121,7 +128,13 @@ impl LeaseReaper {
         // Re-check status inside the write lock to close the TOCTOU window:
         // a worker that called ack_complete just before the reaper fires will
         // have set the status to Completed; the reaper skips those records.
-        let mut to_requeue: Vec<(String, String, crate::JobPriority, crate::JobId, chrono::DateTime<Utc>)> = Vec::new();
+        let mut to_requeue: Vec<(
+            String,
+            String,
+            crate::JobPriority,
+            crate::JobId,
+            chrono::DateTime<Utc>,
+        )> = Vec::new();
         let mut events: Vec<JobEvent> = Vec::new();
         let mut outcomes: Vec<ReapOutcome> = Vec::new();
 
@@ -259,7 +272,6 @@ impl MemoryBackend {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,7 +401,11 @@ mod tests {
         let reaper = LeaseReaper::new(backend.clone()).with_backoff(Duration::from_secs(0));
         let reclaimed = reaper.reap_expired_leases().await.unwrap();
 
-        assert_eq!(reclaimed.len(), 0, "reaper must not reclaim an already-completed job");
+        assert_eq!(
+            reclaimed.len(),
+            0,
+            "reaper must not reclaim an already-completed job"
+        );
 
         // Status must still be Completed, not Retrying.
         let status = backend.get_status(ctx, job_id).await.unwrap();

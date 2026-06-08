@@ -338,7 +338,10 @@ impl RustFsAdapter {
                     "image/jpeg"
                 } else if cover_content.starts_with(b"GIF8") {
                     "image/gif"
-                } else if cover_content.starts_with(b"RIFF") && cover_content.len() > 11 && &cover_content[8..12] == b"WEBP" {
+                } else if cover_content.starts_with(b"RIFF")
+                    && cover_content.len() > 11
+                    && &cover_content[8..12] == b"WEBP"
+                {
                     "image/webp"
                 } else {
                     "image/jpeg"
@@ -713,7 +716,8 @@ impl RustFsAdapter {
                         }
                         GenericAudioBufferRef::U16(buf) => {
                             if let Some(chan) = buf.plane(0) {
-                                samples.extend(chan.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
+                                samples
+                                    .extend(chan.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
                             }
                         }
                         GenericAudioBufferRef::U24(buf) => {

@@ -24,8 +24,6 @@ impl Default for JobId {
     }
 }
 
-
-
 impl fmt::Display for JobId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -42,7 +40,10 @@ impl fmt::Display for JobId {
 /// before calling this.
 impl From<String> for JobId {
     fn from(id: String) -> Self {
-        assert!(!id.is_empty(), "JobId::from called with an empty string — this will never match any stored job");
+        assert!(
+            !id.is_empty(),
+            "JobId::from called with an empty string — this will never match any stored job"
+        );
         Self(id)
     }
 }
@@ -54,7 +55,10 @@ impl From<String> for JobId {
 /// Panics if `id` is empty.  See [`From<String>`](JobId#impl-From<String>) for details.
 impl From<&str> for JobId {
     fn from(id: &str) -> Self {
-        assert!(!id.is_empty(), "JobId::from called with an empty string — this will never match any stored job");
+        assert!(
+            !id.is_empty(),
+            "JobId::from called with an empty string — this will never match any stored job"
+        );
         Self(id.to_string())
     }
 }
@@ -81,8 +85,6 @@ impl Default for LeaseToken {
     }
 }
 
-
-
 impl fmt::Display for LeaseToken {
     /// Displays a **redacted** form of the token to prevent leakage in logs,
     /// error messages, and tracing spans.
@@ -105,8 +107,14 @@ impl fmt::Display for LeaseToken {
         if char_count > 8 {
             let prefix: String = s.chars().take(4).collect();
             // Reverse, take 4 from the back, reverse again to restore order.
-            let suffix: String = s.chars().rev().take(4).collect::<String>()
-                .chars().rev().collect();
+            let suffix: String = s
+                .chars()
+                .rev()
+                .take(4)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
             write!(f, "{prefix}\u{2026}{suffix}") // U+2026 HORIZONTAL ELLIPSIS
         } else {
             // Shorter than expected (not a UUID) — redact entirely.
@@ -124,7 +132,10 @@ impl fmt::Display for LeaseToken {
 /// construction site.  Prefer [`LeaseToken::new`] for fresh tokens.
 impl From<String> for LeaseToken {
     fn from(token: String) -> Self {
-        assert!(!token.is_empty(), "LeaseToken::from called with an empty string — this will never match any active lease");
+        assert!(
+            !token.is_empty(),
+            "LeaseToken::from called with an empty string — this will never match any active lease"
+        );
         Self(token)
     }
 }
@@ -136,7 +147,10 @@ impl From<String> for LeaseToken {
 /// Panics if `token` is empty.  See [`From<String>`](LeaseToken#impl-From<String>) for details.
 impl From<&str> for LeaseToken {
     fn from(token: &str) -> Self {
-        assert!(!token.is_empty(), "LeaseToken::from called with an empty string — this will never match any active lease");
+        assert!(
+            !token.is_empty(),
+            "LeaseToken::from called with an empty string — this will never match any active lease"
+        );
         Self(token.to_string())
     }
 }

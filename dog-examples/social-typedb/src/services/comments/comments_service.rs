@@ -1,10 +1,10 @@
-use dog_core::ServiceMethodKind;
 use crate::services::SocialParams;
 use crate::typedb::TypeDBState;
 use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::errors::{DogError, ErrorKind};
 use dog_core::tenant::TenantContext;
+use dog_core::ServiceMethodKind;
 use dog_core::{DogService, ServiceCapabilities};
 use dog_typedb::TypeDBAdapter;
 use serde_json::Value;
@@ -24,7 +24,6 @@ impl CommentsService {
 
 #[async_trait]
 impl DogService<Value, SocialParams> for CommentsService {
-
     fn capabilities(&self) -> ServiceCapabilities {
         ServiceCapabilities::from_methods(vec![
             ServiceMethodKind::Custom("read"),

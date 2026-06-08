@@ -46,7 +46,11 @@ impl Job for EmployeeAssignmentJob {
             .service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
 
-        let event_id = format!("assign-{}-{}", self.route_id, chrono::Utc::now().timestamp_millis());
+        let event_id = format!(
+            "assign-{}-{}",
+            self.route_id,
+            chrono::Utc::now().timestamp_millis()
+        );
         let event_time = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
         let query = serde_json::json!({
             "operation-id": &event_id,
@@ -61,8 +65,13 @@ impl Job for EmployeeAssignmentJob {
         operations_service
             .custom(tenant_ctx, "write", Some(query), params)
             .await
-            .map_err(|e| JobError::Retryable(format!("Failed to record assignment event: {}", e)))?;
+            .map_err(|e| {
+                JobError::Retryable(format!("Failed to record assignment event: {}", e))
+            })?;
 
-        Ok(format!("Assignment event recorded for route: {}", self.route_id))
+        Ok(format!(
+            "Assignment event recorded for route: {}",
+            self.route_id
+        ))
     }
 }

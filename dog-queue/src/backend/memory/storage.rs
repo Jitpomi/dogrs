@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use tokio::sync::RwLock;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use tokio::sync::RwLock;
 
 use crate::{
     backend::{BoxStream, QueueBackend},
@@ -100,10 +100,14 @@ impl QueueBackend for MemoryBackend {
         //
         // Lock ordering (always observed): idempotency → jobs → queues.
         // No other method in this backend acquires idempotency, so no deadlock risk.
-        let mut idempotency_guard = self.idempotency.write().await;
+        let mut optional_guard = if idempotency_scope.is_some() {
+            Some(self.idempotency.write().await)
+        } else {
+            None
+        };
 
         if let Some(ref scope) = idempotency_scope {
-            if let Some(existing_id) = idempotency_guard.get(scope).cloned() {
+            if let Some(existing_id) = optional_guard.as_mut().unwrap().get(scope).cloned() {
                 // Check terminal status under jobs.read().
                 // Holding idempotency.write() while acquiring jobs.read() is safe
                 // because no other code path holds jobs.write() and then tries to
@@ -137,9 +141,11 @@ impl QueueBackend for MemoryBackend {
 
         // Register/update the idempotency entry (still under the write lock — no race).
         if let Some(scope) = idempotency_scope {
-            idempotency_guard.insert(scope, job_id.clone());
+            optional_guard
+                .as_mut()
+                .unwrap()
+                .insert(scope, job_id.clone());
         }
-        drop(idempotency_guard);
 
         // Emit enqueue event after all locks are released.
         let event = JobEvent::Enqueued {
@@ -192,31 +198,29 @@ impl QueueBackend for MemoryBackend {
             let candidate = {
                 let mut queues_lock = self.queues.write().await;
                 let mut candidate_id = None;
-                
+
                 if let Some(tq) = queues_lock.get_mut(&ctx.tenant_id) {
                     let mut should_remove_queue = false;
                     if let Some(queue) = tq.get_mut(*queue_name) {
-                        let pos = queue
-                            .iter()
-                            .position(|(_, run_at, _)| *run_at <= now);
+                        let pos = queue.iter().position(|(_, run_at, _)| *run_at <= now);
                         if let Some(i) = pos {
                             let (_, _, job_id) = queue.remove(i).unwrap();
                             candidate_id = Some(job_id);
                         }
                         should_remove_queue = queue.is_empty();
                     }
-                    
+
                     // Issue 3: Cleanup empty inner queues to prevent slow memory leaks
                     if should_remove_queue {
                         tq.remove(*queue_name);
                     }
-                    
+
                     // Issue 3: Cleanup empty tenant map
                     if tq.is_empty() {
                         queues_lock.remove(&ctx.tenant_id);
                     }
                 }
-                
+
                 candidate_id
             }; // queues_lock RELEASED
 
@@ -290,7 +294,9 @@ impl QueueBackend for MemoryBackend {
 
         // Verify lease token
         if record.lease_token.as_ref() != Some(&lease_token) {
-            return Err(QueueError::InvalidLeaseToken { job_id: job_id.clone() });
+            return Err(QueueError::InvalidLeaseToken {
+                job_id: job_id.clone(),
+            });
         }
 
         // Check lease expiry — read from the status enum (single source of truth).
@@ -350,7 +356,9 @@ impl QueueBackend for MemoryBackend {
 
         // Verify lease token
         if record.lease_token.as_ref() != Some(&lease_token) {
-            return Err(QueueError::InvalidLeaseToken { job_id: job_id.clone() });
+            return Err(QueueError::InvalidLeaseToken {
+                job_id: job_id.clone(),
+            });
         }
 
         // Check lease expiry — read from the status enum (single source of truth).
@@ -430,7 +438,9 @@ impl QueueBackend for MemoryBackend {
 
         // Verify lease token
         if record.lease_token.as_ref() != Some(&lease_token) {
-            return Err(QueueError::InvalidLeaseToken { job_id: job_id.clone() });
+            return Err(QueueError::InvalidLeaseToken {
+                job_id: job_id.clone(),
+            });
         }
 
         // Explicitly guard that the job is still Processing before extending.
@@ -448,10 +458,12 @@ impl QueueBackend for MemoryBackend {
         // authoritative source. Updating only a separate field while leaving
         // the status enum stale caused the reaper to prematurely reclaim
         // heartbeat-extended jobs (the reaper reads from the status enum).
-        if let JobStatus::Processing { ref mut lease_until } = record.status {
-            let extra = chrono::Duration::from_std(extra_time).map_err(|e| {
-                QueueError::Internal(format!("Invalid heartbeat duration: {e}"))
-            })?;
+        if let JobStatus::Processing {
+            ref mut lease_until,
+        } = record.status
+        {
+            let extra = chrono::Duration::from_std(extra_time)
+                .map_err(|e| QueueError::Internal(format!("Invalid heartbeat duration: {e}")))?;
             *lease_until += extra;
             record.updated_at = now;
         }
@@ -567,9 +579,8 @@ impl QueueBackend for MemoryBackend {
     /// `MemoryBackend::clone()` clones the `Arc<RwLock<>>` fields (not the underlying
     /// maps), so the temporary reaper operates on the same shared data as this instance.
     async fn reclaim_expired_leases(&self) -> QueueResult<Vec<crate::backend::ReapOutcome>> {
-        let reaper = crate::backend::memory::reaper::LeaseReaper::new(
-            std::sync::Arc::new(self.clone()),
-        );
+        let reaper =
+            crate::backend::memory::reaper::LeaseReaper::new(std::sync::Arc::new(self.clone()));
         reaper.reap_expired_leases().await
     }
 }
@@ -612,7 +623,7 @@ mod tests {
     fn create_test_job_message() -> JobMessage {
         JobMessage {
             job_type: "test_job".to_string(),
-            payload_bytes: b"{}" .to_vec(),
+            payload_bytes: b"{}".to_vec(),
             codec: "json".to_string(),
             queue: "default".to_string(),
             priority: JobPriority::Normal,

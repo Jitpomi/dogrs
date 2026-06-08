@@ -26,15 +26,12 @@ impl ObservabilityLayer {
     ///
     /// `queue` is the real queue name from the encoded `JobMessage` (not a
     /// hardcoded default); callers must pass `message.queue` or the equivalent.
-    pub fn record_job_enqueued(
-        &self,
-        ctx: &QueueCtx,
-        job_id: &JobId,
-        job_type: &str,
-        queue: &str,
-    ) {
+    pub fn record_job_enqueued(&self, ctx: &QueueCtx, job_id: &JobId, job_type: &str, queue: &str) {
         self.metrics.increment_jobs_enqueued(job_type);
-        debug!("Recorded job enqueued: {} ({}) queue={}", job_id, job_type, queue);
+        debug!(
+            "Recorded job enqueued: {} ({}) queue={}",
+            job_id, job_type, queue
+        );
         let _ = (ctx, job_id); // fields used for logging / future extensions
     }
 
@@ -48,15 +45,12 @@ impl ObservabilityLayer {
     ///
     /// `error` must be the real job error string from `JobError::to_string()`
     /// so that the event stream carries actionable failure information.
-    pub fn record_job_failed(
-        &self,
-        _ctx: &QueueCtx,
-        job_id: &JobId,
-        job_type: &str,
-        error: &str,
-    ) {
+    pub fn record_job_failed(&self, _ctx: &QueueCtx, job_id: &JobId, job_type: &str, error: &str) {
         self.metrics.increment_jobs_failed(job_type);
-        debug!("Recorded job failed: {} ({}) error={}", job_id, job_type, error);
+        debug!(
+            "Recorded job failed: {} ({}) error={}",
+            job_id, job_type, error
+        );
     }
 
     /// Record job retrying event.

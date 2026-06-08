@@ -42,7 +42,11 @@ impl TypeDBState {
             .unwrap_or(false);
 
         let credentials = Credentials::new(&username, &password);
-        let tls_config = if tls { DriverTlsConfig::default() } else { DriverTlsConfig::disabled() };
+        let tls_config = if tls {
+            DriverTlsConfig::default()
+        } else {
+            DriverTlsConfig::disabled()
+        };
         let options = DriverOptions::new(tls_config);
         let addresses = Addresses::try_from_address_str(&address)?;
         let driver = Arc::new(TypeDBDriver::new(addresses, credentials, options).await?);

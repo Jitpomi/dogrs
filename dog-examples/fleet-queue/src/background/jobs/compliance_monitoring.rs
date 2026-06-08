@@ -39,7 +39,11 @@ impl Job for ComplianceMonitoringJob {
             .service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
 
-        let event_id = format!("comply-{}-{}", self.employee_id, chrono::Utc::now().timestamp_millis());
+        let event_id = format!(
+            "comply-{}-{}",
+            self.employee_id,
+            chrono::Utc::now().timestamp_millis()
+        );
         let event_time = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
         let query = serde_json::json!({
             "operation-id": &event_id,
@@ -54,8 +58,13 @@ impl Job for ComplianceMonitoringJob {
         operations_service
             .custom(tenant_ctx, "write", Some(query), params)
             .await
-            .map_err(|e| JobError::Retryable(format!("Failed to record compliance event: {}", e)))?;
+            .map_err(|e| {
+                JobError::Retryable(format!("Failed to record compliance event: {}", e))
+            })?;
 
-        Ok(format!("Compliance event recorded for employee: {}", self.employee_id))
+        Ok(format!(
+            "Compliance event recorded for employee: {}",
+            self.employee_id
+        ))
     }
 }

@@ -535,10 +535,29 @@ where
                       Query(query): Query<std::collections::HashMap<String, String>>,
                       OriginalUri(uri): OriginalUri,
                       Path(id): Path<String>,
-                      data: Json<R>| async move {
+                      request: Request<Body>| async move {
                     let tenant = tenant_from_headers(&headers);
 
-                    let Json(data) = data;
+                    let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
+                        .await
+                        .map_err(|e| {
+                            dog_core::errors::DogError::bad_request(format!(
+                                "Failed to read request body: {}",
+                                e
+                            ))
+                            .into_anyhow()
+                        })?;
+
+                    let data: R = serde_json::from_slice(&body_bytes).map_err(|e| {
+                        dog_core::errors::DogError::bad_request(format!(
+                            "Failed to parse JSON: {}",
+                            e
+                        ))
+                        .with_errors(serde_json::json!({
+                            "_schema": [e.to_string()]
+                        }))
+                        .into_anyhow()
+                    })?;
 
                     let params = RestParams::from_parts("rest", &headers, query, "PUT", &uri);
                     let params = P::from_rest_params(params);
@@ -555,10 +574,29 @@ where
                       Query(query): Query<std::collections::HashMap<String, String>>,
                       OriginalUri(uri): OriginalUri,
                       Path(id): Path<String>,
-                      data: Json<R>| async move {
+                      request: Request<Body>| async move {
                     let tenant = tenant_from_headers(&headers);
 
-                    let Json(data) = data;
+                    let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
+                        .await
+                        .map_err(|e| {
+                            dog_core::errors::DogError::bad_request(format!(
+                                "Failed to read request body: {}",
+                                e
+                            ))
+                            .into_anyhow()
+                        })?;
+
+                    let data: R = serde_json::from_slice(&body_bytes).map_err(|e| {
+                        dog_core::errors::DogError::bad_request(format!(
+                            "Failed to parse JSON: {}",
+                            e
+                        ))
+                        .with_errors(serde_json::json!({
+                            "_schema": [e.to_string()]
+                        }))
+                        .into_anyhow()
+                    })?;
 
                     let params = RestParams::from_parts("rest", &headers, query, "PATCH", &uri);
                     let params = P::from_rest_params(params);

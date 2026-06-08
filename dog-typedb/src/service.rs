@@ -236,9 +236,9 @@ impl TypeDBDriverFactory {
     ) -> Result<TypeDBDriver> {
         let addresses = Addresses::try_from_address_str(address).map_err(|e| anyhow!(e))?;
         let tls_config = if tls {
-            DriverTlsConfig::default()   // system trust roots
+            DriverTlsConfig::default() // system trust roots
         } else {
-            DriverTlsConfig::disabled()  // plaintext — local/dev only
+            DriverTlsConfig::disabled() // plaintext — local/dev only
         };
         let options = DriverOptions::new(tls_config);
         TypeDBDriver::new(addresses, Credentials::new(username, password), options)

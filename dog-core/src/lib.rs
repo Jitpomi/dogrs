@@ -16,6 +16,8 @@ pub mod adapters;
 // Main: ErrorValue, DogValue re-exports (format-agnostic serde PR)
 pub use app::{DogApp, DogAppBuilder, ServiceBuilderHandle, ServiceCaller, ServiceHandle};
 pub use config::{DogConfig, DogConfigSnapshot};
+#[cfg(all(feature = "serde", not(feature = "json")))]
+pub use errors::DogValue;
 pub use errors::{DogError, DogResult, ErrorKind, ErrorValue};
 pub use events::{method_to_standard_event, DogEventHub, ServiceEventData, ServiceEventKind};
 pub use hooks::{
@@ -25,5 +27,3 @@ pub use hooks::{
 pub use registry::DogServiceRegistry;
 pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};
 pub use tenant::{TenantContext, TenantId};
-#[cfg(all(feature = "serde", not(feature = "json")))]
-pub use errors::DogValue;

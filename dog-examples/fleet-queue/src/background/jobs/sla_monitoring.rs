@@ -46,7 +46,11 @@ impl Job for SLAMonitoringJob {
             .service("operations")
             .map_err(|e| JobError::Permanent(format!("Operations service not found: {}", e)))?;
 
-        let event_id = format!("sla-{}-{}", self.delivery_id, chrono::Utc::now().timestamp_millis());
+        let event_id = format!(
+            "sla-{}-{}",
+            self.delivery_id,
+            chrono::Utc::now().timestamp_millis()
+        );
         let event_time = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
         let query = serde_json::json!({
             "operation-id": &event_id,
@@ -63,6 +67,9 @@ impl Job for SLAMonitoringJob {
             .await
             .map_err(|e| JobError::Retryable(format!("Failed to record SLA event: {}", e)))?;
 
-        Ok(format!("SLA event recorded for delivery: {}", self.delivery_id))
+        Ok(format!(
+            "SLA event recorded for delivery: {}",
+            self.delivery_id
+        ))
     }
 }

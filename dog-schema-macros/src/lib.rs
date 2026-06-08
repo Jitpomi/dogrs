@@ -20,22 +20,32 @@ impl syn::parse::Parse for SchemaArgs {
         let mut error_message = None;
         let mut backend = Option::None;
 
-        let metas =
-            syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated(input)?;
+        let metas = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated(input)?;
         for meta in metas {
             if let Meta::NameValue(nv) = meta {
-                let key = nv.path.get_ident().map(|i| i.to_string()).unwrap_or_default();
-                if let Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) = nv.value {
+                let key = nv
+                    .path
+                    .get_ident()
+                    .map(|i| i.to_string())
+                    .unwrap_or_default();
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(s), ..
+                }) = nv.value
+                {
                     match key.as_str() {
-                        "service"       => service       = Some(s),
+                        "service" => service = Some(s),
                         "error_message" => error_message = Some(s),
-                        "backend"       => backend       = Some(s),
+                        "backend" => backend = Some(s),
                         _ => {}
                     }
                 }
             }
         }
-        Ok(SchemaArgs { service, error_message, backend })
+        Ok(SchemaArgs {
+            service,
+            error_message,
+            backend,
+        })
     }
 }
 
@@ -44,7 +54,11 @@ impl syn::parse::Parse for SchemaArgs {
 // ---------------------------------------------------------------------------
 #[proc_macro_attribute]
 pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
-    let SchemaArgs { service, error_message, backend } = parse_macro_input!(args as SchemaArgs);
+    let SchemaArgs {
+        service,
+        error_message,
+        backend,
+    } = parse_macro_input!(args as SchemaArgs);
 
     let mut module = parse_macro_input!(item as ItemMod);
 

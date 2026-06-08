@@ -128,23 +128,38 @@ impl LiveMetrics {
     // the global counter is ahead or behind.
 
     pub fn jobs_enqueued(&self) -> u64 {
-        self.per_type.iter().map(|e| e.enqueued.load(Ordering::Relaxed)).sum()
+        self.per_type
+            .iter()
+            .map(|e| e.enqueued.load(Ordering::Relaxed))
+            .sum()
     }
 
     pub fn jobs_completed(&self) -> u64 {
-        self.per_type.iter().map(|e| e.completed.load(Ordering::Relaxed)).sum()
+        self.per_type
+            .iter()
+            .map(|e| e.completed.load(Ordering::Relaxed))
+            .sum()
     }
 
     pub fn jobs_failed(&self) -> u64 {
-        self.per_type.iter().map(|e| e.failed.load(Ordering::Relaxed)).sum()
+        self.per_type
+            .iter()
+            .map(|e| e.failed.load(Ordering::Relaxed))
+            .sum()
     }
 
     pub fn jobs_retried(&self) -> u64 {
-        self.per_type.iter().map(|e| e.retried.load(Ordering::Relaxed)).sum()
+        self.per_type
+            .iter()
+            .map(|e| e.retried.load(Ordering::Relaxed))
+            .sum()
     }
 
     pub fn jobs_canceled(&self) -> u64 {
-        self.per_type.iter().map(|e| e.canceled.load(Ordering::Relaxed)).sum()
+        self.per_type
+            .iter()
+            .map(|e| e.canceled.load(Ordering::Relaxed))
+            .sum()
     }
 
     // --- per-type getters (synchronous — no .await needed) ----------------
@@ -188,16 +203,21 @@ impl LiveMetrics {
     /// and advance `completed` while `enqueued` was already captured, making
     /// derived invariants (e.g. `enqueued ≥ completed + failed + in_flight`)
     /// appear violated in a single snapshot.
-    pub fn snapshot_all(&self) -> (GlobalMetrics, std::collections::HashMap<String, JobTypeMetrics>) {
+    pub fn snapshot_all(
+        &self,
+    ) -> (
+        GlobalMetrics,
+        std::collections::HashMap<String, JobTypeMetrics>,
+    ) {
         let mut global = GlobalMetrics::default();
         let mut per_type = std::collections::HashMap::new();
         for entry in self.per_type.iter() {
             let m = entry.value().snapshot();
-            global.jobs_enqueued  += m.enqueued;
+            global.jobs_enqueued += m.enqueued;
             global.jobs_completed += m.completed;
-            global.jobs_failed    += m.failed;
-            global.jobs_retried   += m.retried;
-            global.jobs_canceled  += m.canceled;
+            global.jobs_failed += m.failed;
+            global.jobs_retried += m.retried;
+            global.jobs_canceled += m.canceled;
             per_type.insert(entry.key().clone(), m);
         }
         (global, per_type)
@@ -299,7 +319,10 @@ impl Clone for PerformanceMetrics {
 impl std::fmt::Debug for PerformanceMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PerformanceMetrics")
-            .field("job_types", &self.execution_times.keys().collect::<Vec<_>>())
+            .field(
+                "job_types",
+                &self.execution_times.keys().collect::<Vec<_>>(),
+            )
             .field("last_updated", &self.last_updated)
             .finish()
     }
@@ -337,7 +360,9 @@ impl PerformanceMetrics {
             return None;
         }
         let total_nanos: u128 = times.iter().map(|d| d.as_nanos()).sum();
-        Some(Duration::from_nanos((total_nanos / times.len() as u128) as u64))
+        Some(Duration::from_nanos(
+            (total_nanos / times.len() as u128) as u64,
+        ))
     }
 
     /// Percentile execution time for a job type (e.g. 50.0 for p50).
@@ -589,7 +614,9 @@ mod tests {
         let expected_retry_rate = 100.0 * 5.0_f64 / 90.0_f64;
         assert!(
             (global.retry_rate() - expected_retry_rate).abs() < 1e-10,
-            "retry_rate expected ≈{:.4} but got {}", expected_retry_rate, global.retry_rate()
+            "retry_rate expected ≈{:.4} but got {}",
+            expected_retry_rate,
+            global.retry_rate()
         );
         assert_eq!(global.jobs_not_yet_terminal(), 5);
     }
@@ -694,9 +721,7 @@ impl PrometheusExporter {
             for (job_type, metrics) in &type_entries {
                 // Escape per Prometheus text format spec:
                 // backslash → \\, double-quote → \"
-                let escaped = job_type
-                    .replace('\\', r"\\")
-                    .replace('"', "\\\"");
+                let escaped = job_type.replace('\\', r"\\").replace('"', "\\\"");
                 let _ = writeln!(
                     out,
                     "{}{{job_type=\"{}\"}} {}",

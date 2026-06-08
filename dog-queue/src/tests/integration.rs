@@ -9,8 +9,7 @@ use std::sync::{
 use tokio::time::{sleep, Duration, Instant};
 
 use crate::{
-    backend::memory::MemoryBackend, Job, JobError, JobPriority, QueueAdapter, QueueCtx,
-    QueueError,
+    backend::memory::MemoryBackend, Job, JobError, JobPriority, QueueAdapter, QueueCtx, QueueError,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -111,7 +110,9 @@ async fn test_full_lifecycle_job_executes() {
     let counter = Counter(Arc::new(AtomicU32::new(0)));
     let ctx = QueueCtx::new("tenant_a".to_string());
 
-    let job = CountingJob { label: "first".to_string() };
+    let job = CountingJob {
+        label: "first".to_string(),
+    };
     adapter.enqueue(ctx.clone(), job).await.unwrap();
 
     let handle = adapter
@@ -128,7 +129,11 @@ async fn test_full_lifecycle_job_executes() {
     .await;
 
     handle.shutdown().await.unwrap();
-    assert_eq!(counter.0.load(Ordering::SeqCst), 1, "job should have executed exactly once");
+    assert_eq!(
+        counter.0.load(Ordering::SeqCst),
+        1,
+        "job should have executed exactly once"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +154,12 @@ async fn test_multi_tenant_isolation() {
     // Enqueue 3 jobs for tenant A, 0 for tenant B
     for i in 0..3 {
         adapter
-            .enqueue(ctx_a.clone(), CountingJob { label: i.to_string() })
+            .enqueue(
+                ctx_a.clone(),
+                CountingJob {
+                    label: i.to_string(),
+                },
+            )
             .await
             .unwrap();
     }
@@ -185,7 +195,11 @@ async fn test_multi_tenant_isolation() {
     .await;
 
     handle_a.shutdown().await.unwrap();
-    assert_eq!(counter_a.0.load(Ordering::SeqCst), 3, "tenant A should process exactly its 3 jobs");
+    assert_eq!(
+        counter_a.0.load(Ordering::SeqCst),
+        3,
+        "tenant A should process exactly its 3 jobs"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -217,10 +231,19 @@ async fn test_idempotent_enqueue_executes_once() {
     assert_eq!(id1, id2, "duplicate enqueue should return same job id");
 
     // Only one job should be in the queue
-    let leased1 = backend.dequeue(ctx.clone(), &["counting_job"]).await.unwrap();
-    let leased2 = backend.dequeue(ctx.clone(), &["counting_job"]).await.unwrap();
+    let leased1 = backend
+        .dequeue(ctx.clone(), &["counting_job"])
+        .await
+        .unwrap();
+    let leased2 = backend
+        .dequeue(ctx.clone(), &["counting_job"])
+        .await
+        .unwrap();
     assert!(leased1.is_some(), "first dequeue should find the job");
-    assert!(leased2.is_none(), "second dequeue should be empty — only one job exists");
+    assert!(
+        leased2.is_none(),
+        "second dequeue should be empty — only one job exists"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +259,12 @@ async fn test_cancel_wins_semantics() {
 
     let ctx = QueueCtx::new("tenant_cancel".to_string());
     let job_id = adapter
-        .enqueue(ctx.clone(), CountingJob { label: "cancel-me".to_string() })
+        .enqueue(
+            ctx.clone(),
+            CountingJob {
+                label: "cancel-me".to_string(),
+            },
+        )
         .await
         .unwrap();
 
@@ -368,7 +396,11 @@ async fn test_lease_expiry_requeues_job() {
     };
 
     let job_id = backend.enqueue(ctx.clone(), msg).await.unwrap();
-    let _leased = backend.dequeue(ctx.clone(), &["counting_job"]).await.unwrap().unwrap();
+    let _leased = backend
+        .dequeue(ctx.clone(), &["counting_job"])
+        .await
+        .unwrap()
+        .unwrap();
 
     // Artificially expire the lease
     backend.force_lease_expiry(job_id.clone()).await.unwrap();
@@ -381,8 +413,15 @@ async fn test_lease_expiry_requeues_job() {
 
     // Job should be available again
     let retry_leased = backend.dequeue(ctx, &["counting_job"]).await.unwrap();
-    assert!(retry_leased.is_some(), "job should be back in queue after lease expiry");
-    assert_eq!(retry_leased.unwrap().record.attempt, 2, "attempt count should be 2");
+    assert!(
+        retry_leased.is_some(),
+        "job should be back in queue after lease expiry"
+    );
+    assert_eq!(
+        retry_leased.unwrap().record.attempt,
+        2,
+        "attempt count should be 2"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -400,7 +439,12 @@ async fn test_fifo_within_same_priority() {
     // Enqueue 5 jobs
     for i in 0..5 {
         adapter
-            .enqueue(ctx.clone(), CountingJob { label: i.to_string() })
+            .enqueue(
+                ctx.clone(),
+                CountingJob {
+                    label: i.to_string(),
+                },
+            )
             .await
             .unwrap();
     }
@@ -419,5 +463,9 @@ async fn test_fifo_within_same_priority() {
     .await;
 
     handle.shutdown().await.unwrap();
-    assert_eq!(counter.0.load(Ordering::SeqCst), 5, "all 5 jobs should execute");
+    assert_eq!(
+        counter.0.load(Ordering::SeqCst),
+        5,
+        "all 5 jobs should execute"
+    );
 }

@@ -122,11 +122,9 @@ impl QueueCapabilities {
     ///
     /// This is identical to [`Default::default()`] (all features `false`).
     /// Prefer `QueueCapabilities::default()` directly for clarity.
-    #[deprecated(
-        note = "Identical to QueueCapabilities::default(). \
+    #[deprecated(note = "Identical to QueueCapabilities::default(). \
                 Use Default::default() for the conservative baseline or \
-                QueueCapabilities::all() for full feature support."
-    )]
+                QueueCapabilities::all() for full feature support.")]
     pub fn minimal() -> Self {
         Self::default()
     }

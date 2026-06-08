@@ -79,7 +79,7 @@ impl Default for QueueConfig {
             poll_interval: Duration::from_millis(100),
             poll_jitter: Duration::from_millis(10), // 10% of poll_interval
             error_backoff: Duration::from_secs(1),
-            execute_timeout: None, // no timeout by default
+            execute_timeout: None,  // no timeout by default
             max_payload_size: None, // no limit by default
         }
     }
@@ -99,8 +99,7 @@ impl QueueConfig {
     pub fn validate(&self) -> QueueResult<()> {
         if self.max_workers == 0 {
             return Err(QueueError::InvalidConfig(
-                "max_workers must be >= 1 (0 workers would never process jobs)"
-                    .to_string(),
+                "max_workers must be >= 1 (0 workers would never process jobs)".to_string(),
             ));
         }
         if self.base_retry_backoff > self.max_retry_backoff {
@@ -577,15 +576,15 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
             _ => return Ok(None),
         };
 
-        let result: J::Result = serde_json::from_str(result_str)
-            .map_err(|e| QueueError::SerializationError(format!(
+        let result: J::Result = serde_json::from_str(result_str).map_err(|e| {
+            QueueError::SerializationError(format!(
                 "Failed to deserialize stored result for job type '{}': {e}",
                 J::JOB_TYPE
-            )))?;
+            ))
+        })?;
 
         Ok(Some(result))
     }
-
 }
 
 impl<B: QueueBackend> Clone for QueueAdapter<B> {
@@ -834,8 +833,9 @@ impl<C: Send + Sync + 'static> Worker<C> {
         {
             Ok(b) => b,
             Err(e) => {
-                let error_str =
-                    format!("Codec decode failed (permanent — payload is corrupt or codec mismatch): {e}");
+                let error_str = format!(
+                    "Codec decode failed (permanent — payload is corrupt or codec mismatch): {e}"
+                );
                 error!("Job {} permanently failed: {}", job_id, error_str);
 
                 // AbortOnDrop will abort the heartbeat task as it goes out of scope;
@@ -971,15 +971,13 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     .await?;
 
                 if let Some(retry_at_time) = retry_at {
-                    self.adapter
-                        .observability
-                        .record_job_retrying(
-                            &self.ctx,
-                            &job_id,
-                            job_type,
-                            &error_str,
-                            retry_at_time,
-                        );
+                    self.adapter.observability.record_job_retrying(
+                        &self.ctx,
+                        &job_id,
+                        job_type,
+                        &error_str,
+                        retry_at_time,
+                    );
                     warn!("Job {} failed, will retry: {}", job_id, error_str);
                 } else {
                     self.adapter

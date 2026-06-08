@@ -70,10 +70,20 @@ impl std::str::FromStr for JobPriority {
         // `eq_ignore_ascii_case` avoids the heap allocation that `to_lowercase()`
         // produces on every call. All four variant names are pure ASCII, so
         // ASCII-only case folding is correct here.
-        if s.eq_ignore_ascii_case("low")      { return Ok(Self::Low);      }
-        if s.eq_ignore_ascii_case("normal")   { return Ok(Self::Normal);   }
-        if s.eq_ignore_ascii_case("high")     { return Ok(Self::High);     }
-        if s.eq_ignore_ascii_case("critical") { return Ok(Self::Critical); }
-        Err(format!("Invalid priority: {s} (expected one of: low, normal, high, critical)"))
+        if s.eq_ignore_ascii_case("low") {
+            return Ok(Self::Low);
+        }
+        if s.eq_ignore_ascii_case("normal") {
+            return Ok(Self::Normal);
+        }
+        if s.eq_ignore_ascii_case("high") {
+            return Ok(Self::High);
+        }
+        if s.eq_ignore_ascii_case("critical") {
+            return Ok(Self::Critical);
+        }
+        Err(format!(
+            "Invalid priority: {s} (expected one of: low, normal, high, critical)"
+        ))
     }
 }

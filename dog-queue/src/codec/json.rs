@@ -25,7 +25,9 @@ impl JobCodec for JsonCodec {
         // Validate well-formedness before returning to caller.
         // `IgnoredAny` validates structure without a Value allocation (see encode_bytes).
         serde_json::from_slice::<serde::de::IgnoredAny>(bytes).map_err(|e| {
-            QueueError::SerializationError(format!("Stored payload is corrupted (not valid JSON): {e}"))
+            QueueError::SerializationError(format!(
+                "Stored payload is corrupted (not valid JSON): {e}"
+            ))
         })?;
         Ok(bytes.to_vec())
     }

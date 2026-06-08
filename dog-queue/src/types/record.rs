@@ -171,7 +171,6 @@ impl JobRecord {
         }
     }
 
-
     /// Set an error and update timestamp
     pub fn set_error(&mut self, error: String) {
         self.last_error = Some(error);
@@ -199,7 +198,10 @@ impl JobRecord {
     /// Fail the job permanently
     pub fn fail(&mut self, error: String) {
         let now = Utc::now();
-        self.status = JobStatus::Failed { failed_at: now, error: error.clone() };
+        self.status = JobStatus::Failed {
+            failed_at: now,
+            error: error.clone(),
+        };
         self.last_error = Some(error);
         self.lease_token = None;
         self.updated_at = now;

@@ -179,7 +179,9 @@ mod tests {
         assert_eq!(registry.registered_types(), vec!["test_job"]);
 
         // Create test message (payload already JSON-decoded, as the adapter does)
-        let job = TestJob { data: "test".to_string() };
+        let job = TestJob {
+            data: "test".to_string(),
+        };
         let message = JobMessage {
             job_type: "test_job".to_string(),
             payload_bytes: serde_json::to_vec(&job).unwrap(), // JSON bytes = decoded form
@@ -192,12 +194,16 @@ mod tests {
         };
 
         // Correct pattern: clone handler under the lock, drop lock, execute outside.
-        let handler = registry.get_handler("test_job").expect("handler must be registered");
+        let handler = registry
+            .get_handler("test_job")
+            .expect("handler must be registered");
         let context = Arc::new("test_context".to_string()) as Arc<dyn std::any::Any + Send + Sync>;
         let result = handler.execute(&message, context).await.unwrap();
 
         assert!(result.is_some());
-        assert!(result.unwrap().contains("Processed: test with context: test_context"));
+        assert!(result
+            .unwrap()
+            .contains("Processed: test with context: test_context"));
     }
 
     #[tokio::test]

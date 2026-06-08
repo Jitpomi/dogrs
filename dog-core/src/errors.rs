@@ -9,7 +9,7 @@
 //! ### Dynamic Metadata (Data & Errors)
 //! If you enable feature `json` (on by default):
 //! - `data` / `errors` are typed as `serde_json::Value`
-//! 
+//!
 //! If you use `default-features = false`:
 //! - `data` / `errors` fallback to the format-agnostic `DogValue` enum,
 //!   allowing `dog-core` to be used without the `serde_json` dependency.
@@ -29,22 +29,22 @@ pub type DogResult<T> = std::result::Result<T, AnyError>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ErrorKind {
-    BadRequest,         // 400
-    NotAuthenticated,   // 401
-    Forbidden,          // 403
-    NotFound,           // 404
-    MethodNotAllowed,   // 405
-    NotAcceptable,      // 406
-    Timeout,            // 408
-    Conflict,           // 409
-    Gone,               // 410
-    LengthRequired,     // 411
-    Unprocessable,      // 422
-    TooManyRequests,    // 429
-    GeneralError,       // 500
-    NotImplemented,     // 501
-    BadGateway,         // 502
-    Unavailable,        // 503
+    BadRequest,       // 400
+    NotAuthenticated, // 401
+    Forbidden,        // 403
+    NotFound,         // 404
+    MethodNotAllowed, // 405
+    NotAcceptable,    // 406
+    Timeout,          // 408
+    Conflict,         // 409
+    Gone,             // 410
+    LengthRequired,   // 411
+    Unprocessable,    // 422
+    TooManyRequests,  // 429
+    GeneralError,     // 500
+    NotImplemented,   // 501
+    BadGateway,       // 502
+    Unavailable,      // 503
 }
 
 impl ErrorKind {
@@ -171,41 +171,61 @@ impl DogValue {
     /// Prefer this over `DogValue::Float(v)` directly to catch invalid float values
     /// at construction time rather than at serialization time.
     pub fn float(v: f64) -> Option<Self> {
-        if v.is_finite() { Some(DogValue::Float(v)) } else { None }
+        if v.is_finite() {
+            Some(DogValue::Float(v))
+        } else {
+            None
+        }
     }
 }
 
 #[cfg(all(feature = "serde", not(feature = "json")))]
 impl From<String> for DogValue {
-    fn from(s: String) -> Self { DogValue::String(s) }
+    fn from(s: String) -> Self {
+        DogValue::String(s)
+    }
 }
 #[cfg(all(feature = "serde", not(feature = "json")))]
 impl From<&str> for DogValue {
-    fn from(s: &str) -> Self { DogValue::String(s.to_owned()) }
+    fn from(s: &str) -> Self {
+        DogValue::String(s.to_owned())
+    }
 }
 #[cfg(all(feature = "serde", not(feature = "json")))]
 impl From<bool> for DogValue {
-    fn from(b: bool) -> Self { DogValue::Bool(b) }
+    fn from(b: bool) -> Self {
+        DogValue::Bool(b)
+    }
 }
 #[cfg(all(feature = "serde", not(feature = "json")))]
 impl From<i64> for DogValue {
-    fn from(n: i64) -> Self { DogValue::Integer(n) }
+    fn from(n: i64) -> Self {
+        DogValue::Integer(n)
+    }
 }
 #[cfg(all(feature = "serde", not(feature = "json")))]
 impl From<i32> for DogValue {
-    fn from(n: i32) -> Self { DogValue::Integer(n as i64) }
+    fn from(n: i32) -> Self {
+        DogValue::Integer(n as i64)
+    }
 }
 #[cfg(all(feature = "serde", not(feature = "json")))]
 impl From<u32> for DogValue {
-    fn from(n: u32) -> Self { DogValue::Integer(n as i64) }
+    fn from(n: u32) -> Self {
+        DogValue::Integer(n as i64)
+    }
 }
 #[cfg(all(feature = "serde", not(feature = "json")))]
 impl From<Vec<DogValue>> for DogValue {
-    fn from(a: Vec<DogValue>) -> Self { DogValue::Array(a) }
+    fn from(a: Vec<DogValue>) -> Self {
+        DogValue::Array(a)
+    }
 }
 #[cfg(all(feature = "serde", not(feature = "json")))]
 impl From<std::collections::BTreeMap<String, DogValue>> for DogValue {
-    fn from(m: std::collections::BTreeMap<String, DogValue>) -> Self { DogValue::Object(m) }
+    fn from(m: std::collections::BTreeMap<String, DogValue>) -> Self {
+        DogValue::Object(m)
+    }
 }
 
 /// A structured DogRS error that can live inside `anyhow::Error`.
@@ -338,8 +358,12 @@ impl DogError {
                     let errors = dog_ref.errors.clone();
                     // `dog_ref` borrow ends here — safe to move `other` below
                     let mut reconstructed = DogError::new(kind, message);
-                    if let Some(d) = data    { reconstructed = reconstructed.with_data(d); }
-                    if let Some(e) = errors  { reconstructed = reconstructed.with_errors(e); }
+                    if let Some(d) = data {
+                        reconstructed = reconstructed.with_data(d);
+                    }
+                    if let Some(e) = errors {
+                        reconstructed = reconstructed.with_errors(e);
+                    }
                     reconstructed.with_source(other)
                 } else {
                     DogError::general_error(other.to_string()).with_source(other)
@@ -436,8 +460,12 @@ impl serde::Serialize for DogError {
     {
         use serde::ser::SerializeStruct;
         let mut fields = 4;
-        if self.data.is_some() { fields += 1; }
-        if self.errors.is_some() { fields += 1; }
+        if self.data.is_some() {
+            fields += 1;
+        }
+        if self.errors.is_some() {
+            fields += 1;
+        }
 
         let mut state = serializer.serialize_struct("DogError", fields)?;
         state.serialize_field("name", self.name())?;
@@ -465,7 +493,6 @@ impl DogError {
         serde_json::to_value(self).expect("DogError serialization is infallible")
     }
 }
-
 
 /// Convenience helper for "bail with DogError".
 ///
@@ -531,7 +558,10 @@ mod tests {
             .with_source(anyhow::anyhow!("secret internal detail: DB timeout"));
         let json = err.to_json();
 
-        assert!(json.get("source").is_none(), "source must not appear in wire output");
+        assert!(
+            json.get("source").is_none(),
+            "source must not appear in wire output"
+        );
         assert_eq!(json["code"], 404);
         assert_eq!(json["name"], "NotFound");
     }
@@ -542,7 +572,10 @@ mod tests {
     fn class_name_is_camel_case_in_wire_output() {
         let json = DogError::not_authenticated("token expired").to_json();
 
-        assert!(json.get("class_name").is_none(), "snake_case must not appear in wire output");
+        assert!(
+            json.get("class_name").is_none(),
+            "snake_case must not appear in wire output"
+        );
         assert_eq!(json["className"], "not-authenticated");
         assert_eq!(json["code"], 401);
     }
@@ -600,12 +633,12 @@ mod tests_serde_only {
 
     #[test]
     fn dog_error_serialize_with_dog_value_errors() {
-        let err = DogError::unprocessable("validation failed")
-            .with_errors(DogValue::Object(std::collections::BTreeMap::from([
-                ("email".into(), DogValue::Array(vec![
-                    DogValue::String("is required".into()),
-                ])),
-            ])));
+        let err = DogError::unprocessable("validation failed").with_errors(DogValue::Object(
+            std::collections::BTreeMap::from([(
+                "email".into(),
+                DogValue::Array(vec![DogValue::String("is required".into())]),
+            )]),
+        ));
         // Serialize to JSON for inspection (serde_json serializer works with Serialize impl)
         let json_str = serde_json::to_string(&err).unwrap();
         assert!(json_str.contains("\"className\":\"unprocessable\""));
@@ -617,13 +650,22 @@ mod tests_serde_only {
     fn dog_value_float_validated_constructor() {
         assert!(DogValue::float(1.5).is_some());
         assert!(DogValue::float(f64::NAN).is_none(), "NaN must be rejected");
-        assert!(DogValue::float(f64::INFINITY).is_none(), "Infinity must be rejected");
-        assert!(DogValue::float(f64::NEG_INFINITY).is_none(), "Neg infinity must be rejected");
+        assert!(
+            DogValue::float(f64::INFINITY).is_none(),
+            "Infinity must be rejected"
+        );
+        assert!(
+            DogValue::float(f64::NEG_INFINITY).is_none(),
+            "Neg infinity must be rejected"
+        );
     }
 
     #[test]
     fn dog_value_from_impls() {
-        assert_eq!(DogValue::from("hello"), DogValue::String("hello".to_owned()));
+        assert_eq!(
+            DogValue::from("hello"),
+            DogValue::String("hello".to_owned())
+        );
         assert_eq!(DogValue::from(42i64), DogValue::Integer(42));
         assert_eq!(DogValue::from(42i32), DogValue::Integer(42));
         assert_eq!(DogValue::from(42u32), DogValue::Integer(42));
@@ -636,16 +678,20 @@ mod tests_serde_only {
     #[test]
     fn dog_value_json_roundtrip_all_variants() {
         let cases: &[(&str, DogValue)] = &[
-            ("null",   DogValue::Null),
-            ("true",   DogValue::Bool(true)),
-            ("false",  DogValue::Bool(false)),
-            ("42",     DogValue::Integer(42)),
-            ("42.5",   DogValue::Float(42.5)),
+            ("null", DogValue::Null),
+            ("true", DogValue::Bool(true)),
+            ("false", DogValue::Bool(false)),
+            ("42", DogValue::Integer(42)),
+            ("42.5", DogValue::Float(42.5)),
             ("\"hi\"", DogValue::String("hi".to_owned())),
         ];
         for (expected_json, value) in cases {
             let serialized = serde_json::to_string(value).unwrap();
-            assert_eq!(&serialized, expected_json, "Serialize mismatch for {:?}", value);
+            assert_eq!(
+                &serialized, expected_json,
+                "Serialize mismatch for {:?}",
+                value
+            );
             let deserialized: DogValue = serde_json::from_str(&serialized).unwrap();
             assert_eq!(&deserialized, value, "Round-trip mismatch for {:?}", value);
         }
@@ -678,10 +724,13 @@ mod tests_serde_only {
     fn dog_value_nested_payload_roundtrip() {
         use std::collections::BTreeMap;
         let payload = DogValue::Object(BTreeMap::from([
-            ("email".into(), DogValue::Array(vec![
-                DogValue::String("is required".into()),
-                DogValue::String("must be valid".into()),
-            ])),
+            (
+                "email".into(),
+                DogValue::Array(vec![
+                    DogValue::String("is required".into()),
+                    DogValue::String("must be valid".into()),
+                ]),
+            ),
             ("count".into(), DogValue::Integer(3)),
             ("flagged".into(), DogValue::Bool(true)),
         ]));
@@ -715,8 +764,15 @@ mod tests_normalize {
             .context("while fetching user profile");
         let n = DogError::normalize(err);
         // Kind and message from the original DogError must be preserved
-        assert_eq!(n.kind, ErrorKind::NotFound, "kind must survive .context() wrapping");
-        assert_eq!(n.message, "user 42", "message must survive .context() wrapping");
+        assert_eq!(
+            n.kind,
+            ErrorKind::NotFound,
+            "kind must survive .context() wrapping"
+        );
+        assert_eq!(
+            n.message, "user 42",
+            "message must survive .context() wrapping"
+        );
     }
 
     #[test]
@@ -741,8 +797,14 @@ mod tests_normalize {
         let n = DogError::normalize(err);
         assert_eq!(n.kind, ErrorKind::Unprocessable);
         assert_eq!(n.message, "validation failed");
-        assert!(n.data.is_some(),   "data must survive .context() wrapping in normalize()");
-        assert!(n.errors.is_some(), "errors must survive .context() wrapping in normalize()");
+        assert!(
+            n.data.is_some(),
+            "data must survive .context() wrapping in normalize()"
+        );
+        assert!(
+            n.errors.is_some(),
+            "errors must survive .context() wrapping in normalize()"
+        );
     }
 }
 
@@ -760,11 +822,17 @@ mod tests_bail_dog {
 
     fn try_data_only() -> DogResult<()> {
         #[cfg(feature = "json")]
-        bail_dog!(bad_request, "data only",
-            data = serde_json::json!({"hint": "check format"}));
+        bail_dog!(
+            bad_request,
+            "data only",
+            data = serde_json::json!({"hint": "check format"})
+        );
         #[cfg(all(feature = "serde", not(feature = "json")))]
-        bail_dog!(bad_request, "data only",
-            data = DogValue::String("hint".into()));
+        bail_dog!(
+            bad_request,
+            "data only",
+            data = DogValue::String("hint".into())
+        );
         #[cfg(not(any(feature = "serde", feature = "json")))]
         bail_dog!(bad_request, "data only");
         #[allow(unreachable_code)]
@@ -773,11 +841,17 @@ mod tests_bail_dog {
 
     fn try_errors_only() -> DogResult<()> {
         #[cfg(feature = "json")]
-        bail_dog!(unprocessable, "validation failed",
-            errors = serde_json::json!({"email": ["required"]}));
+        bail_dog!(
+            unprocessable,
+            "validation failed",
+            errors = serde_json::json!({"email": ["required"]})
+        );
         #[cfg(all(feature = "serde", not(feature = "json")))]
-        bail_dog!(unprocessable, "validation failed",
-            errors = DogValue::String("required".into()));
+        bail_dog!(
+            unprocessable,
+            "validation failed",
+            errors = DogValue::String("required".into())
+        );
         #[cfg(not(any(feature = "serde", feature = "json")))]
         bail_dog!(unprocessable, "validation failed");
         // Unreachable — all arms bail
@@ -787,13 +861,19 @@ mod tests_bail_dog {
 
     fn try_data_then_errors() -> DogResult<()> {
         #[cfg(feature = "json")]
-        bail_dog!(bad_request, "bad payload",
-            data    = serde_json::json!({"hint": "check format"}),
-            errors  = serde_json::json!({"field": ["invalid"]}));
+        bail_dog!(
+            bad_request,
+            "bad payload",
+            data = serde_json::json!({"hint": "check format"}),
+            errors = serde_json::json!({"field": ["invalid"]})
+        );
         #[cfg(all(feature = "serde", not(feature = "json")))]
-        bail_dog!(bad_request, "bad payload",
-            data    = DogValue::String("hint".into()),
-            errors  = DogValue::String("invalid".into()));
+        bail_dog!(
+            bad_request,
+            "bad payload",
+            data = DogValue::String("hint".into()),
+            errors = DogValue::String("invalid".into())
+        );
         #[cfg(not(any(feature = "serde", feature = "json")))]
         bail_dog!(bad_request, "bad payload");
         #[allow(unreachable_code)]
@@ -804,13 +884,19 @@ mod tests_bail_dog {
     /// `format!` compile error — errors=, data= ordering is now supported.
     fn try_errors_then_data() -> DogResult<()> {
         #[cfg(feature = "json")]
-        bail_dog!(unprocessable, "reversed order",
-            errors  = serde_json::json!({"field": ["invalid"]}),
-            data    = serde_json::json!({"hint": "check format"}));
+        bail_dog!(
+            unprocessable,
+            "reversed order",
+            errors = serde_json::json!({"field": ["invalid"]}),
+            data = serde_json::json!({"hint": "check format"})
+        );
         #[cfg(all(feature = "serde", not(feature = "json")))]
-        bail_dog!(unprocessable, "reversed order",
-            errors  = DogValue::String("invalid".into()),
-            data    = DogValue::String("hint".into()));
+        bail_dog!(
+            unprocessable,
+            "reversed order",
+            errors = DogValue::String("invalid".into()),
+            data = DogValue::String("hint".into())
+        );
         #[cfg(not(any(feature = "serde", feature = "json")))]
         bail_dog!(unprocessable, "reversed order");
         #[allow(unreachable_code)]
@@ -872,8 +958,14 @@ mod tests_bail_dog {
         let dog = DogError::from_anyhow(&err).expect("must be DogError");
         assert_eq!(dog.kind, ErrorKind::Unprocessable);
         assert_eq!(dog.message, "reversed order");
-        assert!(dog.data.is_some(), "data must be attached even in reverse order");
-        assert!(dog.errors.is_some(), "errors must be attached even in reverse order");
+        assert!(
+            dog.data.is_some(),
+            "data must be attached even in reverse order"
+        );
+        assert!(
+            dog.errors.is_some(),
+            "errors must be attached even in reverse order"
+        );
     }
 
     #[test]
