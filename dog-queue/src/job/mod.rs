@@ -12,8 +12,13 @@ pub trait Job: Send + Sync + Serialize + DeserializeOwned + 'static {
     /// Context type passed to job execution
     type Context: Send + Sync + Clone + 'static;
 
-    /// Result type returned by job execution
-    type Result: Send + Serialize + 'static;
+    /// Result type returned by job execution.
+    ///
+    /// Must be both `Serialize` (for storage in the backend after `ack_complete`)
+    /// and `DeserializeOwned` (for retrieval via `QueueAdapter::get_result`).
+    /// Expressing both bounds here surfaces the requirement at the `impl Job`
+    /// site rather than deferring it to the `get_result` call site.
+    type Result: Send + Serialize + DeserializeOwned + 'static;
 
     /// Job type identifier for dispatch
     const JOB_TYPE: &'static str;

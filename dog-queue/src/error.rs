@@ -61,6 +61,15 @@ pub enum QueueError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// Execution time limit exceeded.
+    ///
+    /// Returned by [`QueueAdapter::execute_now`] when the configured
+    /// `execute_timeout` elapses before the job returns.  Distinct from
+    /// [`QueueError::Internal`] so callers can `match` on timeouts vs.
+    /// infrastructure failures without parsing error strings.
+    #[error("Execution timed out after {0:?}")]
+    Timeout(std::time::Duration),
 }
 
 /// Job execution outcome - determines retry behavior

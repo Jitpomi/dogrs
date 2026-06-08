@@ -179,6 +179,29 @@ impl LiveMetrics {
             .expect("performance metrics lock poisoned")
             .clone()
     }
+    /// Coherent single-pass snapshot of all metrics.
+    ///
+    /// Iterates the per-type DashMap exactly once, accumulating both the global
+    /// totals and the per-type breakdown from the same set of atomic reads.
+    /// This eliminates the inconsistency window present when five independent
+    /// `jobs_*()` calls are made sequentially: between calls, a job may complete
+    /// and advance `completed` while `enqueued` was already captured, making
+    /// derived invariants (e.g. `enqueued ≥ completed + failed + in_flight`)
+    /// appear violated in a single snapshot.
+    pub fn snapshot_all(&self) -> (GlobalMetrics, std::collections::HashMap<String, JobTypeMetrics>) {
+        let mut global = GlobalMetrics::default();
+        let mut per_type = std::collections::HashMap::new();
+        for entry in self.per_type.iter() {
+            let m = entry.value().snapshot();
+            global.jobs_enqueued  += m.enqueued;
+            global.jobs_completed += m.completed;
+            global.jobs_failed    += m.failed;
+            global.jobs_retried   += m.retried;
+            global.jobs_canceled  += m.canceled;
+            per_type.insert(entry.key().clone(), m);
+        }
+        (global, per_type)
+    }
 }
 
 impl Default for LiveMetrics {
@@ -354,20 +377,17 @@ impl MetricsCollector {
         Self { live_metrics }
     }
 
-    /// Collect a snapshot of all current metrics (synchronous — all underlying
-    /// data structures now use `std::sync::Mutex` or `DashMap`, no async needed).
+    /// Collect a coherent point-in-time snapshot of all metrics.
+    ///
+    /// Uses [`LiveMetrics::snapshot_all`] to traverse the per-type DashMap
+    /// exactly once, so global totals and per-type breakdown are read from
+    /// the same atomic loads — no inconsistency window.
     pub fn collect_snapshot(&self) -> MetricsSnapshot {
+        let (global, job_types) = self.live_metrics.snapshot_all();
         MetricsSnapshot {
             timestamp: Utc::now(),
-            global: GlobalMetrics {
-                jobs_enqueued: self.live_metrics.jobs_enqueued(),
-                jobs_completed: self.live_metrics.jobs_completed(),
-                jobs_failed: self.live_metrics.jobs_failed(),
-                jobs_retried: self.live_metrics.jobs_retried(),
-                jobs_canceled: self.live_metrics.jobs_canceled(),
-            },
-            // all_job_type_metrics and performance_metrics are now synchronous
-            job_types: self.live_metrics.all_job_type_metrics(),
+            global,
+            job_types,
             performance: self.live_metrics.performance_metrics(),
         }
     }
@@ -389,7 +409,7 @@ pub struct MetricsSnapshot {
     pub performance: PerformanceMetrics,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GlobalMetrics {
     pub jobs_enqueued: u64,
     pub jobs_completed: u64,

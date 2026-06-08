@@ -271,15 +271,40 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         match self.config.execute_timeout {
             Some(limit) => tokio::time::timeout(limit, execute_fut)
                 .await
-                .map_err(|_| {
-                    QueueError::Internal(format!(
-                        "execute_now timed out after {:?}",
-                        self.config.execute_timeout
-                    ))
-                })?
+                .map_err(|_| QueueError::Timeout(limit))?
                 .map_err(QueueError::JobFailed),
             None => execute_fut.await.map_err(QueueError::JobFailed),
         }
+    }
+
+    /// Cancel a job by ID.
+    ///
+    /// Returns `true` if the job was found and successfully canceled, `false`
+    /// if it was already in a terminal state (`Completed`, `Failed`, or already
+    /// `Canceled`).  Cancel-wins semantics apply: if a worker is currently
+    /// executing the job, the next `ack_complete` call will return
+    /// [`QueueError::JobCanceled`] and the result will be discarded.
+    ///
+    /// Cancellation is recorded in the observability layer so `jobs_canceled`
+    /// reflects all cancellations that go through this adapter method.
+    #[instrument(skip(self), fields(tenant_id = %ctx.tenant_id, job_id = %job_id))]
+    pub async fn cancel(&self, ctx: QueueCtx, job_id: JobId) -> QueueResult<bool> {
+        let canceled = self.backend.cancel(ctx.clone(), job_id.clone()).await?;
+        if canceled {
+            // Look up the job type for the observability record.
+            // Use get_record if available; fall back gracefully if not (some
+            // backends return BackendUnsupported — skip recording in that case).
+            if let Ok(record) = self.backend.get_record(ctx.clone(), job_id.clone()).await {
+                self.observability
+                    .record_job_canceled(&ctx, &job_id, &record.message.job_type);
+            } else {
+                // Backend doesn't expose full records — record with empty job_type
+                // so the global canceled counter still advances.
+                self.observability.record_job_canceled(&ctx, &job_id, "");
+            }
+            info!("Canceled job {}", job_id);
+        }
+        Ok(canceled)
     }
 
     /// Erase the concrete backend type to `dyn QueueBackend + Send + Sync`.
@@ -667,12 +692,24 @@ impl<C: Send + Sync + 'static> Worker<C> {
         let mut decoded_message = leased_job.record.message.clone();
         decoded_message.payload_bytes = decoded_bytes;
 
+        // Time the execute() call for performance metrics.
+        // The elapsed duration is recorded after the drop of the heartbeat handle
+        // so that heartbeat teardown overhead is not counted as job execution time.
+        let execute_start = std::time::Instant::now();
         let result = handler
             .execute(&decoded_message, self.context.clone())
             .await;
+        let execute_elapsed = execute_start.elapsed();
 
         // Job finished — drop the AbortOnDrop guard, which aborts the heartbeat task.
         drop(heartbeat_handle);
+
+        // Record execution timing — this is the first caller of record_execution_time;
+        // previously the PerformanceMetrics ring buffer was permanently empty.
+        self.adapter
+            .observability
+            .metrics()
+            .record_execution_time(job_type, execute_elapsed);
 
         match result {
             Ok(result_ref) => {

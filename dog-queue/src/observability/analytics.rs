@@ -78,6 +78,17 @@ impl ObservabilityLayer {
         );
     }
 
+    /// Record job canceled event.
+    ///
+    /// Called by [`QueueAdapter::cancel`] when the backend reports a successful
+    /// cancellation.  This is the only path that increments `jobs_canceled`;
+    /// previously the counter was permanently zero because `cancel` was not
+    /// exposed on the adapter.
+    pub fn record_job_canceled(&self, _ctx: &QueueCtx, job_id: &JobId, job_type: &str) {
+        self.metrics.increment_jobs_canceled(job_type);
+        debug!("Recorded job canceled: {} ({})", job_id, job_type);
+    }
+
     /// Get live metrics
     pub fn metrics(&self) -> &super::LiveMetrics {
         &self.metrics
