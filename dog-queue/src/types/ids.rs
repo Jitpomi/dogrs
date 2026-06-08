@@ -18,6 +18,12 @@ impl JobId {
     }
 }
 
+impl Default for JobId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 
 
 impl fmt::Display for JobId {
@@ -66,6 +72,12 @@ impl LeaseToken {
     /// Get the inner string value
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl Default for LeaseToken {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

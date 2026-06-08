@@ -132,7 +132,7 @@ impl QueueBackend for MemoryBackend {
         let now = Utc::now();
 
         // Create and store the job record.
-        let record = JobRecord::new(job_id.clone(), ctx.tenant_id.clone(), message.clone());
+        let record = JobRecord::new(job_id.clone(), &ctx.tenant_id, message.clone());
         self.jobs.write().await.insert(job_id.clone(), record);
 
         // Insert into the priority-ordered queue.

@@ -397,7 +397,7 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
     /// Used internally by `start_workers` to share one type-erased adapter
     /// across all spawned workers.  Centralising the field copy here means a
     /// compiler error (missing field) if `QueueAdapter` ever gains a new field.
-    fn into_dyn_shared(&self) -> QueueAdapter<dyn QueueBackend + Send + Sync>
+    fn to_dyn_shared(&self) -> QueueAdapter<dyn QueueBackend + Send + Sync>
     where
         B: 'static,
     {
@@ -434,7 +434,7 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         let mut join_handles = Vec::with_capacity(worker_count);
 
         // Build one type-erased adapter shared across all workers.
-        let dyn_adapter = Arc::new(self.into_dyn_shared());
+        let dyn_adapter = Arc::new(self.to_dyn_shared());
 
         for _ in 0..worker_count {
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
