@@ -68,8 +68,17 @@ pub trait QueueBackend: Send + Sync {
     /// Get job status
     async fn get_status(&self, ctx: QueueCtx, job_id: JobId) -> QueueResult<JobStatus>;
 
-    /// Get full job record (optional - for observability/UI/debugging)
-    async fn get_record(&self, ctx: QueueCtx, job_id: JobId) -> QueueResult<JobRecord>;
+    /// Get full job record.
+    ///
+    /// **Optional** — backends that do not support full record retrieval should
+    /// leave this default in place. The default returns [`QueueError::BackendUnsupported`]
+    /// so callers get a clear, diagnosable error rather than a compile error or panic.
+    /// Backends intended for observability/UI should override this.
+    async fn get_record(&self, _ctx: QueueCtx, job_id: JobId) -> QueueResult<JobRecord> {
+        Err(QueueError::BackendUnsupported(format!(
+            "get_record: this backend does not expose full job records (job_id: {job_id})",
+        )))
+    }
 
     /// Event stream for observability (boxed for stable Rust)
     fn event_stream(&self, ctx: QueueCtx) -> BoxStream<JobEvent>;

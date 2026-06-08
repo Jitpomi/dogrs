@@ -430,6 +430,19 @@ impl QueueBackend for MemoryBackend {
             record.updated_at = now;
         }
 
+        // Capture the new deadline before releasing the write lock.
+        let new_lease_until = record.lease_until().unwrap_or(now);
+        drop(jobs);
+
+        // Emit event outside the lock so subscribers don't block mutations.
+        let event = JobEvent::HeartbeatExtended {
+            job_id: job_id.clone(),
+            tenant_id: ctx.tenant_id.clone(),
+            new_lease_until,
+            at: now,
+        };
+        let _ = self.event_broadcaster.send(event);
+
         Ok(())
     }
 

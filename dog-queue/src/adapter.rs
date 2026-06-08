@@ -217,8 +217,7 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
 
         // Record metrics — pass the real queue name, not a hardcoded default.
         self.observability
-            .record_job_enqueued(&ctx, &job_id, J::JOB_TYPE, &queue_name)
-            .await;
+            .record_job_enqueued(&ctx, &job_id, J::JOB_TYPE, &queue_name);
 
         info!("Enqueued job {} of type {}", job_id, J::JOB_TYPE);
         Ok(job_id)
@@ -539,8 +538,7 @@ impl<C: Send + Sync + 'static> Worker<C> {
 
                 self.adapter
                     .observability
-                    .record_job_failed(&self.ctx, &job_id, job_type, &error_str)
-                    .await;
+                    .record_job_failed(&self.ctx, &job_id, job_type, &error_str);
 
                 // Return Ok(true) — we did process a job (it permanently failed).
                 // Returning Ok(false) would trigger the idle timer for an empty queue;
@@ -573,8 +571,7 @@ impl<C: Send + Sync + 'static> Worker<C> {
 
                 self.adapter
                     .observability
-                    .record_job_completed(&self.ctx, &job_id, job_type)
-                    .await;
+                    .record_job_completed(&self.ctx, &job_id, job_type);
                 info!("Job {} completed successfully", job_id);
             }
 
@@ -615,14 +612,12 @@ impl<C: Send + Sync + 'static> Worker<C> {
                             job_type,
                             &error_str,
                             retry_at_time,
-                        )
-                        .await;
+                        );
                     warn!("Job {} failed, will retry: {}", job_id, error_str);
                 } else {
                     self.adapter
                         .observability
-                        .record_job_failed(&self.ctx, &job_id, job_type, &error_str)
-                        .await;
+                        .record_job_failed(&self.ctx, &job_id, job_type, &error_str);
                     error!("Job {} failed permanently: {}", job_id, error_str);
                 }
             }

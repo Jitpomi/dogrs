@@ -104,7 +104,7 @@ pub use types::{
 };
 
 // Observability exports
-pub use observability::{LiveMetrics, ObservabilityLayer};
+pub use observability::{LiveMetrics, ObservabilityLayer, PerformanceAnalytics};
 
 // Optional feature exports
 #[cfg(feature = "cron-scheduling")]
@@ -145,7 +145,7 @@ pub mod prelude {
     pub use crate::JobRegistry;
 
     // Observability
-    pub use crate::{LiveMetrics, ObservabilityLayer};
+    pub use crate::{LiveMetrics, ObservabilityLayer, PerformanceAnalytics};
 
     // Essential traits
     pub use async_trait::async_trait;

@@ -26,7 +26,7 @@ impl ObservabilityLayer {
     ///
     /// `queue` is the real queue name from the encoded `JobMessage` (not a
     /// hardcoded default); callers must pass `message.queue` or the equivalent.
-    pub async fn record_job_enqueued(
+    pub fn record_job_enqueued(
         &self,
         ctx: &QueueCtx,
         job_id: &JobId,
@@ -39,7 +39,7 @@ impl ObservabilityLayer {
     }
 
     /// Record job completed event
-    pub async fn record_job_completed(&self, _ctx: &QueueCtx, job_id: &JobId, job_type: &str) {
+    pub fn record_job_completed(&self, _ctx: &QueueCtx, job_id: &JobId, job_type: &str) {
         self.metrics.increment_jobs_completed(job_type);
         debug!("Recorded job completed: {} ({})", job_id, job_type);
     }
@@ -48,7 +48,7 @@ impl ObservabilityLayer {
     ///
     /// `error` must be the real job error string from `JobError::to_string()`
     /// so that the event stream carries actionable failure information.
-    pub async fn record_job_failed(
+    pub fn record_job_failed(
         &self,
         _ctx: &QueueCtx,
         job_id: &JobId,
@@ -63,7 +63,7 @@ impl ObservabilityLayer {
     ///
     /// Both `retry_at` and `error` must come from the adapter's actual backoff
     /// calculation and error value — not fabricated inside this method.
-    pub async fn record_job_retrying(
+    pub fn record_job_retrying(
         &self,
         _ctx: &QueueCtx,
         job_id: &JobId,
@@ -124,15 +124,22 @@ impl PerformanceAnalytics {
         }
     }
 
-    /// Get retry rate percentage
+    /// Retry event rate: retry events per terminal job (completed + failed).
+    ///
+    /// Because `jobs_retried` is incremented once per retry *event* (a job
+    /// retried three times contributes 3), dividing by `jobs_enqueued` would
+    /// yield values well above 100% for retryable workloads. The correct
+    /// denominator is the number of terminal jobs (completed or permanently
+    /// failed), which equals the total number of original job attempts.
     pub fn retry_rate(&self) -> f64 {
         let retried = self.observability.metrics.jobs_retried() as f64;
-        let enqueued = self.observability.metrics.jobs_enqueued() as f64;
+        let terminal = self.observability.metrics.jobs_completed() as f64
+            + self.observability.metrics.jobs_failed() as f64;
 
-        if enqueued == 0.0 {
+        if terminal == 0.0 {
             0.0
         } else {
-            (retried / enqueued) * 100.0
+            (retried / terminal) * 100.0
         }
     }
 }

@@ -53,6 +53,19 @@ pub enum JobEvent {
         tenant_id: String,
         at: DateTime<Utc>,
     },
+
+    /// Job heartbeat extended — emitted each time `heartbeat_extend` succeeds.
+    ///
+    /// Event stream consumers (dashboards, liveness probes) can use this event
+    /// to distinguish an actively-processing long-running job from a crashed or
+    /// stalled worker. Without this variant the stream goes silent between the
+    /// initial `Leased` event and the eventual `Completed`/`Failed` event.
+    HeartbeatExtended {
+        job_id: JobId,
+        tenant_id: String,
+        new_lease_until: DateTime<Utc>,
+        at: DateTime<Utc>,
+    },
 }
 
 impl JobEvent {
@@ -65,6 +78,7 @@ impl JobEvent {
             Self::Completed { .. } => "completed",
             Self::Failed { .. } => "failed",
             Self::Canceled { .. } => "canceled",
+            Self::HeartbeatExtended { .. } => "heartbeat_extended",
         }
     }
 
@@ -79,7 +93,8 @@ impl JobEvent {
             | Self::Retrying { tenant_id, .. }
             | Self::Completed { tenant_id, .. }
             | Self::Failed { tenant_id, .. }
-            | Self::Canceled { tenant_id, .. } => tenant_id,
+            | Self::Canceled { tenant_id, .. }
+            | Self::HeartbeatExtended { tenant_id, .. } => tenant_id,
         }
     }
 
@@ -91,7 +106,8 @@ impl JobEvent {
             | Self::Retrying { job_id, .. }
             | Self::Completed { job_id, .. }
             | Self::Failed { job_id, .. }
-            | Self::Canceled { job_id, .. } => job_id,
+            | Self::Canceled { job_id, .. }
+            | Self::HeartbeatExtended { job_id, .. } => job_id,
         }
     }
 
@@ -103,7 +119,8 @@ impl JobEvent {
             | Self::Retrying { at, .. }
             | Self::Completed { at, .. }
             | Self::Failed { at, .. }
-            | Self::Canceled { at, .. } => at,
+            | Self::Canceled { at, .. }
+            | Self::HeartbeatExtended { at, .. } => at,
         }
     }
 }
