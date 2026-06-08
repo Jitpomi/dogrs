@@ -21,7 +21,7 @@ impl QueueCtx {
     /// Create a new queue context with the given tenant ID
     pub fn new(tenant_id: impl Into<String>) -> Self {
         let tenant_id = tenant_id.into();
-        debug_assert!(
+        assert!(
             !tenant_id.is_empty(),
             "QueueCtx tenant_id cannot be empty — an empty tenant_id matches all records \
              whose tenant_id is also empty, bypassing multi-tenant isolation"

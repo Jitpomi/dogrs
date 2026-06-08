@@ -308,19 +308,20 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
     /// reflects all cancellations that go through this adapter method.
     #[instrument(skip(self), fields(tenant_id = %ctx.tenant_id, job_id = %job_id))]
     pub async fn cancel(&self, ctx: QueueCtx, job_id: JobId) -> QueueResult<bool> {
+        // Resolve job_type BEFORE canceling — the record is still in a pre-terminal
+        // state here, so get_record() reliably succeeds.  After cancel() the record
+        // may be archived or cleaned up by backends that do not retain terminal records.
+        let job_type_str = self
+            .backend
+            .get_record(ctx.clone(), job_id.clone())
+            .await
+            .map(|r| r.message.job_type)
+            .unwrap_or_default();
+
         let canceled = self.backend.cancel(ctx.clone(), job_id.clone()).await?;
         if canceled {
-            // Look up the job type for the observability record.
-            // Use get_record if available; fall back gracefully if not (some
-            // backends return BackendUnsupported — skip recording in that case).
-            if let Ok(record) = self.backend.get_record(ctx.clone(), job_id.clone()).await {
-                self.observability
-                    .record_job_canceled(&ctx, &job_id, &record.message.job_type);
-            } else {
-                // Backend doesn't expose full records — record with empty job_type
-                // so the global canceled counter still advances.
-                self.observability.record_job_canceled(&ctx, &job_id, "");
-            }
+            self.observability
+                .record_job_canceled(&ctx, &job_id, &job_type_str);
             info!("Canceled job {}", job_id);
         }
         Ok(canceled)
@@ -474,10 +475,7 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         &self,
         ctx: QueueCtx,
         job_id: JobId,
-    ) -> QueueResult<Option<J::Result>>
-    where
-        J::Result: serde::de::DeserializeOwned,
-    {
+    ) -> QueueResult<Option<J::Result>> {
         let record = self.backend.get_record(ctx, job_id).await?;
 
         let result_str = match record.result {
@@ -574,8 +572,14 @@ impl<C: Send + Sync + 'static> Worker<C> {
                         Err(e) => {
                             error!("Error processing job: {}", e);
                             // Infrastructure error — back off before retrying to avoid
-                            // hammering a degraded backend. Does not reset the idle clock
-                            // because the queue may still be empty.
+                            // hammering a degraded backend.
+                            //
+                            // Reset `idle_since` to distinguish a degraded backend (worker
+                            // is active, just failing) from a truly idle queue (no jobs).
+                            // Without this reset, a backend outage lasting longer than
+                            // `worker_idle_timeout` would self-terminate all workers — they
+                            // would exit exactly when recovery throughput is most needed.
+                            idle_since = None;
                             tokio::time::sleep(self.adapter.config.error_backoff).await;
                         }
                     }

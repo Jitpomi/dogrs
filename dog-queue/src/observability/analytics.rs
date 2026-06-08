@@ -116,23 +116,24 @@ impl PerformanceAnalytics {
     /// This is a monotonically-increasing lifetime count, **not a rate**.
     /// To compute a true throughput (jobs/second), snapshot this value twice
     /// with a known elapsed duration and divide the delta by the elapsed seconds.
+    ///
+    /// Uses a single coherent [`GlobalMetrics`](crate::observability::metrics::GlobalMetrics)
+    /// snapshot so `completed` and `failed` are read from the same atomic state.
     pub fn total_jobs_processed(&self) -> u64 {
-        self.observability.metrics.jobs_completed() + self.observability.metrics.jobs_failed()
+        let (global, _) = self.observability.metrics.snapshot_all();
+        global.jobs_completed + global.jobs_failed
     }
 
     /// Get success rate percentage.
     ///
     /// Returns `0.0` when no jobs have completed or failed (no data ≠ perfect record).
+    ///
+    /// Delegates to [`GlobalMetrics::success_rate`](crate::observability::metrics::GlobalMetrics::success_rate)
+    /// on a coherent [`snapshot_all`](crate::LiveMetrics::snapshot_all) snapshot
+    /// so `completed` and `failed` are read from the same atomic state.
     pub fn success_rate(&self) -> f64 {
-        let completed = self.observability.metrics.jobs_completed() as f64;
-        let failed = self.observability.metrics.jobs_failed() as f64;
-        let total = completed + failed;
-
-        if total == 0.0 {
-            0.0 // no data — not 100%
-        } else {
-            (completed / total) * 100.0
-        }
+        let (global, _) = self.observability.metrics.snapshot_all();
+        global.success_rate()
     }
 
     /// Retry event rate: retry events per terminal job (completed + failed).
@@ -142,15 +143,11 @@ impl PerformanceAnalytics {
     /// yield values well above 100% for retryable workloads. The correct
     /// denominator is the number of terminal jobs (completed or permanently
     /// failed), which equals the total number of original job attempts.
+    ///
+    /// Delegates to [`GlobalMetrics::retry_rate`](crate::observability::metrics::GlobalMetrics::retry_rate)
+    /// on a coherent snapshot so all three counters are read atomically.
     pub fn retry_rate(&self) -> f64 {
-        let retried = self.observability.metrics.jobs_retried() as f64;
-        let terminal = self.observability.metrics.jobs_completed() as f64
-            + self.observability.metrics.jobs_failed() as f64;
-
-        if terminal == 0.0 {
-            0.0
-        } else {
-            (retried / terminal) * 100.0
-        }
+        let (global, _) = self.observability.metrics.snapshot_all();
+        global.retry_rate()
     }
 }
