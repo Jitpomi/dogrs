@@ -56,7 +56,12 @@ impl JobStatus {
         }
     }
 
-    /// Get the status name as a string
+    /// Get the status name as a string.
+    ///
+    /// This match is exhaustive inside the defining crate — `#[non_exhaustive]`
+    /// only constrains external matchers.  Adding a new `JobStatus` variant
+    /// will cause a compile error here, which is the correct signal to update
+    /// the name mapping alongside the new variant.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Enqueued => "enqueued",
@@ -65,7 +70,6 @@ impl JobStatus {
             Self::Completed { .. } => "completed",
             Self::Failed { .. } => "failed",
             Self::Canceled { .. } => "canceled",
-            _ => "unknown", // catch-all for future non_exhaustive variants
         }
     }
 }
@@ -273,36 +277,24 @@ impl LeasedJob {
 
     /// Check if the lease is still valid.
     ///
-    /// # Warning — stale after heartbeat extensions
+    /// > **Warning — stale after heartbeat extensions**
     ///
-    /// This method compares `now` against the [`lease_until`](Self::lease_until)
-    /// field captured at dequeue time.  After any successful
-    /// `heartbeat_extend` call the backend deadline is extended, but
-    /// `lease_until` is not refreshed.  Calling this method after a heartbeat
-    /// will silently return `false` for a lease that is actually alive.
+    /// `lease_until` is a point-in-time snapshot captured at `dequeue` time.
+    /// After any successful `heartbeat_extend` call the backend deadline is
+    /// extended, but this field is **never refreshed**. Comparing against it
+    /// after a heartbeat silently returns `false` for a lease that is alive.
     ///
     /// Prefer tracking the `new_lease_until` value from the most recent
-    /// `heartbeat_extend` result for post-heartbeat validity checks.
-    #[deprecated(
-        since = "0.1.0",
-        note = "lease_until is a dequeue-time snapshot and is stale after \
-                heartbeat_extend. Compare against the most recent heartbeat \
-                result instead."
-    )]
+    /// `heartbeat_extend` call for post-heartbeat validity checks.
     pub fn lease_valid(&self, now: DateTime<Utc>) -> bool {
         self.lease_until > now
     }
 
     /// Time remaining on the lease, or `None` if expired.
     ///
-    /// # Warning — stale after heartbeat extensions
+    /// > **Warning — stale after heartbeat extensions**
     ///
     /// Same stale-snapshot caveat as [`lease_valid`](Self::lease_valid).
-    #[deprecated(
-        since = "0.1.0",
-        note = "lease_until is a dequeue-time snapshot and is stale after \
-                heartbeat_extend. Track the most recent heartbeat deadline instead."
-    )]
     pub fn lease_remaining(&self, now: DateTime<Utc>) -> Option<chrono::Duration> {
         let remaining = self.lease_until - now;
         if remaining > chrono::Duration::zero() {
