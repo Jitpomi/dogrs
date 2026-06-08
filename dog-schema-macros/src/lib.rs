@@ -48,7 +48,17 @@ pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
 
     let mut module = parse_macro_input!(item as ItemMod);
 
-    let service = service.unwrap_or_else(|| LitStr::new("", proc_macro2::Span::call_site()));
+    let service = match service {
+        Some(s) => s,
+        None => {
+            return syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[schema] requires a `service` argument: #[schema(service = \"my_service\")]",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
     let error_message = error_message
         .unwrap_or_else(|| LitStr::new("Schema validation failed", proc_macro2::Span::call_site()));
     let backend =

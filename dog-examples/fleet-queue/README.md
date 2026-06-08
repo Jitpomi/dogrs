@@ -64,7 +64,24 @@ What would take hundreds of lines of application code and database ORM joins is 
    npm run build-css
    ```
 
-3. **Start the Backend:**
+3. **Set Required Environment Variables:**
+
+   The following env vars must be set before starting the backend:
+
+   | Variable | Required | Description |
+   |---|---|---|
+   | `TOMTOM_API_KEY` | **Yes** | TomTom API key. Get one free at https://developer.tomtom.com — used for map tiles and routing. |
+   | `TOMTOM_BASE_URL` | **Yes** | TomTom API base URL (e.g. `https://api.tomtom.com`). |
+   | `HTTP_HOST` | No | Server bind host (default: `127.0.0.1`). |
+   | `HTTP_PORT` | No | Server bind port (default: `3036`). |
+
+   Example `.env`:
+   ```bash
+   TOMTOM_API_KEY=your_key_here
+   TOMTOM_BASE_URL=https://api.tomtom.com
+   ```
+
+4. **Start the Backend:**
    ```bash
    cargo run
    ```

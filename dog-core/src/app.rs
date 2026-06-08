@@ -2,7 +2,7 @@ use crate::events::PublishFn;
 use anyhow::Result;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::hooks::{collect_method_hooks, HookFut};
 use crate::{
@@ -17,7 +17,10 @@ where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    registry: DogServiceRegistry<R, P>,
+    // Registry is the only field that allows post-build mutation:
+    // `AxumApp::use_service_as` registers services at router-build time.
+    // All other fields are fully frozen after `DogAppBuilder::build()`.
+    registry: RwLock<DogServiceRegistry<R, P>>,
     global_hooks: ServiceHooks<R, P>,
     service_hooks: HashMap<String, ServiceHooks<R, P>>,
     config: DogConfig,
@@ -158,7 +161,7 @@ where
     pub fn build(self) -> DogApp<R, P> {
         DogApp {
             inner: Arc::new(DogAppInner {
-                registry: self.registry,
+                registry: RwLock::new(self.registry),
                 global_hooks: self.global_hooks,
                 service_hooks: self.service_hooks,
                 config: self.config,
@@ -300,13 +303,31 @@ where
         self.inner.any_state.get(key).and_then(|b| T::from_any(b))
     }
 
+    /// Register a service at runtime.
+    ///
+    /// Prefer `DogAppBuilder::register_service` for build-time registration.
+    /// This method exists so that `AxumApp::use_service_as` can register services
+    /// at router-setup time (after `build()`).
+    pub fn register_service<S>(&self, name: S, service: Arc<dyn DogService<R, P>>)
+    where
+        S: Into<String>,
+    {
+        self.inner
+            .registry
+            .write()
+            .unwrap()
+            .register(name.into(), service);
+    }
+
     pub fn service(&self, name: &str) -> Result<ServiceHandle<R, P>> {
         let svc = self
             .inner
             .registry
+            .read()
+            .unwrap()
             .get(name)
-            .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))?
-            .clone();
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))?;
 
         Ok(ServiceHandle {
             app: self.clone(),
@@ -449,7 +470,10 @@ where
         let service_call_inner = service_call.clone();
 
         let res = if around.is_empty() {
-            // FAST PATH: Zero allocations
+            // FAST PATH: Zero allocations when no around hooks are registered.
+            // NOTE: On before-hook or service error, after-hooks are intentionally skipped.
+            // After-hooks are success-path transformations only. Error cleanup belongs
+            // in error hooks (registered via service_hooks(..).on_error(..)).
             for h in &before {
                 if let Err(e) = h.run(&mut ctx).await {
                     ctx.error = Some(e);
@@ -871,6 +895,8 @@ where
         self.app
             .inner
             .registry
+            .read()
+            .unwrap()
             .get(name)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))

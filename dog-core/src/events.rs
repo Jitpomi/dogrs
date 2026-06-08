@@ -221,7 +221,19 @@ where
         before - self.listeners.len()
     }
 
+    /// Remove `once` listeners that have already fired.
     ///
+    /// `snapshot_emit` prevents a `once` listener from being called twice via an
+    /// `AtomicBool`, but fired entries are never automatically removed from the Vec.
+    /// In long-running servers that register many `once` listeners at runtime
+    /// (e.g. request-scoped subscriptions), call this periodically to reclaim memory.
+    ///
+    /// For build-time-only `once` listeners the growth is bounded and this is rarely needed.
+    pub fn prune_once_listeners(&mut self) {
+        self.listeners
+            .retain(|e| !(e.once && e.called.load(Ordering::Relaxed)));
+    }
+
     /// NOTE: no `.await` here, so it’s safe under a read-lock (or entirely lock-free).
     pub fn snapshot_emit<'a>(
         &'a self,

@@ -41,6 +41,9 @@ pub async fn build() -> anyhow::Result<AxumApp<Value, FleetParams>> {
         .use_service("/certifications", _svcs.certifications)
         .service("/health", || async { "ok" })
         .service("/config", || async {
+            // TomTom map API keys are intentionally served to the browser.
+            // Map SDK clients (Leaflet/MapLibre + TomTom plugin) require the key
+            // client-side to render tiles. This is expected behaviour for map keys.
             let key = std::env::var("TOMTOM_API_KEY").unwrap_or_default();
             format!("{{\"tomtomApiKey\":\"{}\"}}", key)
         });

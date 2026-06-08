@@ -165,16 +165,29 @@ where
         self.use_service_as(path, name, service)
     }
 
+    /// Mount a service at `path`, routing requests to the service registered under `service_name`.
+    ///
+    /// Also registers `service` in the app under `service_name` so it can be looked up at
+    /// request time. This is equivalent to calling `DogAppBuilder::register_service` at build
+    /// time — if the service was already registered there, this call overwrites with the same Arc.
+    ///
+    /// # Migration note
+    /// Prior to the builder pattern, `use_service` registered services directly on the app.
+    /// If you previously relied on that implicit registration, pass the Arc here as the third
+    /// argument — it will be registered under `service_name` automatically.
     pub fn use_service_as(
         mut self,
         path: &'static str,
         service_name: &'static str,
-        _service: Arc<dyn DogService<R, P>>,
+        service: Arc<dyn DogService<R, P>>,
     ) -> Self
     where
         R: Serialize + DeserializeOwned,
         P: FromRestParams,
     {
+        // Register the service so it can be resolved at request time.
+        self.app.register_service(service_name, service);
+
         let service_name = Arc::new(service_name.to_string());
         let mut router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
 
@@ -210,7 +223,7 @@ where
         mut self,
         path: &'static str,
         service_name: &'static str,
-        _service: Arc<dyn DogService<R, P>>,
+        service: Arc<dyn DogService<R, P>>,
         middleware: L,
     ) -> Self
     where
@@ -222,6 +235,9 @@ where
         <L::Service as tower::Service<Request<Body>>>::Future: Send,
         <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
     {
+        // Register the service so it can be resolved at request time.
+        self.app.register_service(service_name, service);
+
         let service_name = Arc::new(service_name.to_string());
         let router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
 
