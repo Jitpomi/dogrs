@@ -68,9 +68,14 @@ fn configure_http(dog_app: &mut dog_core::DogAppBuilder<Value, FleetParams>) -> 
 fn configure_external_apis(
     dog_app: &mut dog_core::DogAppBuilder<Value, FleetParams>,
 ) -> Result<()> {
-    // TomTom API configuration from environment variables
-    let tomtom_key = env::var("TOMTOM_API_KEY")?;
-    let tomtom_base_url = env::var("TOMTOM_BASE_URL")?;
+    // TomTom API configuration.
+    // TOMTOM_API_KEY and TOMTOM_BASE_URL are required for the TomTom service to function.
+    // If unset, requests to the TomTom service will fail gracefully at call time
+    // rather than preventing the server from starting — useful for local dev without TomTom.
+    let tomtom_key =
+        env::var("TOMTOM_API_KEY").unwrap_or_default();
+    let tomtom_base_url = env::var("TOMTOM_BASE_URL")
+        .unwrap_or_else(|_| "https://api.tomtom.com".to_string());
 
     dog_app.set("tomtom.key", tomtom_key);
     dog_app.set("tomtom.baseUrl", tomtom_base_url);

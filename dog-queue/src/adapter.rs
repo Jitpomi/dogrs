@@ -316,8 +316,11 @@ impl<C: Send + Sync + 'static> Worker<C> {
             Err(job_error) => {
                 // Job failed - determine if retryable
                 let is_retryable = job_error.is_retryable();
+                // MAX_RETRIES is the number of *extra* retries after the initial attempt
+                // (same convention as Bull, Sidekiq, Celery). Use <= so that
+                // attempt == MAX_RETRIES still schedules one more retry.
                 let retry_at = if is_retryable
-                    && leased_job.record.attempt < leased_job.record.message.max_retries
+                    && leased_job.record.attempt <= leased_job.record.message.max_retries
                 {
                     Some(self.calculate_retry_time(leased_job.record.attempt))
                 } else {

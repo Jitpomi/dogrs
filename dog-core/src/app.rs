@@ -315,7 +315,7 @@ where
         self.inner
             .registry
             .write()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .register(name.into(), service);
     }
 
@@ -324,7 +324,7 @@ where
             .inner
             .registry
             .read()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get(name)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("DogService not found: {name}"))?;

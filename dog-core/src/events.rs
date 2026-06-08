@@ -109,23 +109,31 @@ where
     called: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// Number of `snapshot_emit` calls between lazy once-listener prune sweeps.
+const PRUNE_INTERVAL: u32 = 256;
+
 /// Minimal runtime-agnostic event hub.
 ///
 /// IMPORTANT DESIGN:
 /// - We do NOT want callers to need `&mut DogEventHub` just to emit, because
-///   DogApp holds this behind an `RwLock`.
+///   DogApp holds this behind an `Arc`.
 /// - We also do NOT want to hold a lock across `.await`.
 ///
 /// So we split emission into:
-/// 1) snapshot (read-only, no await)
+/// 1) snapshot (read-lock, no await)
 /// 2) await listeners (no lock held)
-/// 3) cleanup once-listeners (write-lock, no await)
+/// 3) lazy prune of dead once-entries (write-lock, every PRUNE_INTERVAL emits)
 pub struct DogEventHub<R, P>
 where
     R: Send + 'static,
     P: Send + Clone + 'static,
 {
-    listeners: Vec<ListenerEntry<R, P>>,
+    /// Interior-mutable so that `prune_once_listeners` and periodic auto-pruning
+    /// can be called via `&self` through an `Arc<DogAppInner>`.
+    /// Poison is recovered with `unwrap_or_else(|e| e.into_inner())`.
+    listeners: std::sync::RwLock<Vec<ListenerEntry<R, P>>>,
+    /// Monotonic counter for triggering lazy prune in `snapshot_emit`.
+    emit_count: std::sync::atomic::AtomicU32,
     publish: Option<PublishFn<R, P>>,
 }
 
@@ -146,7 +154,8 @@ where
 {
     pub fn new() -> Self {
         Self {
-            listeners: Vec::new(),
+            listeners: std::sync::RwLock::new(Vec::new()),
+            emit_count: std::sync::atomic::AtomicU32::new(0),
             publish: None,
         }
     }
@@ -176,13 +185,16 @@ where
         listener: EventListener<R, P>,
     ) -> ListenerId {
         let id = next_listener_id();
-        self.listeners.push(ListenerEntry {
-            id,
-            pattern,
-            listener,
-            once: false,
-            called: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        });
+        self.listeners
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(ListenerEntry {
+                id,
+                pattern,
+                listener,
+                once: false,
+                called: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            });
         id
     }
 
@@ -193,48 +205,52 @@ where
         listener: EventListener<R, P>,
     ) -> ListenerId {
         let id = next_listener_id();
-        self.listeners.push(ListenerEntry {
-            id,
-            pattern,
-            listener,
-            once: true,
-            called: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        });
+        self.listeners
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(ListenerEntry {
+                id,
+                pattern,
+                listener,
+                once: true,
+                called: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            });
         id
     }
 
     /// removeListener/off
     pub fn off(&mut self, id: ListenerId) -> bool {
-        let before = self.listeners.len();
-        self.listeners.retain(|e| e.id != id);
-        before != self.listeners.len()
+        let mut listeners = self.listeners.write().unwrap_or_else(|e| e.into_inner());
+        let before = listeners.len();
+        listeners.retain(|e| e.id != id);
+        before != listeners.len()
     }
 
     /// removeAllListeners (optionally scoped)
     pub fn remove_all(&mut self, pattern: Option<&ServiceEventPattern>) -> usize {
-        let before = self.listeners.len();
+        let mut listeners = self.listeners.write().unwrap_or_else(|e| e.into_inner());
+        let before = listeners.len();
         if let Some(p) = pattern {
-            self.listeners.retain(|e| &e.pattern != p);
+            listeners.retain(|e| &e.pattern != p);
         } else {
-            self.listeners.clear();
+            listeners.clear();
         }
-        before - self.listeners.len()
+        before - listeners.len()
     }
 
     /// Remove `once` listeners that have already fired.
     ///
-    /// `snapshot_emit` prevents a `once` listener from being called twice via an
-    /// `AtomicBool`, but fired entries are never automatically removed from the Vec.
-    /// In long-running servers that register many `once` listeners at runtime
-    /// (e.g. request-scoped subscriptions), call this periodically to reclaim memory.
-    ///
-    /// For build-time-only `once` listeners the growth is bounded and this is rarely needed.
-    pub fn prune_once_listeners(&mut self) {
+    /// Called automatically every `PRUNE_INTERVAL` emits via `snapshot_emit`.
+    /// Can also be called explicitly via `DogApp::prune_once_listeners()`
+    /// when you know a burst of request-scoped `once` listeners has fired.
+    pub fn prune_once_listeners(&self) {
         self.listeners
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
             .retain(|e| !(e.once && e.called.load(Ordering::Relaxed)));
     }
 
-    /// NOTE: no `.await` here, so it’s safe under a read-lock (or entirely lock-free).
+    /// NOTE: no `.await` here, so it's safe to hold the read-lock briefly.
     pub fn snapshot_emit<'a>(
         &'a self,
         path: &str,
@@ -250,13 +266,23 @@ where
 
         let mut to_call: Vec<EventListener<R, P>> = Vec::new();
 
-        for entry in &self.listeners {
-            if entry.pattern.matches(path, event) {
-                if entry.once && entry.called.swap(true, Ordering::SeqCst) {
-                    continue;
+        {
+            let listeners = self.listeners.read().unwrap_or_else(|e| e.into_inner());
+            for entry in listeners.iter() {
+                if entry.pattern.matches(path, event) {
+                    if entry.once && entry.called.swap(true, Ordering::SeqCst) {
+                        continue;
+                    }
+                    to_call.push(entry.listener.clone());
                 }
-                to_call.push(entry.listener.clone());
             }
+        } // read lock dropped here
+
+        // Lazy prune: reclaim dead `once` entries every PRUNE_INTERVAL emits.
+        // The write-lock is only acquired on the prune cycle.
+        let count = self.emit_count.fetch_add(1, Ordering::Relaxed);
+        if count % PRUNE_INTERVAL == PRUNE_INTERVAL - 1 {
+            self.prune_once_listeners();
         }
 
         to_call

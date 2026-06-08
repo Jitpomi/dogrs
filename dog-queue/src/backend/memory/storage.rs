@@ -294,7 +294,7 @@ impl QueueBackend for MemoryBackend {
         }
 
         // Check if max retries exceeded
-        if record.attempt >= record.message.max_retries {
+        if record.attempt > record.message.max_retries {
             record.fail(format!("Max retries exceeded: {}", error));
 
             let event = JobEvent::Failed {

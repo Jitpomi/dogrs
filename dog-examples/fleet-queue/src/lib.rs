@@ -44,6 +44,10 @@ pub async fn build() -> anyhow::Result<AxumApp<Value, FleetParams>> {
             // TomTom map API keys are intentionally served to the browser.
             // Map SDK clients (Leaflet/MapLibre + TomTom plugin) require the key
             // client-side to render tiles. This is expected behaviour for map keys.
+            //
+            // PRODUCTION SECURITY: Restrict this key to known domains in the
+            // TomTom Developer Portal (API Key → Referrer restrictions) so that
+            // the key cannot be used from arbitrary origins even if intercepted.
             let key = std::env::var("TOMTOM_API_KEY").unwrap_or_default();
             format!("{{\"tomtomApiKey\":\"{}\"}}", key)
         });
