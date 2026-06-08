@@ -126,8 +126,17 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         }
     }
 
-    /// Create adapter with custom configuration
+    /// Create adapter with custom configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `config` violates an invariant checked by [`QueueConfig::validate`]
+    /// (e.g. `max_workers == 0` or `base_retry_backoff > max_retry_backoff`).
+    /// Use [`Self::try_with_config`] when you need a fallible constructor.
     pub fn with_config(backend: B, config: QueueConfig) -> Self {
+        config
+            .validate()
+            .expect("QueueConfig is invalid — see QueueConfig::validate() for details");
         Self {
             backend: Arc::new(backend),
             codec_registry: Arc::new(CodecRegistry::new()),
@@ -135,6 +144,21 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
             observability: Arc::new(ObservabilityLayer::new()),
             config,
         }
+    }
+
+    /// Create adapter with custom configuration, returning an error on invalid config.
+    ///
+    /// Prefer this over [`Self::with_config`] when the config is derived from
+    /// runtime inputs (environment variables, config files) rather than constants.
+    pub fn try_with_config(backend: B, config: QueueConfig) -> QueueResult<Self> {
+        config.validate()?;
+        Ok(Self {
+            backend: Arc::new(backend),
+            codec_registry: Arc::new(CodecRegistry::new()),
+            job_registry: Arc::new(RwLock::new(JobRegistry::new())),
+            observability: Arc::new(ObservabilityLayer::new()),
+            config,
+        })
     }
 
     /// Create adapter with custom codec registry

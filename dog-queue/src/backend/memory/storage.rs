@@ -170,6 +170,12 @@ impl QueueBackend for MemoryBackend {
             // eligibility is checked here without touching the `jobs` map.
             // Canceled entries whose run_at has passed are removed here and
             // discarded in phase 2 (lazy tombstone cleanup).
+            //
+            // Performance note: `position()` is O(n) over the VecDeque.
+            // Entries are ordered (priority DESC, run_at ASC), so future-dated
+            // high-priority entries at the head are scanned every poll.
+            // For in-memory use at small scale this is acceptable; a split
+            // ready-queue / future-heap structure would make this O(1).
             let candidate = {
                 let mut queues_lock = self.queues.write();
                 queues_lock
@@ -200,6 +206,7 @@ impl QueueBackend for MemoryBackend {
 
                             let event = JobEvent::Leased {
                                 job_id: job_id.clone(),
+                                tenant_id: record.tenant_id.clone(),
                                 lease_until,
                                 at: now,
                             };
@@ -274,6 +281,7 @@ impl QueueBackend for MemoryBackend {
         // Emit event
         let event = JobEvent::Completed {
             job_id: job_id.clone(),
+            tenant_id: ctx.tenant_id.clone(),
             at: now,
         };
         let _ = self.event_broadcaster.send(event);
@@ -346,6 +354,7 @@ impl QueueBackend for MemoryBackend {
 
             let event = JobEvent::Retrying {
                 job_id: job_id.clone(),
+                tenant_id: ctx.tenant_id.clone(),
                 retry_at: retry_time,
                 error: error.clone(),
                 at: now,
@@ -357,6 +366,7 @@ impl QueueBackend for MemoryBackend {
 
             let event = JobEvent::Failed {
                 job_id: job_id.clone(),
+                tenant_id: ctx.tenant_id.clone(),
                 error,
                 at: now,
             };
@@ -393,6 +403,17 @@ impl QueueBackend for MemoryBackend {
         // Verify lease token
         if record.lease_token.as_ref() != Some(&lease_token) {
             return Err(QueueError::InvalidLeaseToken);
+        }
+
+        // Explicitly guard that the job is still Processing before extending.
+        // While functionally safe today (lease_until is Some only while Processing),
+        // an implicit invariant across four methods is fragile under refactoring.
+        if !matches!(record.status, JobStatus::Processing { .. }) {
+            return Err(QueueError::Internal(format!(
+                "heartbeat_extend called on job {} in '{}' state (must be Processing)",
+                job_id,
+                record.status.name(),
+            )));
         }
 
         if let Some(ref mut lease_until) = record.lease_until {
@@ -436,6 +457,7 @@ impl QueueBackend for MemoryBackend {
         // Emit event
         let event = JobEvent::Canceled {
             job_id: job_id.clone(),
+            tenant_id: ctx.tenant_id.clone(),
             at: now,
         };
         let _ = self.event_broadcaster.send(event);
@@ -471,11 +493,15 @@ impl QueueBackend for MemoryBackend {
         Ok(record.clone())
     }
 
-    fn event_stream(&self, _ctx: QueueCtx) -> BoxStream<JobEvent> {
+    fn event_stream(&self, ctx: QueueCtx) -> BoxStream<JobEvent> {
         let receiver = self.event_broadcaster.subscribe();
         use tokio_stream::{wrappers::BroadcastStream, StreamExt};
-        let stream = BroadcastStream::new(receiver).filter_map(|result| result.ok());
-
+        let tenant_id = ctx.tenant_id;
+        // Filter events so each tenant only receives events from their own jobs.
+        // JobEvent::tenant_id() returns the originating tenant for every variant.
+        let stream = BroadcastStream::new(receiver)
+            .filter_map(|result| result.ok())
+            .filter(move |e| e.tenant_id() == tenant_id);
         Box::pin(stream)
     }
 

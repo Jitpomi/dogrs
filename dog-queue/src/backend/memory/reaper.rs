@@ -140,6 +140,7 @@ impl LeaseReaper {
 
                     events.push(JobEvent::Failed {
                         job_id: job_id.clone(),
+                        tenant_id: record.tenant_id.clone(),
                         error: "Max retries exceeded due to lease expiry".to_string(),
                         at: now,
                     });
@@ -156,6 +157,7 @@ impl LeaseReaper {
 
                     events.push(JobEvent::Retrying {
                         job_id: job_id.clone(),
+                        tenant_id: record.tenant_id.clone(),
                         retry_at: now,
                         error: "Lease expired".to_string(),
                         at: now,

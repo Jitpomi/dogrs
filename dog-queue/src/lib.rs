@@ -99,8 +99,8 @@ pub use codec::{CodecRegistry, EnqueueOptions, JobCodec};
 pub use error::{JobError, QueueError, QueueResult};
 pub use job::{Job, JobRegistry};
 pub use types::{
-    JobEvent, JobId, JobMessage, JobPriority, JobRecord, JobStatus, LeasedJob, QueueCapabilities,
-    QueueCtx, QueueFeature,
+    JobEvent, JobId, JobMessage, JobPriority, JobRecord, JobStatus, LeaseToken, LeasedJob,
+    QueueCapabilities, QueueCtx, QueueFeature,
 };
 
 // Observability exports
@@ -136,7 +136,7 @@ pub mod prelude {
     pub use crate::{Job, QueueAdapter, QueueBackend};
 
     // Essential types
-    pub use crate::{JobError, JobId, JobPriority, JobStatus, QueueCtx, QueueResult};
+    pub use crate::{JobError, JobId, JobPriority, JobStatus, LeaseToken, QueueCtx, QueueResult};
 
     // Codec system
     pub use crate::{CodecRegistry, JobCodec, JsonCodec};
