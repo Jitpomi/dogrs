@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::{BlobId, ByteRange, ByteStream, UploadId};
+use serde::{Deserialize, Serialize};
 
 /// Receipt returned after successfully storing a blob
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,10 +46,7 @@ pub enum OpenedContent {
         resolved_range: Option<ResolvedRange>,
     },
     /// Redirect to a signed URL
-    SignedUrl {
-        url: String,
-        expires_at: i64,
-    },
+    SignedUrl { url: String, expires_at: i64 },
 }
 
 /// Range information for partial content
@@ -149,7 +146,11 @@ impl BlobReceipt {
 
 impl OpenedBlob {
     /// Create with streaming content
-    pub fn stream(receipt: BlobReceipt, stream: ByteStream, resolved_range: Option<ResolvedRange>) -> Self {
+    pub fn stream(
+        receipt: BlobReceipt,
+        stream: ByteStream,
+        resolved_range: Option<ResolvedRange>,
+    ) -> Self {
         Self {
             receipt,
             content: OpenedContent::Stream {
@@ -170,9 +171,9 @@ impl OpenedBlob {
     /// Check if this is a partial content response
     pub fn is_partial(&self) -> bool {
         match &self.content {
-            OpenedContent::Stream { resolved_range, .. } => {
-                resolved_range.as_ref().map_or(false, |r| !r.is_full_content())
-            }
+            OpenedContent::Stream { resolved_range, .. } => resolved_range
+                .as_ref()
+                .is_some_and(|r| !r.is_full_content()),
             OpenedContent::SignedUrl { .. } => false,
         }
     }
@@ -180,11 +181,9 @@ impl OpenedBlob {
     /// Get content length
     pub fn content_length(&self) -> u64 {
         match &self.content {
-            OpenedContent::Stream { resolved_range, .. } => {
-                resolved_range
-                    .as_ref()
-                    .map_or(self.receipt.size_bytes, |r| r.content_length())
-            }
+            OpenedContent::Stream { resolved_range, .. } => resolved_range
+                .as_ref()
+                .map_or(self.receipt.size_bytes, |r| r.content_length()),
             OpenedContent::SignedUrl { .. } => self.receipt.size_bytes,
         }
     }

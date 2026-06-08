@@ -1,46 +1,69 @@
-pub mod typedb;
-pub mod services;
-pub mod hooks;
-pub mod channels;
-pub mod background;
-pub mod config;
 pub mod app;
+pub mod background;
+pub mod channels;
+pub mod config;
+pub mod hooks;
+pub mod services;
+pub mod typedb;
 
-use std::sync::Arc;
-use serde_json::Value;
 use dog_axum::AxumApp;
+use serde_json::Value;
 pub use services::FleetParams;
+use std::sync::Arc;
 
 pub async fn build() -> anyhow::Result<AxumApp<Value, FleetParams>> {
-    let ax = app::fleet_app().await?;
+    let mut builder = app::build_builder().await?;
 
-    let state = ax.app.get::<Arc<typedb::TypeDBState>>("typedb").ok_or(anyhow::anyhow!("TypeDBState not found"))?;
+    let state = builder
+        .get::<Arc<typedb::TypeDBState>>("typedb")
+        .ok_or(anyhow::anyhow!("TypeDBState not found"))?;
 
-    // Initialize background system and store in app state  
-    let mut background_system = background::BackgroundSystem::new(Arc::new(ax.clone())).await?;
-    background_system.start().await?;
-    let background_system = Arc::new(background_system);
-    ax.app.set("background_system", background_system.clone());
+    // Initialize background system
+    let background_system = Arc::new(background::BackgroundSystem::new().await?);
 
-    let svcs = services::configure(ax.app.as_ref(), Arc::clone(&state))?;
+    // Pass it to configure BEFORE building the app
+    let _svcs = services::configure(
+        &mut builder,
+        Arc::clone(&state),
+        Arc::clone(&background_system),
+    )?;
 
-    let mut ax = ax
-        .use_service("/vehicles", svcs.vehicles)
-        .use_service("/deliveries", svcs.deliveries)
-        .use_service("/operations", svcs.operations)
-        .use_service("/employees", svcs.employees)
-        .use_service("/tomtom", svcs.tomtom)
-        .use_service("/jobs", svcs.jobs)
-        .use_service("/rules", svcs.rules)
-        .use_service("/certifications", svcs.certifications)
-        .service("/health", || async { "ok" });
+    // Build the app (moves the builder)
+    let dog_app = builder.build();
+    let mut ax = dog_axum::axum(dog_app.clone())
+        .use_service("/vehicles", _svcs.vehicles)
+        .use_service("/deliveries", _svcs.deliveries)
+        .use_service("/operations", _svcs.operations)
+        .use_service("/employees", _svcs.employees)
+        .use_service("/tomtom", _svcs.tomtom)
+        .use_service("/jobs", _svcs.jobs)
+        .use_service("/rules", _svcs.rules)
+        .use_service("/certifications", _svcs.certifications)
+        .service("/health", || async { "ok" })
+        .service("/config", || async {
+            // TomTom map API keys are intentionally served to the browser.
+            // Map SDK clients (Leaflet/MapLibre + TomTom plugin) require the key
+            // client-side to render tiles. This is expected behaviour for map keys.
+            //
+            // PRODUCTION SECURITY: Restrict this key to known domains in the
+            // TomTom Developer Portal (API Key → Referrer restrictions) so that
+            // the key cannot be used from arbitrary origins even if intercepted.
+            let key = std::env::var("TOMTOM_API_KEY").unwrap_or_default();
+            format!("{{\"tomtomApiKey\":\"{}\"}}", key)
+        });
+
+    // Start background system with built app
+    background_system.start(dog_app).await?;
 
     // Add CORS middleware to allow browser requests
-    ax.router = ax.router
-        .layer(tower_http::cors::CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods(tower_http::cors::Any)
-            .allow_headers(tower_http::cors::Any))
+    ax.router = ax
+        .router
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any),
+        )
         .fallback_service(tower_http::services::ServeDir::new("static"));
 
     Ok(ax)

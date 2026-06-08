@@ -1,11 +1,11 @@
-use std::sync::Arc;
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use std::sync::Arc;
 
 use crate::{
-    BlobConfig, BlobCtx, BlobError, BlobKeyStrategy, BlobReceipt, BlobResult, BlobStore,
-    ByteStream, PartReceipt, UploadCoordinator, UploadId, UploadIntent,
-    UploadSession, UploadSessionStore, UploadStatus, UploadProgress, receipt::UploadInfo
+    receipt::UploadInfo, BlobConfig, BlobCtx, BlobError, BlobKeyStrategy, BlobReceipt, BlobResult,
+    BlobStore, ByteStream, PartReceipt, UploadCoordinator, UploadId, UploadIntent, UploadProgress,
+    UploadSession, UploadSessionStore, UploadStatus,
 };
 
 /// Default upload coordinator that handles both native multipart and staged assembly
@@ -17,12 +17,7 @@ pub struct DefaultUploadCoordinator {
 }
 
 impl DefaultUploadCoordinator {
-    pub fn new<S, SS, K>(
-        store: S,
-        sessions: SS,
-        keys: K,
-        config: BlobConfig,
-    ) -> Self
+    pub fn new<S, SS, K>(store: S, sessions: SS, keys: K, config: BlobConfig) -> Self
     where
         S: BlobStore + 'static,
         SS: UploadSessionStore + 'static,
@@ -35,8 +30,6 @@ impl DefaultUploadCoordinator {
             config,
         }
     }
-
-    
 
     /// Concatenate staged parts into a single stream
     fn concat_part_streams(&self, part_keys: Vec<String>) -> ByteStream {
@@ -51,8 +44,7 @@ impl DefaultUploadCoordinator {
                         }
                     }
                     Err(e) => {
-                        yield Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
+                        yield Err(std::io::Error::other(
                             format!("Failed to read part {}: {}", key, e)
                         ));
                         return;
@@ -66,7 +58,9 @@ impl DefaultUploadCoordinator {
     /// Clean up staged parts
     async fn cleanup_staged_parts(&self, tenant_id: &str, upload_id: &UploadId, part_count: u32) {
         for part_num in 1..=part_count {
-            let key = self.keys.staging_key(tenant_id, upload_id.as_str(), part_num);
+            let key = self
+                .keys
+                .staging_key(tenant_id, upload_id.as_str(), part_num);
             let _ = self.store.delete(&key).await; // Best effort cleanup
         }
     }
@@ -74,11 +68,7 @@ impl DefaultUploadCoordinator {
 
 #[async_trait]
 impl UploadCoordinator for DefaultUploadCoordinator {
-    async fn begin(
-        &self,
-        ctx: BlobCtx,
-        intent: UploadIntent,
-    ) -> BlobResult<UploadSession> {
+    async fn begin(&self, ctx: BlobCtx, intent: UploadIntent) -> BlobResult<UploadSession> {
         let upload_id = UploadId::new();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -135,9 +125,14 @@ impl UploadCoordinator for DefaultUploadCoordinator {
             .as_secs() as i64;
 
         // Use staged assembly (simplified implementation)
-        let staging_key = self.keys.staging_key(&ctx.tenant_id, upload_id.as_str(), part_number);
-        let result = self.store.put(&staging_key, Some("application/octet-stream"), body).await?;
-        
+        let staging_key = self
+            .keys
+            .staging_key(&ctx.tenant_id, upload_id.as_str(), part_number);
+        let result = self
+            .store
+            .put(&staging_key, Some("application/octet-stream"), body)
+            .await?;
+
         let receipt = PartReceipt {
             part_number,
             size_bytes: result.size_bytes,
@@ -147,7 +142,9 @@ impl UploadCoordinator for DefaultUploadCoordinator {
         };
 
         // Record the part
-        self.sessions.record_part(upload_id, receipt.clone()).await?;
+        self.sessions
+            .record_part(upload_id, receipt.clone())
+            .await?;
 
         Ok(receipt)
     }
@@ -159,7 +156,7 @@ impl UploadCoordinator for DefaultUploadCoordinator {
         total_parts: u32,
     ) -> BlobResult<UploadSession> {
         let mut session = self.sessions.get(upload_id).await?;
-        
+
         if !matches!(session.status, UploadStatus::Active) {
             return Err(BlobError::invalid("Upload session is not active"));
         }
@@ -190,19 +187,16 @@ impl UploadCoordinator for DefaultUploadCoordinator {
         self.sessions.update(session).await
     }
 
-    async fn complete(
-        &self,
-        ctx: BlobCtx,
-        upload_id: &UploadId,
-    ) -> BlobResult<BlobReceipt> {
+    async fn complete(&self, ctx: BlobCtx, upload_id: &UploadId) -> BlobResult<BlobReceipt> {
         let session = self.sessions.get(upload_id).await?;
-        
+
         if !matches!(session.status, UploadStatus::Active) {
             return Err(BlobError::invalid("Upload session is not active"));
         }
 
         // Determine total parts
-        let total_parts = session.total_parts
+        let total_parts = session
+            .total_parts
             .or_else(|| session.progress.parts.keys().max().copied())
             .ok_or_else(|| BlobError::invalid("No parts uploaded"))?;
 
@@ -226,7 +220,8 @@ impl UploadCoordinator for DefaultUploadCoordinator {
                     }
                 } else {
                     // Final part must be 1..=part_size
-                    if part.size_bytes == 0 || part.size_bytes > self.config.upload_rules.part_size {
+                    if part.size_bytes == 0 || part.size_bytes > self.config.upload_rules.part_size
+                    {
                         return Err(BlobError::invalid(format!(
                             "Final part {} has invalid size {}",
                             part_num, part.size_bytes
@@ -241,7 +236,11 @@ impl UploadCoordinator for DefaultUploadCoordinator {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let final_key = self.keys.object_key(&ctx.tenant_id, session.blob_id.as_str(), &std::collections::BTreeMap::new());
+        let final_key = self.keys.object_key(
+            &ctx.tenant_id,
+            session.blob_id.as_str(),
+            &std::collections::BTreeMap::new(),
+        );
 
         // Staged assembly (simplified implementation)
         let part_keys: Vec<String> = (1..=total_parts)
@@ -249,10 +248,14 @@ impl UploadCoordinator for DefaultUploadCoordinator {
             .collect();
 
         let concatenated = self.concat_part_streams(part_keys);
-        let result = self.store.put(&final_key, Some(&session.content_type), concatenated).await?;
+        let result = self
+            .store
+            .put(&final_key, Some(&session.content_type), concatenated)
+            .await?;
 
         // Cleanup staged parts
-        self.cleanup_staged_parts(&ctx.tenant_id, upload_id, total_parts).await;
+        self.cleanup_staged_parts(&ctx.tenant_id, upload_id, total_parts)
+            .await;
 
         // Mark session completed
         self.sessions.mark_completed(upload_id, now).await?;
@@ -283,13 +286,9 @@ impl UploadCoordinator for DefaultUploadCoordinator {
         Ok(receipt)
     }
 
-    async fn abort(
-        &self,
-        ctx: BlobCtx,
-        upload_id: &UploadId,
-    ) -> BlobResult<()> {
+    async fn abort(&self, ctx: BlobCtx, upload_id: &UploadId) -> BlobResult<()> {
         let session = self.sessions.get(upload_id).await?;
-        
+
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -297,7 +296,8 @@ impl UploadCoordinator for DefaultUploadCoordinator {
 
         // Cleanup staged parts (simplified implementation)
         let total_parts = session.progress.parts.keys().max().copied().unwrap_or(0);
-        self.cleanup_staged_parts(&ctx.tenant_id, upload_id, total_parts).await;
+        self.cleanup_staged_parts(&ctx.tenant_id, upload_id, total_parts)
+            .await;
 
         // Mark session aborted
         self.sessions.mark_aborted(upload_id, now).await?;
@@ -305,11 +305,7 @@ impl UploadCoordinator for DefaultUploadCoordinator {
         Ok(())
     }
 
-    async fn get_session(
-        &self,
-        _ctx: BlobCtx,
-        upload_id: &UploadId,
-    ) -> BlobResult<UploadSession> {
+    async fn get_session(&self, _ctx: BlobCtx, upload_id: &UploadId) -> BlobResult<UploadSession> {
         self.sessions.get(upload_id).await
     }
 }

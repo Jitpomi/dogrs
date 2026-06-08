@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::Request;
 use axum::http::HeaderValue;
+use axum::http::Request;
 use dog_axum::axum;
 use dog_core::errors::DogError;
 use dog_core::tenant::TenantContext;
@@ -19,7 +19,12 @@ impl DogService<Value, ()> for UnprocessableOnCreate {
         ServiceCapabilities::from_methods(vec![ServiceMethodKind::Create])
     }
 
-    async fn create(&self, _ctx: &TenantContext, _data: Value, _params: ()) -> anyhow::Result<Value> {
+    async fn create(
+        &self,
+        _ctx: &TenantContext,
+        _data: Value,
+        _params: (),
+    ) -> anyhow::Result<Value> {
         Err(DogError::unprocessable("Invalid")
             .with_errors(json!({"title": ["required"]}))
             .into_anyhow())
@@ -34,7 +39,12 @@ impl DogService<Value, ()> for BoomOnCreate {
         ServiceCapabilities::from_methods(vec![ServiceMethodKind::Create])
     }
 
-    async fn create(&self, _ctx: &TenantContext, _data: Value, _params: ()) -> anyhow::Result<Value> {
+    async fn create(
+        &self,
+        _ctx: &TenantContext,
+        _data: Value,
+        _params: (),
+    ) -> anyhow::Result<Value> {
         Err(anyhow::anyhow!("boom"))
     }
 }
@@ -46,7 +56,7 @@ async fn json_body(res: axum::response::Response) -> Value {
 
 #[tokio::test]
 async fn malformed_json_returns_dogerror_bad_request() {
-    let app: DogApp<Value, ()> = DogApp::new();
+    let app: DogApp<Value, ()> = DogApp::default();
     let ax = axum(app).use_service("/posts", Arc::new(BoomOnCreate));
 
     let res = ax
@@ -73,7 +83,7 @@ async fn malformed_json_returns_dogerror_bad_request() {
 
 #[tokio::test]
 async fn request_id_is_preserved_when_provided() {
-    let app: DogApp<Value, ()> = DogApp::new();
+    let app: DogApp<Value, ()> = DogApp::default();
     let ax = axum(app).use_service("/posts", Arc::new(BoomOnCreate));
 
     let provided = HeaderValue::from_static("req-test-123");
@@ -96,7 +106,7 @@ async fn request_id_is_preserved_when_provided() {
 
 #[tokio::test]
 async fn dogerror_unprocessable_preserves_422_and_shape() {
-    let app: DogApp<Value, ()> = DogApp::new();
+    let app: DogApp<Value, ()> = DogApp::default();
     let ax = axum(app).use_service("/posts", Arc::new(UnprocessableOnCreate));
 
     let res = ax
@@ -122,7 +132,7 @@ async fn dogerror_unprocessable_preserves_422_and_shape() {
 
 #[tokio::test]
 async fn non_dogerror_maps_to_generalerror_shape() {
-    let app: DogApp<Value, ()> = DogApp::new();
+    let app: DogApp<Value, ()> = DogApp::default();
     let ax = axum(app).use_service("/posts", Arc::new(BoomOnCreate));
 
     let res = ax

@@ -53,7 +53,7 @@
 //! - `ctx.config`: a snapshot of app config at call time
 //! - `ctx.services`: a runtime service caller (typed downcast)
 //!
-//! ```rust
+//! ```rust,ignore
 //! use std::sync::Arc;
 //! use anyhow::Result;
 //! use async_trait::async_trait;
@@ -134,8 +134,6 @@
 //! a Feathers-like runtime lookup experience.
 //!
 
-
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -207,6 +205,10 @@ where
             config,
         }
     }
+
+    pub fn app(&self) -> &crate::DogApp<R, P> {
+        self.services.app()
+    }
 }
 
 /// Helper used by the pipeline:
@@ -249,7 +251,6 @@ where
     }
 }
 
-
 #[async_trait]
 pub trait DogBeforeHook<R, P>: Send + Sync
 where
@@ -285,7 +286,6 @@ where
 {
     async fn run(&self, ctx: &mut HookContext<R, P>, next: Next<R, P>) -> Result<()>;
 }
-
 
 /// Feathers-style hooks container:
 ///

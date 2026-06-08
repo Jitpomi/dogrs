@@ -1,20 +1,19 @@
 use crate::services::AuthDemoParams;
 use anyhow::{anyhow, Result};
-use dog_core::DogApp;
+
 use serde_json::Value;
 use std::env;
 
 /// Configure all application settings including external APIs and business rules
-pub fn config(dog_app: &DogApp<Value, AuthDemoParams>) -> Result<()> {
+pub fn config(builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>) -> Result<()> {
     // HTTP Server Configuration
-    configure_http(dog_app)?;
+    configure_http(builder)?;
 
     // Auth Configuration
-    configure_auth(dog_app)?;
+    configure_auth(builder)?;
 
     // External API Configuration
-    configure_external_apis(dog_app)?;
-
+    configure_external_apis(builder)?;
 
     Ok(())
 }
@@ -37,29 +36,31 @@ pub async fn get_config_value(
 */
 
 /// Configure HTTP server settings
-fn configure_http(dog_app: &DogApp<Value, AuthDemoParams>) -> Result<()> {
+fn configure_http(builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>) -> Result<()> {
     let host = env::var("HTTP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = env::var("HTTP_PORT").unwrap_or_else(|_| "3000".to_string());
 
-    dog_app.set("http.host", host);
-    dog_app.set("http.port", port);
+    builder.set("http.host", host);
+    builder.set("http.port", port);
     Ok(())
 }
 
 /// Configure all authentication parameters
-fn configure_auth(dog_app: &DogApp<Value, AuthDemoParams>) -> Result<()> {
+fn configure_auth(builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>) -> Result<()> {
     let jwt_secret = env::var("AUTH_JWT_SECRET").unwrap_or_else(|_| "dev-secret".to_string());
     let service = env::var("AUTH_SERVICE").unwrap_or_else(|_| "users".to_string());
     let entity = env::var("AUTH_ENTITY").unwrap_or_else(|_| "user".to_string());
 
-    dog_app.set("auth.jwt.secret", jwt_secret);
-    dog_app.set("auth.service", service);
-    dog_app.set("auth.entity", entity);
+    builder.set("auth.jwt.secret", jwt_secret);
+    builder.set("auth.service", service);
+    builder.set("auth.entity", entity);
     Ok(())
 }
 
 /// Configure external API integrations
-fn configure_external_apis(dog_app: &DogApp<Value, AuthDemoParams>) -> Result<()> {
+fn configure_external_apis(
+    builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>,
+) -> Result<()> {
     // Configure Google OAuth
     let google_client_id = env::var("GOOGLE_CLIENT_ID")
         .unwrap_or_default()
@@ -85,9 +86,9 @@ fn configure_external_apis(dog_app: &DogApp<Value, AuthDemoParams>) -> Result<()
         return Err(anyhow!("Missing GOOGLE_REDIRECT_URL"));
     }
 
-    dog_app.set("oauth.google.client_id", google_client_id);
-    dog_app.set("oauth.google.client_secret", google_client_secret);
-    dog_app.set("oauth.google.redirect_uri", google_redirect_uri);
+    builder.set("oauth.google.client_id", google_client_id);
+    builder.set("oauth.google.client_secret", google_client_secret);
+    builder.set("oauth.google.redirect_uri", google_redirect_uri);
 
     Ok(())
 }

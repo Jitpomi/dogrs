@@ -1,38 +1,96 @@
-use anyhow::Result;
-use serde_json::{Value, json};
-use reqwest::Client;
-use std::time::Duration;
-use dog_core::DogApp;
 use crate::services::FleetParams;
+use anyhow::Result;
+use reqwest::Client;
+use serde_json::{json, Value};
+use std::time::Duration;
 
 /// TomTom adapter that makes direct API calls to TomTom services
 pub struct TomTomAdapter {
     client: Client,
     api_key: String,
     base_url: String,
-    app: std::sync::Arc<DogApp<Value, FleetParams>>,
+    api_base_url: String,
+    geocode_timeout: u64,
+    search_timeout: u64,
+    route_timeout: u64,
+    eta_timeout: u64,
+    reverse_geocode_timeout: u64,
+    heavy_threshold: i64,
+    moderate_threshold: i64,
 }
 
 impl TomTomAdapter {
-    pub fn new(app: &DogApp<Value, FleetParams>) -> Result<Self> {
-        let api_key = app.get("tomtom.key").ok_or_else(|| anyhow::anyhow!("Missing 'tomtom.key' field"))?;
-        let base_url = app.get("tomtom.baseUrl").ok_or_else(|| anyhow::anyhow!("Missing 'tomtom.baseUrl' field"))?;
-            
+    pub fn new(app: &mut dog_core::DogAppBuilder<Value, FleetParams>) -> Result<Self> {
+        let api_key = app
+            .get("tomtom.key")
+            .ok_or_else(|| anyhow::anyhow!("Missing 'tomtom.key' field"))?;
+        let base_url = app
+            .get("tomtom.baseUrl")
+            .ok_or_else(|| anyhow::anyhow!("Missing 'tomtom.baseUrl' field"))?;
+
+        let geocode_timeout = app
+            .get("tomtom.geocode.timeout")
+            .unwrap_or_else(|| "10".to_string())
+            .parse()
+            .unwrap_or(10);
+        let search_timeout = app
+            .get("tomtom.search.timeout")
+            .unwrap_or_else(|| "10".to_string())
+            .parse()
+            .unwrap_or(10);
+        let route_timeout = app
+            .get("tomtom.route.timeout")
+            .unwrap_or_else(|| "15".to_string())
+            .parse()
+            .unwrap_or(15);
+        let eta_timeout = app
+            .get("tomtom.eta.timeout")
+            .unwrap_or_else(|| "15".to_string())
+            .parse()
+            .unwrap_or(15);
+        let reverse_geocode_timeout = app
+            .get("tomtom.reverse_geocode.timeout")
+            .unwrap_or_else(|| "10".to_string())
+            .parse()
+            .unwrap_or(10);
+        let heavy_threshold = app
+            .get("tomtom.traffic.heavy_threshold")
+            .unwrap_or_else(|| "600".to_string())
+            .parse()
+            .unwrap_or(600);
+        let moderate_threshold = app
+            .get("tomtom.traffic.moderate_threshold")
+            .unwrap_or_else(|| "300".to_string())
+            .parse()
+            .unwrap_or(300);
+        let api_base_url = app
+            .get("api.baseUrl")
+            .unwrap_or_else(|| "http://localhost:3036".to_string());
+
         Ok(Self {
             client: Client::new(),
             api_key,
             base_url,
-            app: std::sync::Arc::new(app.clone()),
+            api_base_url,
+            geocode_timeout,
+            search_timeout,
+            route_timeout,
+            eta_timeout,
+            reverse_geocode_timeout,
+            heavy_threshold,
+            moderate_threshold,
         })
     }
 
     /// Handle geocoding requests
     pub async fn geocode(&self, data: Value) -> Result<Value> {
-        let address = data.get("address")
+        let address = data
+            .get("address")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'address' field"))?;
-            
-        let delivery_id = data.get("delivery_id")
+
+        let delivery_id = data
+            .get("delivery_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'delivery_id' field"))?;
 
@@ -44,12 +102,10 @@ impl TomTomAdapter {
             self.api_key
         );
 
-        let timeout_secs = self.app.get("tomtom.geocode.timeout")
-            .unwrap_or_else(|| "10".to_string())
-            .parse()
-            .unwrap_or(10);
-            
-        let response = self.client
+        let timeout_secs = self.geocode_timeout;
+
+        let response = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(timeout_secs))
             .send()
@@ -91,7 +147,8 @@ impl TomTomAdapter {
 
     /// Handle address search requests for autocomplete
     pub async fn search_addresses(&self, data: Value) -> Result<Value> {
-        let query = data.get("query")
+        let query = data
+            .get("query")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
 
@@ -103,12 +160,10 @@ impl TomTomAdapter {
             self.api_key
         );
 
-        let timeout_secs = self.app.get("tomtom.search.timeout")
-            .unwrap_or_else(|| "10".to_string())
-            .parse()
-            .unwrap_or(10);
-            
-        let response = self.client
+        let timeout_secs = self.search_timeout;
+
+        let response = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(timeout_secs))
             .send()
@@ -137,33 +192,39 @@ impl TomTomAdapter {
 
     /// Handle route calculation requests
     pub async fn calculate_route(&self, data: Value) -> Result<Value> {
-        let from_lat = data.get("from_lat")
+        let from_lat = data
+            .get("from_lat")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'from_lat' field"))?;
-            
-        let from_lng = data.get("from_lng")
+
+        let from_lng = data
+            .get("from_lng")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'from_lng' field"))?;
-            
-        let to_lat = data.get("to_lat")
+
+        let to_lat = data
+            .get("to_lat")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'to_lat' field"))?;
-            
-        let to_lng = data.get("to_lng")
+
+        let to_lng = data
+            .get("to_lng")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'to_lng' field"))?;
-            
-        let vehicle_id = data.get("vehicle_id")
+
+        let vehicle_id = data
+            .get("vehicle_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-            
-        let delivery_id = data.get("delivery_id")
+            .ok_or_else(|| anyhow::anyhow!("Missing 'vehicle_id' field"))?;
+
+        let delivery_id = data
+            .get("delivery_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+            .ok_or_else(|| anyhow::anyhow!("Missing 'delivery_id' field"))?;
 
         // Extract vehicle parameters for commercial vehicle routing
         let mut url_params = vec![format!("key={}", self.api_key)];
-        
+
         // Try to get vehicle specs from database first, fallback to request params
         if let Ok(vehicle_specs) = self.get_vehicle_specs(vehicle_id).await {
             if let Some(engine_type) = vehicle_specs.get("engine_type").and_then(|v| v.as_str()) {
@@ -192,23 +253,23 @@ impl TomTomAdapter {
                     url_params.push("vehicleCommercial=true".to_string());
                 }
             }
-        } 
-    
+        }
+
         // Make direct TomTom Routing API call with commercial vehicle parameters
         let url = format!(
             "{}/routing/1/calculateRoute/{},{}:{},{}/json?{}",
             self.base_url,
-            from_lat, from_lng,
-            to_lat, to_lng,
+            from_lat,
+            from_lng,
+            to_lat,
+            to_lng,
             url_params.join("&")
         );
 
-        let timeout_secs = self.app.get("tomtom.route.timeout")
-            .unwrap_or_else(|| "15".to_string())
-            .parse()
-            .unwrap_or(15);
+        let timeout_secs = self.route_timeout;
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(timeout_secs))
             .send()
@@ -237,10 +298,9 @@ impl TomTomAdapter {
                     for leg in legs {
                         if let Some(points) = leg["points"].as_array() {
                             for point in points {
-                                if let (Some(lat), Some(lng)) = (
-                                    point["latitude"].as_f64(),
-                                    point["longitude"].as_f64()
-                                ) {
+                                if let (Some(lat), Some(lng)) =
+                                    (point["latitude"].as_f64(), point["longitude"].as_f64())
+                                {
                                     route_points.push(json!({
                                         "lat": lat,
                                         "lng": lng
@@ -280,45 +340,46 @@ impl TomTomAdapter {
 
     /// Handle ETA update requests (calculates ETA from current position to destination)
     pub async fn update_eta(&self, data: Value) -> Result<Value> {
-        let vehicle_id = data.get("vehicle_id")
+        let vehicle_id = data
+            .get("vehicle_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'vehicle_id' field"))?;
-            
-        let delivery_id = data.get("delivery_id")
+
+        let delivery_id = data
+            .get("delivery_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'delivery_id' field"))?;
-            
-        let current_lat = data.get("current_lat")
+
+        let current_lat = data
+            .get("current_lat")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'current_lat' field"))?;
-            
-        let current_lng = data.get("current_lng")
+
+        let current_lng = data
+            .get("current_lng")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'current_lng' field"))?;
-            
-        let dest_lat = data.get("dest_lat")
+
+        let dest_lat = data
+            .get("dest_lat")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'dest_lat' field"))?;
-            
-        let dest_lng = data.get("dest_lng")
+
+        let dest_lng = data
+            .get("dest_lng")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'dest_lng' field"))?;
 
         // Use TomTom Routing API to calculate ETA
         let url = format!(
             "{}/routing/1/calculateRoute/{},{}:{},{}/json?key={}&computeTravelTimeFor=all",
-            self.base_url,
-            current_lat, current_lng,
-            dest_lat, dest_lng,
-            self.api_key
+            self.base_url, current_lat, current_lng, dest_lat, dest_lng, self.api_key
         );
 
-        let timeout_secs = self.app.get("tomtom.eta.timeout")
-            .unwrap_or_else(|| "15".to_string())
-            .parse()
-            .unwrap_or(15);
+        let timeout_secs = self.eta_timeout;
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(timeout_secs))
             .send()
@@ -340,7 +401,7 @@ impl TomTomAdapter {
                 let summary = &route["summary"];
                 let travel_time = summary["travelTimeInSeconds"].as_i64().unwrap_or(0);
                 let distance = summary["lengthInMeters"].as_i64().unwrap_or(0);
-                
+
                 let eta = chrono::Utc::now() + chrono::Duration::seconds(travel_time);
 
                 return Ok(json!({
@@ -361,29 +422,26 @@ impl TomTomAdapter {
 
     /// Handle reverse geocoding requests using TomTom Reverse Geocoding API
     pub async fn reverse_geocode(&self, data: Value) -> Result<Value> {
-        let lat = data.get("lat")
+        let lat = data
+            .get("lat")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'lat' field"))?;
-            
-        let lng = data.get("lng")
+
+        let lng = data
+            .get("lng")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'lng' field"))?;
 
         // Make direct TomTom Reverse Geocoding API call
         let url = format!(
             "{}/search/2/reverseGeocode/{},{}.json?key={}",
-            self.base_url,
-            lat,
-            lng,
-            self.api_key
+            self.base_url, lat, lng, self.api_key
         );
 
-        let timeout_secs = self.app.get("tomtom.reverse_geocode.timeout")
-            .unwrap_or_else(|| "10".to_string())
-            .parse()
-            .unwrap_or(10);
+        let timeout_secs = self.reverse_geocode_timeout;
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(timeout_secs))
             .send()
@@ -405,12 +463,27 @@ impl TomTomAdapter {
                 if let Some(address_obj) = first_address["address"].as_object() {
                     let formatted_address = format!(
                         "{}, {}, {} {}",
-                        address_obj.get("streetNumber").and_then(|v| v.as_str()).unwrap_or(""),
-                        address_obj.get("streetName").and_then(|v| v.as_str()).unwrap_or(""),
-                        address_obj.get("municipality").and_then(|v| v.as_str()).unwrap_or(""),
-                        address_obj.get("postalCode").and_then(|v| v.as_str()).unwrap_or("")
-                    ).trim_start_matches(", ").trim_end_matches(", ").to_string();
-                    
+                        address_obj
+                            .get("streetNumber")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        address_obj
+                            .get("streetName")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        address_obj
+                            .get("municipality")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        address_obj
+                            .get("postalCode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                    )
+                    .trim_start_matches(", ")
+                    .trim_end_matches(", ")
+                    .to_string();
+
                     return Ok(json!({
                         "status": "success",
                         "address": formatted_address,
@@ -421,47 +494,48 @@ impl TomTomAdapter {
             }
         }
 
-        // Fallback if no address found
-        Ok(json!({
-            "status": "success",
-            "address": format!("{:.4}, {:.4}", lat, lng),
-            "lat": lat,
-            "lng": lng
-        }))
+        Err(anyhow::anyhow!(
+            "No address found for coordinates: {}, {}",
+            lat,
+            lng
+        ))
     }
 
     /// Handle traffic check requests using TomTom Traffic Flow API
     pub async fn check_traffic(&self, data: Value) -> Result<Value> {
-        let from_lat = data.get("from_lat")
+        let from_lat = data
+            .get("from_lat")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'from_lat' field"))?;
-            
-        let from_lng = data.get("from_lng")
+
+        let from_lng = data
+            .get("from_lng")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'from_lng' field"))?;
-            
-        let to_lat = data.get("to_lat")
+
+        let to_lat = data
+            .get("to_lat")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'to_lat' field"))?;
-            
-        let to_lng = data.get("to_lng")
+
+        let to_lng = data
+            .get("to_lng")
             .and_then(|v| v.as_f64())
             .ok_or_else(|| anyhow::anyhow!("Missing 'to_lng' field"))?;
-            
-        let vehicle_id = data.get("vehicle_id")
+
+        let vehicle_id = data
+            .get("vehicle_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+            .ok_or_else(|| anyhow::anyhow!("Missing 'vehicle_id' field"))?;
 
         // Use TomTom Routing API with traffic information
         let url = format!(
             "{}/routing/1/calculateRoute/{},{}:{},{}/json?key={}&traffic=true&routeType=fastest",
-            self.base_url,
-            from_lat, from_lng,
-            to_lat, to_lng,
-            self.api_key
+            self.base_url, from_lat, from_lng, to_lat, to_lng, self.api_key
         );
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(15))
             .send()
@@ -482,23 +556,19 @@ impl TomTomAdapter {
             if let Some(route) = routes.first() {
                 let summary = &route["summary"];
                 let travel_time = summary["travelTimeInSeconds"].as_i64().unwrap_or(0);
-                let live_traffic_time = summary["liveTrafficIncidentsTravelTimeInSeconds"].as_i64().unwrap_or(0);
+                let live_traffic_time = summary["liveTrafficIncidentsTravelTimeInSeconds"]
+                    .as_i64()
+                    .unwrap_or(0);
                 let traffic_delay = live_traffic_time - travel_time;
 
-                let heavy_threshold = self.app.get("tomtom.traffic.heavy_threshold")
-                    .unwrap_or_else(|| "600".to_string())
-                    .parse()
-                    .unwrap_or(600);
-                let moderate_threshold = self.app.get("tomtom.traffic.moderate_threshold")
-                    .unwrap_or_else(|| "300".to_string())
-                    .parse()
-                    .unwrap_or(300);
-                let congestion_level = if traffic_delay > heavy_threshold { 
-                    "heavy" 
-                } else if traffic_delay > moderate_threshold { 
-                    "moderate" 
-                } else { 
-                    "light" 
+                let heavy_threshold = self.heavy_threshold;
+                let moderate_threshold = self.moderate_threshold;
+                let congestion_level = if traffic_delay > heavy_threshold {
+                    "heavy"
+                } else if traffic_delay > moderate_threshold {
+                    "moderate"
+                } else {
+                    "light"
                 };
 
                 return Ok(json!({
@@ -536,8 +606,9 @@ impl TomTomAdapter {
             vehicle_id
         );
 
-        let response = self.client
-            .post(&format!("{}/operations", self.app.get("api.baseUrl").unwrap_or_else(|| "http://localhost:3036".to_string())))
+        let response = self
+            .client
+            .post(format!("{}/operations", self.api_base_url))
             .header("Content-Type", "application/json")
             .header("x-service-method", "read")
             .json(&json!({
@@ -567,7 +638,10 @@ impl TomTomAdapter {
             }
         }
 
-        Err(anyhow::anyhow!("Vehicle specs not found for vehicle: {}", vehicle_id))
+        Err(anyhow::anyhow!(
+            "Vehicle specs not found for vehicle: {}",
+            vehicle_id
+        ))
     }
 
     /// Get service statistics (simplified since no queue)
@@ -579,7 +653,7 @@ impl TomTomAdapter {
             "available_endpoints": [
                 "geocode",
                 "route",
-                "eta", 
+                "eta",
                 "traffic"
             ],
             "message": "TomTom service is operational"

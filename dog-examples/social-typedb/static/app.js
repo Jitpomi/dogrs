@@ -64,13 +64,25 @@ const trendingTopics = document.getElementById('trendingTopics');
 // Current view state
 let currentView = 'feed';
 
+let loadingTimeout;
+
 // Show/Hide UI Elements
 function showLoading() {
-    loading.classList.add('active');
-    loading.classList.remove('hidden');
+    if (loadingTimeout) clearTimeout(loadingTimeout);
+    
+    // Only show loader if request takes longer than 300ms to prevent UI flicker
+    loadingTimeout = setTimeout(() => {
+        loading.classList.add('active');
+        loading.classList.remove('hidden');
+    }, 300);
 }
 
 function hideLoading() {
+    if (loadingTimeout) {
+        clearTimeout(loadingTimeout);
+        loadingTimeout = null;
+    }
+    
     loading.classList.remove('active');
     loading.classList.add('hidden');
 }
@@ -1107,31 +1119,6 @@ function hideAllIndicators() {
     if (noUsersFound) noUsersFound.classList.add('hidden');
 }
 
-function getSamplePosts() {
-    const samplePosts = [
-        {
-            author: 'Mia Lewis',
-            initials: 'ML',
-            content: 'Excited to share that our ML team at Google just launched a new feature! The power of graph databases in understanding user connections is incredible. #MachineLearning #Google',
-            time: '2 hours ago'
-        },
-        {
-            author: 'Alex Chen',
-            initials: 'AC',
-            content: 'Looking for talented engineers to join our team at Google. We\'re working on some amazing projects in the AI space. DM me if interested! #Hiring #AI #Google',
-            time: '4 hours ago'
-        },
-        {
-            author: 'John Smith',
-            initials: 'JS',
-            content: 'Just had an amazing coffee chat with a friend who works at Google. The tech industry is all about connections and relationships. #Networking #TechCareers',
-            time: '6 hours ago'
-        }
-    ];
-    
-    return samplePosts.map(post => createPostCard(post.author, post.initials, post.content, post.time)).join('');
-}
-
 async function loadSuggestedConnections() {
     try {
         // Get current user dynamically
@@ -1294,38 +1281,6 @@ async function loadTrendingTopics() {
             </div>
         `;
     }
-}
-
-function getSampleTrending() {
-    return `
-        <div class="p-3 rounded-lg hover:bg-blue-50 transition-colors duration-150 cursor-pointer">
-            <div class="flex items-center justify-between">
-                <div>
-                    <div class="text-body font-semibold" style="color: var(--primary-blue);">#TechJobs</div>
-                    <div class="text-caption" style="color: var(--neutral-500);">No posts yet</div>
-                </div>
-                <i class="fas fa-arrow-up text-green-500 text-sm"></i>
-            </div>
-        </div>
-        <div class="p-3 rounded-lg hover:bg-green-50 transition-colors duration-150 cursor-pointer">
-            <div class="flex items-center justify-between">
-                <div>
-                    <div class="text-body font-semibold" style="color: var(--success-green);">#RemoteWork</div>
-                    <div class="text-caption" style="color: var(--neutral-500);">No posts yet</div>
-                </div>
-                <i class="fas fa-arrow-up text-green-500 text-sm"></i>
-            </div>
-        </div>
-        <div class="p-3 rounded-lg hover:bg-purple-50 transition-colors duration-150 cursor-pointer">
-            <div class="flex items-center justify-between">
-                <div>
-                    <div class="text-body font-semibold" style="color: #8b5cf6;">#AI</div>
-                    <div class="text-caption" style="color: var(--neutral-500);">No posts yet</div>
-                </div>
-                <i class="fas fa-arrow-up text-green-500 text-sm"></i>
-            </div>
-        </div>
-    `;
 }
 
 async function loadNetwork() {
@@ -2399,19 +2354,6 @@ async function findConnections() {
         // Query 4: All people WITHOUT employment data - includes recently disconnected
         const allPeopleWithoutEmployment = await makeQuery('persons', `match $person isa person, has name $name; $me isa person, has name "${currentUser.name}"; not { $person is $me; }; not { $friendship (friend: $me, friend: $person) isa friendship; }; not { $employment (employee: $person, employer: $company) isa employment; }; select $person, $name;`);
         
-        let findConnectionsHTML = `
-            <div class="max-w-4xl mx-auto px-4">
-                <div class="text-center mb-8">
-                    <h2 class="text-heading-1 mb-2" style="color: var(--neutral-900);">Find Connections</h2>
-                    <p class="text-body" style="color: var(--neutral-600);">Discover and connect with professionals in your network</p>
-                </div>
-                
-                <!-- People You May Know Section -->
-                <div class="profile-card card-hover p-6 mb-6">
-                    <h3 class="text-body-large font-semibold mb-4" style="color: var(--neutral-900);">People You May Know</h3>
-                    <div class="space-y-3">
-        `;
-        
         // Combine and prioritize suggestions: employment first, then no employment
         const allSuggestions = [];
         const seenIds = new Set();
@@ -2445,42 +2387,7 @@ async function findConnections() {
                 }
             });
         }
-        
-        // Render prioritized suggestions in list view
-        allSuggestions.forEach(suggestion => {
-            const name = String(suggestion.data.name?.value || suggestion.data.name || 'Unknown');
-            const initials = name.split(' ').map(n => n[0]).join('').toUpperCase();
-            const company = suggestion.hasEmployment ? String(suggestion.data.company_name?.value || suggestion.data.company_name || '') : '';
-            const role = suggestion.hasEmployment ? String(suggestion.data.role?.value || suggestion.data.role || '') : '';
-            
-            findConnectionsHTML += `
-                <div class="relative p-6 border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-all duration-150">
-                    <div class="flex items-center space-x-6 pr-24">
-                        <div class="avatar">${initials}</div>
-                        <div>
-                            <h4 class="text-body font-semibold" style="color: var(--neutral-900);">${name}</h4>
-                            ${company ? `<p class="text-caption" style="color: var(--neutral-600);">${role} at ${company}</p>` : `<p class="text-caption" style="color: var(--neutral-500);">Professional</p>`}
-                            <p class="text-caption" style="color: var(--neutral-400);">Mutual connection</p>
-                        </div>
-                    </div>
-                    <div class="absolute bottom-3 right-3 flex items-center space-x-2">
-                        <button class="connect-person-btn px-3 py-1 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors text-xs font-medium" data-person="${name}">Connect</button>
-                        <button class="view-profile-btn px-3 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 transition-colors text-xs font-medium" data-person="${name}">View</button>
-                    </div>
-                </div>
-            `;
-        });
-        
-        findConnectionsHTML += `
-                    </div>
-                </div>
-                
-                <!-- More People Section -->
-                <div class="profile-card card-hover p-6">
-                    <h3 class="text-body-large font-semibold mb-4" style="color: var(--neutral-900);">More People to Connect With</h3>
-                    <div class="space-y-3">
-        `;
-        
+
         // Combine and prioritize all people: employment first, then no employment
         const allDiscoveryPeople = [];
         const allSeenIds = new Set();
@@ -2517,31 +2424,96 @@ async function findConnections() {
         
         // Limit to 8 people and render in list view
         const limitedDiscovery = allDiscoveryPeople.slice(0, 8);
-        limitedDiscovery.forEach(person => {
-            const name = String(person.data.name?.value || person.data.name || 'Unknown');
-            const initials = name.split(' ').map(n => n[0]).join('').toUpperCase();
-            const company = person.hasEmployment ? String(person.data.company_name?.value || person.data.company_name || '') : '';
-            const role = person.hasEmployment ? String(person.data.role?.value || person.data.role || '') : '';
-            
-            findConnectionsHTML += `
-                <div class="relative p-6 border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-all duration-150">
-                    <div class="flex items-center space-x-6 pr-24">
-                        <div class="avatar">${initials}</div>
-                        <div>
-                            <h4 class="text-body font-semibold" style="color: var(--neutral-900);">${name}</h4>
-                            ${company ? `<p class="text-caption" style="color: var(--neutral-600);">${role} at ${company}</p>` : `<p class="text-caption" style="color: var(--neutral-500);">Professional</p>`}
-                            <p class="text-caption" style="color: var(--neutral-400);">Suggested for you</p>
-                        </div>
-                    </div>
-                    <div class="absolute bottom-3 right-3 flex items-center space-x-2">
-                        <button class="connect-person-btn px-3 py-1 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors text-xs font-medium" data-person="${name}">Connect</button>
-                        <button class="view-profile-btn px-3 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 transition-colors text-xs font-medium" data-person="${name}">View</button>
-                    </div>
+        
+        // Generate People You May Know HTML
+        let peopleYouMayKnowHTML = '';
+        if (allSuggestions.length === 0) {
+            peopleYouMayKnowHTML = `
+                <div class="text-center py-6">
+                    <p class="text-gray-500 italic">No new connection suggestions found. Try searching for people manually!</p>
                 </div>
             `;
-        });
+        } else {
+            peopleYouMayKnowHTML = allSuggestions.map(suggestion => {
+                const name = String(suggestion.data.name?.value || suggestion.data.name || 'Unknown');
+                const initials = name.split(' ').map(n => n[0]).join('').toUpperCase();
+                const company = suggestion.hasEmployment ? String(suggestion.data.company_name?.value || suggestion.data.company_name || '') : '';
+                const role = suggestion.hasEmployment ? String(suggestion.data.role?.value || suggestion.data.role || '') : '';
+                
+                return `
+                    <div class="relative p-6 border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-all duration-150">
+                        <div class="flex items-center space-x-6 pr-24">
+                            <div class="avatar">${initials}</div>
+                            <div>
+                                <h4 class="text-body font-semibold" style="color: var(--neutral-900);">${name}</h4>
+                                ${company ? `<p class="text-caption" style="color: var(--neutral-600);">${role} at ${company}</p>` : `<p class="text-caption" style="color: var(--neutral-500);">Professional</p>`}
+                                <p class="text-caption" style="color: var(--neutral-400);">Suggested for you</p>
+                            </div>
+                        </div>
+                        <div class="absolute bottom-3 right-3 flex items-center space-x-2">
+                            <button class="connect-person-btn px-3 py-1 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors text-xs font-medium" data-person="${name}">Connect</button>
+                            <button class="view-profile-btn px-3 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 transition-colors text-xs font-medium" data-person="${name}">View</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
         
-        findConnectionsHTML += `
+        // Generate More People HTML
+        let morePeopleHTML = '';
+        if (limitedDiscovery.length === 0) {
+            morePeopleHTML = `
+                <div class="text-center py-6">
+                    <p class="text-gray-500 italic">No more people to discover right now.</p>
+                </div>
+            `;
+        } else {
+            morePeopleHTML = limitedDiscovery.map(person => {
+                const name = String(person.data.name?.value || person.data.name || 'Unknown');
+                const initials = name.split(' ').map(n => n[0]).join('').toUpperCase();
+                const company = person.hasEmployment ? String(person.data.company_name?.value || person.data.company_name || '') : '';
+                const role = person.hasEmployment ? String(person.data.role?.value || person.data.role || '') : '';
+                
+                return `
+                    <div class="relative p-6 border border-neutral-200 rounded-lg hover:bg-neutral-50 transition-all duration-150">
+                        <div class="flex items-center space-x-6 pr-24">
+                            <div class="avatar">${initials}</div>
+                            <div>
+                                <h4 class="text-body font-semibold" style="color: var(--neutral-900);">${name}</h4>
+                                ${company ? `<p class="text-caption" style="color: var(--neutral-600);">${role} at ${company}</p>` : `<p class="text-caption" style="color: var(--neutral-500);">Professional</p>`}
+                                <p class="text-caption" style="color: var(--neutral-400);">Suggested for you</p>
+                            </div>
+                        </div>
+                        <div class="absolute bottom-3 right-3 flex items-center space-x-2">
+                            <button class="connect-person-btn px-3 py-1 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors text-xs font-medium" data-person="${name}">Connect</button>
+                            <button class="view-profile-btn px-3 py-1 border border-blue-600 text-blue-600 rounded-full hover:bg-blue-50 transition-colors text-xs font-medium" data-person="${name}">View</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Combine into final layout
+        let findConnectionsHTML = `
+            <div class="max-w-4xl mx-auto px-4">
+                <div class="text-center mb-8">
+                    <h2 class="text-heading-1 mb-2" style="color: var(--neutral-900);">Find Connections</h2>
+                    <p class="text-body" style="color: var(--neutral-600);">Discover and connect with professionals in your network</p>
+                </div>
+                
+                <!-- People You May Know Section -->
+                <div class="profile-card card-hover p-6 mb-6">
+                    <h3 class="text-body-large font-semibold mb-4" style="color: var(--neutral-900);">People You May Know</h3>
+                    <div class="space-y-3">
+                        ${peopleYouMayKnowHTML}
+                    </div>
+                </div>
+                
+                <!-- More People Section -->
+                <div class="profile-card card-hover p-6">
+                    <h3 class="text-body-large font-semibold mb-4" style="color: var(--neutral-900);">More People to Connect With</h3>
+                    <div class="space-y-3">
+                        ${morePeopleHTML}
                     </div>
                 </div>
             </div>
@@ -2659,6 +2631,61 @@ async function exploreCompanies() {
     } catch (error) {
         console.error('Error loading companies:', error);
         feedContent.innerHTML = '<p class="text-center text-red-500 py-8">Error loading companies</p>';
+    }
+    hideLoading();
+}
+
+window.followCompany = async function(companyName) {
+    showLoading();
+    try {
+        const currentUser = await getCurrentUser();
+        if (!currentUser) {
+            console.error('No current user found');
+            hideLoading();
+            return;
+        }
+        
+        const button = document.querySelector(`button[data-company="${companyName}"]`);
+        if (!button) return;
+        
+        const isFollowing = button.textContent === 'Following';
+        
+        if (isFollowing) {
+            const disconnectData = await makeQuery('organizations', `
+                match 
+                $me isa person, has name "${currentUser.name}";
+                $company isa company, has name "${companyName}";
+                delete (follower: $me, page: $company) isa following;
+            `, 'Write');
+            
+            if (disconnectData.ok) {
+                button.textContent = 'Follow';
+                button.className = 'btn-primary follow-company-btn';
+                button.style = 'padding: 10px 20px; font-size: 13px;';
+                showNotification(`Unfollowed ${companyName}`, 'success');
+            } else {
+                showNotification('Failed to unfollow', 'error');
+            }
+        } else {
+            const connectData = await makeQuery('organizations', `
+                match 
+                $me isa person, has name "${currentUser.name}";
+                $company isa company, has name "${companyName}";
+                insert (follower: $me, page: $company) isa following;
+            `, 'Write');
+            
+            if (connectData.ok) {
+                button.textContent = 'Following';
+                button.className = 'btn-secondary follow-company-btn';
+                button.style = 'background: var(--success-green); color: white; border-color: var(--success-green); padding: 10px 20px; font-size: 13px;';
+                showNotification(`Following ${companyName}`, 'success');
+            } else {
+                showNotification('Failed to follow', 'error');
+            }
+        }
+    } catch (error) {
+        console.error('Error following/unfollowing company:', error);
+        showNotification('Error updating following status', 'error');
     }
     hideLoading();
 }
@@ -2856,29 +2883,42 @@ function getTimeAgo(timestamp) {
 }
 
 // API Functions
-async function makeQuery(endpoint, query, queryType = 'Query') {
-    try {
-        const serviceMethod = queryType === 'Write' ? 'write' : 'read';
-        const response = await fetch(`${API_BASE}/${endpoint}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-service-method': serviceMethod
-            },
-            body: JSON.stringify({ query })
-        });
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || `HTTP ${response.status}`);
+async function makeQuery(endpoint, query, queryType = 'Query', maxRetries = 3) {
+    let retries = 0;
+    while (retries <= maxRetries) {
+        try {
+            const serviceMethod = queryType === 'Write' ? 'write' : 'read';
+            const response = await fetch(`${API_BASE}/${endpoint}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-service-method': serviceMethod
+                },
+                body: JSON.stringify({ query })
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.message || `HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            return data;
+            
+        } catch (err) {
+            const isIsolationConflict = err.message && err.message.toLowerCase().includes('isolation conflict');
+            
+            if (isIsolationConflict && retries < maxRetries) {
+                retries++;
+                const delay = Math.pow(2, retries) * 100 + Math.random() * 100;
+                console.warn(`Isolation conflict detected. Retrying query (${retries}/${maxRetries}) in ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+            }
+            
+            console.error('Query failed after ' + retries + ' retries:', err);
+            throw err;
         }
-        
-        const data = await response.json();
-        return data;
-        
-    } catch (err) {
-        console.error('Query failed:', err);
-        throw err;
     }
 }
 

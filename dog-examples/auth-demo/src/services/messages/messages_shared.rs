@@ -17,13 +17,16 @@ pub fn crud_capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, AuthDemoParams>) -> anyhow::Result<()> {
-    super::messages_schema::register(app)?;
+pub fn register_hooks(
+    builder: &mut dog_core::DogAppBuilder<serde_json::Value, AuthDemoParams>,
+    auth_core: Arc<dog_auth::AuthenticationService<AuthDemoParams>>,
+) -> anyhow::Result<()> {
+    super::messages_schema::register(builder)?;
 
     let jwt: Arc<dyn DogBeforeHook<Value, AuthDemoParams>> =
-        Arc::new(AuthenticateHook::from_app(app, vec!["jwt".to_string()])?);
+        Arc::new(AuthenticateHook::new(auth_core, vec!["jwt".to_string()]));
 
-    app.service("messages")?.hooks(|h| {
+    builder.service_hooks("messages", |h| {
         // Protect write operations with JWT authentication
         h.before_create(Arc::clone(&jwt));
         h.before_patch(Arc::clone(&jwt));
@@ -33,7 +36,10 @@ pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, AuthDemoParams>)
         h.before_patch(Arc::new(super::messages_hooks::ValidateMessageAuthorExists));
 
         h.after_find(Arc::new(super::messages_hooks::ExpandMessageAuthor));
-        h.after(ServiceMethodKind::Get, Arc::new(super::messages_hooks::ExpandMessageAuthor));
+        h.after(
+            ServiceMethodKind::Get,
+            Arc::new(super::messages_hooks::ExpandMessageAuthor),
+        );
 
         h.after_all(Arc::new(super::messages_hooks::NormalizeMessagesResult));
     });

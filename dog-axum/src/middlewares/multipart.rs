@@ -1,9 +1,4 @@
-use axum::{
-    extract::Request,
-    http::StatusCode,
-    response::Response,
-    body::Body,
-};
+use axum::{body::Body, extract::Request, http::StatusCode, response::Response};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use tower::{Layer, Service};
@@ -19,7 +14,9 @@ pub struct FieldContext {
 }
 
 /// Field processor callback type
-pub type FieldProcessor = Box<dyn Fn(&mut FieldContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> + Send + Sync>;
+pub type FieldProcessor = Box<
+    dyn Fn(&mut FieldContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> + Send + Sync,
+>;
 
 /// Configuration for multipart to JSON conversion
 pub struct MultipartConfig {
@@ -73,9 +70,9 @@ pub enum FileEncoding {
 impl Default for MultipartConfig {
     fn default() -> Self {
         Self {
-            max_file_size: Some(100 * 1024 * 1024), // 100MB
+            max_file_size: Some(100 * 1024 * 1024),  // 100MB
             max_total_size: Some(500 * 1024 * 1024), // 500MB
-            allowed_content_types: HashSet::new(), // Allow all
+            allowed_content_types: HashSet::new(),   // Allow all
             file_encoding: FileEncoding::Base64,
             file_fields: HashSet::new(), // Auto-detect
             text_fields: HashSet::new(), // Auto-detect
@@ -136,16 +133,23 @@ impl MultipartConfig {
     /// Add custom field processor for specific field names
     pub fn field_processor<F>(mut self, field_name: &str, processor: F) -> Self
     where
-        F: Fn(&mut FieldContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> + Send + Sync + 'static,
+        F: Fn(&mut FieldContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+            + Send
+            + Sync
+            + 'static,
     {
-        self.field_processors.insert(field_name.to_string(), Box::new(processor));
+        self.field_processors
+            .insert(field_name.to_string(), Box::new(processor));
         self
     }
-    
+
     /// Add global processor that runs on all file fields
     pub fn global_processor<F>(mut self, processor: F) -> Self
     where
-        F: Fn(&mut FieldContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> + Send + Sync + 'static,
+        F: Fn(&mut FieldContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+            + Send
+            + Sync
+            + 'static,
     {
         self.global_processors.push(Box::new(processor));
         self
@@ -153,12 +157,18 @@ impl MultipartConfig {
 }
 
 /// Middleware that converts multipart/form-data requests to JSON
-/// 
+///
 /// This middleware detects multipart requests and converts them to JSON format
 /// that can be consumed by dog-core services. Fully configurable with sensible defaults.
 #[derive(Clone)]
 pub struct MultipartToJson {
     config: MultipartConfig,
+}
+
+impl Default for MultipartToJson {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MultipartToJson {
@@ -177,7 +187,7 @@ impl<S> Layer<S> for MultipartToJson {
     type Service = MultipartToJsonService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        MultipartToJsonService { 
+        MultipartToJsonService {
             inner,
             config: self.config.clone(),
         }
@@ -198,28 +208,39 @@ where
 {
     type Response = Response;
     type Error = S::Error;
-    type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
+    >;
 
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let mut inner = self.inner.clone();
         let config = self.config.clone();
-        
+
         Box::pin(async move {
             // Check if this is a multipart request
-            let content_type = req.headers()
+            let content_type = req
+                .headers()
                 .get("content-type")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
 
-            println!("🔧 MultipartToJson middleware called with content-type: '{}'", content_type);
+            println!(
+                "🔧 MultipartToJson middleware called with content-type: '{}'",
+                content_type
+            );
 
             if content_type.starts_with("multipart/form-data") {
-                println!("🔧 MultipartToJson middleware: Converting multipart to JSON with BlobRef");
-                
+                println!(
+                    "🔧 MultipartToJson middleware: Converting multipart to JSON with BlobRef"
+                );
+
                 match convert_multipart_to_json(req, &config).await {
                     Ok(json_req) => {
                         println!("✅ MultipartToJson middleware: Successfully converted to JSON with BlobRef");
@@ -243,37 +264,41 @@ where
     }
 }
 
-async fn convert_multipart_to_json(req: Request<Body>, config: &MultipartConfig) -> Result<Request<Body>, Box<dyn std::error::Error + Send + Sync>> {
+async fn convert_multipart_to_json(
+    req: Request<Body>,
+    config: &MultipartConfig,
+) -> Result<Request<Body>, Box<dyn std::error::Error + Send + Sync>> {
     // Store original headers before extracting multipart data
     let original_headers = req.headers().clone();
-    
+
     // Extract boundary from content-type header
     let content_type = original_headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    
+
     let boundary = content_type
         .split("boundary=")
         .nth(1)
         .ok_or("Missing boundary in multipart content-type")?;
-    
+
     // Use multer instead of Axum's parser for large file support
     let body_stream = req.into_body();
-    let body_bytes = axum::body::to_bytes(body_stream, 200 * 1024 * 1024).await // 200MB limit
+    let body_bytes = axum::body::to_bytes(body_stream, 200 * 1024 * 1024)
+        .await // 200MB limit
         .map_err(|e| format!("Failed to read request body: {}", e))?;
-    
+
     let mut multipart = multer::Multipart::new(
         futures::stream::once(async { Ok::<bytes::Bytes, multer::Error>(body_bytes) }),
-        boundary
+        boundary,
     );
     let mut json_map = HashMap::new();
-    
+
     while let Some(field) = multipart.next_field().await? {
         let name = field.name().unwrap_or("unknown").to_string();
         let content_type = field.content_type().map(|ct| ct.to_string());
         let filename = field.file_name().map(|f| f.to_string());
-        
+
         // Determine if this is a file field
         let is_file_field = if !config.file_fields.is_empty() {
             config.file_fields.contains(&name)
@@ -281,56 +306,74 @@ async fn convert_multipart_to_json(req: Request<Body>, config: &MultipartConfig)
             !config.text_fields.contains(&name)
         } else {
             // Auto-detect: has filename or content-type suggests file
-            filename.is_some() || 
-            content_type.as_ref().map_or(false, |ct| !ct.starts_with("text/"))
+            filename.is_some()
+                || content_type
+                    .as_ref()
+                    .is_some_and(|ct| !ct.starts_with("text/"))
         };
-        
+
         if is_file_field {
             // Handle file field with BlobRef approach - stream to temp storage
-            println!("   Processing file field '{}' with content-type: {:?}", name, content_type);
-            
+            println!(
+                "   Processing file field '{}' with content-type: {:?}",
+                name, content_type
+            );
+
             // Create temp file for streaming
             let temp_id = uuid::Uuid::new_v4();
             let temp_path = format!("/tmp/multipart_{}_{}", name, temp_id);
-            
+
             // Ensure temp directory exists
             if let Some(parent) = std::path::Path::new(&temp_path).parent() {
-                tokio::fs::create_dir_all(parent).await
+                tokio::fs::create_dir_all(parent)
+                    .await
                     .map_err(|e| format!("Failed to create temp dir: {}", e))?;
             }
-            
-            let mut temp_file = tokio::fs::File::create(&temp_path).await
+
+            let mut temp_file = tokio::fs::File::create(&temp_path)
+                .await
                 .map_err(|e| format!("Failed to create temp file: {}", e))?;
-            
+
             let mut total_size = 0u64;
             let mut stream = field;
-            
+
             // Stream chunks directly to disk - no memory buffering
             while let Some(chunk) = stream.chunk().await.map_err(|e| {
                 println!("❌ Failed to read chunk from file field '{}': {}", name, e);
                 e
             })? {
                 use tokio::io::AsyncWriteExt;
-                temp_file.write_all(&chunk).await
+                temp_file
+                    .write_all(&chunk)
+                    .await
                     .map_err(|e| format!("Failed to write chunk: {}", e))?;
                 total_size += chunk.len() as u64;
             }
-            
+
             // Flush and close the file
             use tokio::io::AsyncWriteExt;
-            temp_file.flush().await
+            temp_file
+                .flush()
+                .await
                 .map_err(|e| format!("Failed to flush file: {}", e))?;
             drop(temp_file);
-            
-            println!("   File field '{}' streamed to temp file: {} bytes", name, total_size);
-            
+
+            println!(
+                "   File field '{}' streamed to temp file: {} bytes",
+                name, total_size
+            );
+
             // Check file size limits
             if let Some(max_size) = config.max_file_size {
                 if total_size > max_size as u64 {
-                    return Err(format!("File '{}' exceeds maximum size of {} bytes", name, max_size).into());
+                    return Err(format!(
+                        "File '{}' exceeds maximum size of {} bytes",
+                        name, max_size
+                    )
+                    .into());
                 }
             }
-            
+
             // Create BlobRef instead of storing file data
             let blob_ref = serde_json::json!({
                 "key": format!("temp/{}", temp_id),
@@ -339,14 +382,18 @@ async fn convert_multipart_to_json(req: Request<Body>, config: &MultipartConfig)
                 "content_type": content_type,
                 "size": total_size
             });
-            
+
             json_map.insert(name.clone(), blob_ref);
-            
+
             // Check content type if restricted
             if !config.allowed_content_types.is_empty() {
                 if let Some(ct) = &content_type {
                     if !config.allowed_content_types.contains(ct) {
-                        return Err(format!("Content type '{}' not allowed for file '{}'", ct, name).into());
+                        return Err(format!(
+                            "Content type '{}' not allowed for file '{}'",
+                            ct, name
+                        )
+                        .into());
                     }
                 }
             }
@@ -359,25 +406,30 @@ async fn convert_multipart_to_json(req: Request<Body>, config: &MultipartConfig)
             println!("   Text field '{}': {}", name, value);
         }
     }
-    
+
     // Convert to JSON body
     let json_body = json!(json_map);
     let json_bytes = serde_json::to_vec(&json_body)?;
-    
+
     // Create new request with JSON body and preserve original headers
     let (mut parts, _) = Request::new(Body::empty()).into_parts();
-    
+
     // Copy all original headers
     parts.headers = original_headers;
-    
+
     // Update content-type and content-length for JSON body
-    parts.headers.insert("content-type", "application/json".parse().unwrap());
-    parts.headers.insert("content-length", json_bytes.len().to_string().parse().unwrap());
-    
+    parts
+        .headers
+        .insert("content-type", "application/json".parse().unwrap());
+    parts.headers.insert(
+        "content-length",
+        json_bytes.len().to_string().parse().unwrap(),
+    );
+
     let new_body = Body::from(json_bytes);
     let new_req = Request::from_parts(parts, new_body);
-    
+
     println!("   Converted to JSON with {} fields", json_map.len());
-    
+
     Ok(new_req)
 }

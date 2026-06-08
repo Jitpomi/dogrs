@@ -5,12 +5,12 @@ use aws_sdk_s3::{primitives::ByteStream as AwsByteStream, Client};
 use futures::StreamExt;
 use std::env;
 
-use dog_blob::{
-    BlobError, BlobInfo, BlobMetadata, BlobResult, BlobStore, ByteRange, ByteStream, GetResult, ObjectHead, PutResult,
-    StoreCapabilities,
-};
-use dog_blob::store::ResolvedRange;
 use crate::metadata::AudioMetadataExtractor;
+use dog_blob::store::ResolvedRange;
+use dog_blob::{
+    BlobError, BlobInfo, BlobMetadata, BlobResult, BlobStore, ByteRange, ByteStream, GetResult,
+    ObjectHead, PutResult, StoreCapabilities,
+};
 
 /// RustFS configuration from environment variables
 #[derive(Debug)]
@@ -24,7 +24,8 @@ struct RustFSConfig {
 impl RustFSConfig {
     fn from_env() -> BlobResult<Self> {
         fn get_env(key: &str) -> BlobResult<String> {
-            env::var(key).map_err(|_| BlobError::invalid(format!("{} environment variable required", key)))
+            env::var(key)
+                .map_err(|_| BlobError::invalid(format!("{} environment variable required", key)))
         }
 
         Ok(Self {
@@ -39,8 +40,8 @@ impl RustFSConfig {
 /// Production RustFS store implementation using AWS SDK (S3-compatible)
 #[derive(Clone)]
 pub struct RustFSStore {
-    client: Client,
-    bucket: String,
+    pub client: Client,
+    pub bucket: String,
 }
 
 impl RustFSStore {
@@ -130,7 +131,7 @@ impl RustFSStore {
         add_optional_metadata!(metadata.sample_rate, "sample_rate", to_string);
         add_optional_metadata!(metadata.channels, "channels", to_string);
         add_optional_metadata!(&metadata.encoding, "encoding");
-        
+
         // Visual metadata
         add_optional_metadata!(&metadata.album_art_url, "album_art_url");
         add_optional_metadata!(&metadata.thumbnail_url, "thumbnail_url");
@@ -138,14 +139,15 @@ impl RustFSStore {
         request
     }
 
-
     /// Extract metadata from file content using dedicated extractor
     fn extract_file_metadata(data: &[u8], filename: Option<&str>) -> Option<BlobMetadata> {
         AudioMetadataExtractor::extract(data, filename)
     }
 
     /// Extract rich metadata from S3 head_object response
-    fn extract_blob_metadata(head_result: &aws_sdk_s3::operation::head_object::HeadObjectOutput) -> BlobMetadata {
+    fn extract_blob_metadata(
+        head_result: &aws_sdk_s3::operation::head_object::HeadObjectOutput,
+    ) -> BlobMetadata {
         let mut metadata = BlobMetadata::default();
 
         if let Some(s3_metadata) = head_result.metadata() {
@@ -174,11 +176,24 @@ impl RustFSStore {
 
             // Custom attributes (any metadata not in standard fields)
             for (key, value) in s3_metadata {
-                if !matches!(key.as_str(), 
-                    "filename" | "title" | "artist" | "album" | "genre" | "year" | 
-                    "duration" | "bitrate" | "thumbnail_url" | "album_art_url" |
-                    "latitude" | "longitude" | "location_name" | "encoding" |
-                    "sample_rate" | "channels"
+                if !matches!(
+                    key.as_str(),
+                    "filename"
+                        | "title"
+                        | "artist"
+                        | "album"
+                        | "genre"
+                        | "year"
+                        | "duration"
+                        | "bitrate"
+                        | "thumbnail_url"
+                        | "album_art_url"
+                        | "latitude"
+                        | "longitude"
+                        | "location_name"
+                        | "encoding"
+                        | "sample_rate"
+                        | "channels"
                 ) {
                     metadata.custom.insert(key.clone(), value.clone());
                 }
@@ -206,7 +221,8 @@ impl BlobStore for RustFSStore {
         let data = self.collect_stream(&mut stream).await?;
         let aws_stream = AwsByteStream::from(data.clone());
 
-        let mut request = self.client
+        let mut request = self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
@@ -235,7 +251,8 @@ impl BlobStore for RustFSStore {
         let data = self.collect_stream(&mut stream).await?;
         let aws_stream = AwsByteStream::from(data.clone());
 
-        let mut request = self.client
+        let mut request = self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
@@ -282,12 +299,15 @@ impl BlobStore for RustFSStore {
             size_bytes: content_length,
             content_type: result.content_type,
             etag: result.e_tag,
-            resolved_range: range.as_ref().map(|r| self.resolve_range(r, content_length)),
+            resolved_range: range
+                .as_ref()
+                .map(|r| self.resolve_range(r, content_length)),
         })
     }
 
     async fn head(&self, key: &str) -> BlobResult<ObjectHead> {
-        let result = self.client
+        let result = self
+            .client
             .head_object()
             .bucket(&self.bucket)
             .key(key)
@@ -315,9 +335,7 @@ impl BlobStore for RustFSStore {
     }
 
     async fn list(&self, prefix: Option<&str>, limit: Option<usize>) -> BlobResult<Vec<BlobInfo>> {
-        let mut request = self.client
-            .list_objects_v2()
-            .bucket(&self.bucket);
+        let mut request = self.client.list_objects_v2().bucket(&self.bucket);
 
         if let Some(prefix) = prefix {
             request = request.prefix(prefix);
@@ -334,7 +352,8 @@ impl BlobStore for RustFSStore {
             for object in objects {
                 if let Some(key) = object.key {
                     // Get additional metadata including filename from head_object
-                    let head_result = self.client
+                    let head_result = self
+                        .client
                         .head_object()
                         .bucket(&self.bucket)
                         .key(&key)
@@ -343,7 +362,8 @@ impl BlobStore for RustFSStore {
                         .map_err(Self::map_aws_error)?;
 
                     // Extract filename from metadata if available
-                    let filename = head_result.metadata()
+                    let filename = head_result
+                        .metadata()
                         .and_then(|metadata| metadata.get("filename"))
                         .map(|f| f.to_string());
 

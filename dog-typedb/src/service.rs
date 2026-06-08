@@ -10,8 +10,11 @@ use typedb_driver::{Addresses, Credentials, DriverOptions, DriverTlsConfig, Type
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-pub type CreateHandler<R, P> =
-    Arc<dyn for<'a> Fn(&'a TenantContext, &'a TypeDBDriver, &'a str, R, P) -> BoxFuture<'a, Result<R>> + Send + Sync>;
+pub type CreateHandler<R, P> = Arc<
+    dyn for<'a> Fn(&'a TenantContext, &'a TypeDBDriver, &'a str, R, P) -> BoxFuture<'a, Result<R>>
+        + Send
+        + Sync,
+>;
 
 pub type FindHandler<R, P> = Arc<
     dyn for<'a> Fn(&'a TenantContext, &'a TypeDBDriver, &'a str, P) -> BoxFuture<'a, Result<Vec<R>>>
@@ -20,13 +23,26 @@ pub type FindHandler<R, P> = Arc<
 >;
 
 pub type GetHandler<R, P> = Arc<
-    dyn for<'a> Fn(&'a TenantContext, &'a TypeDBDriver, &'a str, &'a str, P) -> BoxFuture<'a, Result<R>>
+    dyn for<'a> Fn(
+            &'a TenantContext,
+            &'a TypeDBDriver,
+            &'a str,
+            &'a str,
+            P,
+        ) -> BoxFuture<'a, Result<R>>
         + Send
         + Sync,
 >;
 
 pub type UpdateHandler<R, P> = Arc<
-    dyn for<'a> Fn(&'a TenantContext, &'a TypeDBDriver, &'a str, &'a str, R, P) -> BoxFuture<'a, Result<R>>
+    dyn for<'a> Fn(
+            &'a TenantContext,
+            &'a TypeDBDriver,
+            &'a str,
+            &'a str,
+            R,
+            P,
+        ) -> BoxFuture<'a, Result<R>>
         + Send
         + Sync,
 >;
@@ -45,7 +61,13 @@ pub type PatchHandler<R, P> = Arc<
 >;
 
 pub type RemoveHandler<R, P> = Arc<
-    dyn for<'a> Fn(&'a TenantContext, &'a TypeDBDriver, &'a str, Option<&'a str>, P) -> BoxFuture<'a, Result<R>>
+    dyn for<'a> Fn(
+            &'a TenantContext,
+            &'a TypeDBDriver,
+            &'a str,
+            Option<&'a str>,
+            P,
+        ) -> BoxFuture<'a, Result<R>>
         + Send
         + Sync,
 >;
@@ -114,7 +136,11 @@ impl DogService<serde_json::Value, serde_json::Value> for TypeDBService {
         handler(ctx, &self.driver, &self.database, data, params).await
     }
 
-    async fn find(&self, ctx: &TenantContext, params: serde_json::Value) -> Result<Vec<serde_json::Value>> {
+    async fn find(
+        &self,
+        ctx: &TenantContext,
+        params: serde_json::Value,
+    ) -> Result<Vec<serde_json::Value>> {
         let handler = self
             .handlers
             .find
@@ -124,7 +150,12 @@ impl DogService<serde_json::Value, serde_json::Value> for TypeDBService {
         handler(ctx, &self.driver, &self.database, params).await
     }
 
-    async fn get(&self, ctx: &TenantContext, id: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+    async fn get(
+        &self,
+        ctx: &TenantContext,
+        id: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let handler = self
             .handlers
             .get
@@ -188,17 +219,28 @@ impl DogService<serde_json::Value, serde_json::Value> for TypeDBService {
         _data: Option<serde_json::Value>,
         _params: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        Err(anyhow!("Custom methods not implemented by this TypeDB service"))
+        Err(anyhow!(
+            "Custom methods not implemented by this TypeDB service"
+        ))
     }
 }
 
 pub struct TypeDBDriverFactory;
 
 impl TypeDBDriverFactory {
-    pub async fn connect(address: &str, username: &str, password: &str, tls: bool) -> Result<TypeDBDriver> {
-        let tls_config = if tls { DriverTlsConfig::default() } else { DriverTlsConfig::disabled() };
-        let options = DriverOptions::new(tls_config);
+    pub async fn connect(
+        address: &str,
+        username: &str,
+        password: &str,
+        tls: bool,
+    ) -> Result<TypeDBDriver> {
         let addresses = Addresses::try_from_address_str(address).map_err(|e| anyhow!(e))?;
+        let tls_config = if tls {
+            DriverTlsConfig::default() // system trust roots
+        } else {
+            DriverTlsConfig::disabled() // plaintext — local/dev only
+        };
+        let options = DriverOptions::new(tls_config);
         TypeDBDriver::new(addresses, Credentials::new(username, password), options)
             .await
             .map_err(|e| anyhow!(e))

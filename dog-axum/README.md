@@ -62,7 +62,7 @@ Create a minimal dog-axum server:
 
 ```rust
 use dog_axum::AxumApp;
-use dog_core::{DogApp, DogService};
+use dog_core::{DogAppBuilder, DogService};
 use std::sync::Arc;
 
 // Define your request/response types
@@ -96,9 +96,15 @@ impl DogService<CreateUserRequest, ()> for UserService {
 // Build the server
 #[tokio::main]
 async fn main() -> Result<()> {
-    let app = DogApp::new();
-    let user_service = Arc::new(UserService);
+    // 1. Build your services and hooks
+    let mut builder = DogAppBuilder::new();
+    builder.register_service("users", UserService);
     
+    // 2. Build the immutable DogApp
+    let app = builder.build();
+    let user_service = app.service("users").unwrap().inner();
+    
+    // 3. Mount routes in AxumApp
     let server = AxumApp::new(app)
         .use_service("/users", user_service)
         .service("/health", || async { "ok" });

@@ -1,7 +1,7 @@
 class FleetCommandPro {
     constructor() {
         this.apiBaseUrl = 'http://127.0.0.1:3036';
-         this.tomtomApiKey = 'c1xp5uxxF9W7z0tPjNcQC48nQlABojKH';
+        this.tomtomApiKey = null;
         this.map = null;
         this.vehicleMarkers = new Map();
         this.deliveryMarkers = new Map();
@@ -24,17 +24,21 @@ class FleetCommandPro {
         // Real-time update intervals
         this.updateIntervals = new Map();
         
+        // Track whether routes have been drawn to avoid duplicate API calls
+        this.routesDrawn = false;
+        
         this.init();
     }
     
     async init() {
-        
+        const cfg = await fetch(`${this.apiBaseUrl}/config`).then(r => r.json()).catch(() => ({}));
+        this.tomtomApiKey = cfg.tomtomApiKey || '';
+
         this.setupEventListeners();
         this.initializeMap();
         await this.loadAllData();
         this.startRealTimeUpdates();
         this.updateUI();
-        
     }
     
     setupEventListeners() {
@@ -167,9 +171,11 @@ class FleetCommandPro {
             ]);
             
             
-            // Add vehicle markers to map after data is loaded
+            // Add vehicle/delivery markers after data is loaded
+            // Assignment routes are drawn in updateDispatchView() once the map is ready
             if (this.map) {
                 this.addVehicleMarkers();
+                this.addDeliveryMarkers();
             }
         } catch (error) {
             console.error('❌ Error loading fleet data:', error);
@@ -186,7 +192,7 @@ class FleetCommandPro {
                     'x-service-method': 'read'
                 },
                 body: JSON.stringify({
-                    query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has vehicle-status $status, has vehicle-icon $icon, has status-color $color, has gps-latitude $lat, has gps-longitude $lng, has capacity $capacity, has fuel-level $fuel, has maintenance-score $maintenance; $assignment isa assignment (assigned-vehicle: $v, assigned-employee: $employee), has assignment-status "active"; select $v, $id, $type, $status, $icon, $color, $lat, $lng, $capacity, $fuel, $maintenance; limit 50;'
+                    query: 'match $v isa vehicle, has vehicle-id $id, has vehicle-type $type, has vehicle-status $status, has vehicle-icon $icon, has status-color $color, has gps-latitude $lat, has gps-longitude $lng, has capacity $capacity, has fuel-level $fuel, has maintenance-score $maintenance; select $v, $id, $type, $status, $icon, $color, $lat, $lng, $capacity, $fuel, $maintenance; limit 50;'
                 })
             });
             const result = await response.json();
@@ -910,7 +916,6 @@ class FleetCommandPro {
     async addDeliveryMarkers() {
         if (!this.map) return;
         
-        console.log('🚚 Starting addDeliveryMarkers...');
         
         // Clear existing delivery markers
         this.deliveryMarkers.forEach(marker => marker.remove());
@@ -943,7 +948,6 @@ class FleetCommandPro {
             if (response.ok) {
                 const data = await response.json();
                 if (data.ok && data.ok.answers) {
-                    console.log(`📦 Found ${data.ok.answers.length} deliveries to display`);
                     data.ok.answers.forEach(delivery => {
                         const deliveryData = delivery.data;
                         const deliveryId = deliveryData.deliveryId?.value;
@@ -954,7 +958,6 @@ class FleetCommandPro {
                         const status = deliveryData.status?.value;
                         const priority = deliveryData.priority?.value;
                         
-                        console.log(`📍 Creating delivery marker: ${deliveryId} at (${lat}, ${lng})`);
                         
                         if (deliveryId && lat && lng) {
                             this.createDeliveryMarker(deliveryId, customer, address, lat, lng, status, priority);
@@ -1060,7 +1063,6 @@ class FleetCommandPro {
     async addAssignmentRoutes() {
         if (!this.map) return;
         
-        console.log('🛣️ Starting addAssignmentRoutes...');
         
         // Clear existing assignment routes - remove layers before sources
         this.assignmentRoutes.forEach(route => {
@@ -1096,9 +1098,7 @@ class FleetCommandPro {
             
             if (response.ok) {
                 const data = await response.json();
-                console.log('🔍 Assignment routes response:', data);
                 if (data.ok && data.ok.answers) {
-                    console.log(`🚛 Found ${data.ok.answers.length} active assignments to display`);
                     data.ok.answers.forEach((assignment, index) => {
                         const assignmentData = assignment.data;
                         const vehicleId = assignmentData.vehicleId?.value;
@@ -1108,7 +1108,6 @@ class FleetCommandPro {
                         const dLat = parseFloat(assignmentData.dLat?.value);
                         const dLng = parseFloat(assignmentData.dLng?.value);
                         
-                        console.log(`🗺️ Creating route: ${vehicleId} (${vLat}, ${vLng}) → ${deliveryId} (${dLat}, ${dLng})`);
                         
                         if (vehicleId && deliveryId && vLat && vLng && dLat && dLng) {
                             // Add small delay between route calculations to prevent API rate limiting
@@ -1120,7 +1119,6 @@ class FleetCommandPro {
                         }
                     });
                 } else {
-                    console.log('📭 No active assignments found');
                 }
             } else {
                 console.error('❌ Assignment routes request failed:', response.status, response.statusText);
@@ -1134,7 +1132,6 @@ class FleetCommandPro {
         const sourceId = `assignment-route-${index}`;
         const layerId = `assignment-line-${index}`;
         
-        console.log(`🛣️ Calculating TomTom route for assignment: ${vehicleId} → ${deliveryId}`);
         
         try {
             // Use TomTom route calculation API for actual road-based routes
@@ -1145,6 +1142,8 @@ class FleetCommandPro {
                     'x-service-method': 'route'
                 },
                 body: JSON.stringify({
+                    vehicle_id: vehicleId,
+                    delivery_id: deliveryId,
                     from_lat: vLat,
                     from_lng: vLng,
                     to_lat: dLat,
@@ -1173,7 +1172,6 @@ class FleetCommandPro {
                             duration: routeData.duration_seconds || 0
                         }
                     };
-                    console.log(`✅ TomTom assignment route calculated: ${coordinates.length} points, ${(routeData.distance_meters / 1000).toFixed(1)}km`);
                 } else {
                     console.warn(`⚠️ TomTom route failed for ${vehicleId} → ${deliveryId}, falling back to straight line`);
                     routeGeoJSON = this.createStraightLineRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng);
@@ -1194,7 +1192,6 @@ class FleetCommandPro {
             
         } catch (error) {
             console.error(`❌ TomTom route calculation failed for ${vehicleId} → ${deliveryId}: ${error.message}`);
-            console.log('📍 Falling back to straight line route');
             
             // Fallback to straight line if TomTom fails
             const routeGeoJSON = this.createStraightLineRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng);
@@ -1602,7 +1599,6 @@ class FleetCommandPro {
     }
 
     async loadVehicleTrafficData(vehicleId, lat, lng) {
-        console.log(`🔄 Loading traffic data for vehicle ${vehicleId} - Consolidated version`);
         try {
             // Check if DOM elements exist first
             const routeStatus = document.getElementById(`route-status-${vehicleId}`);
@@ -1620,7 +1616,6 @@ class FleetCommandPro {
             
             // Get route data using consolidated function
             const routeData = await this.getActiveRouteData(vehicleId);
-            console.log('Query response for', vehicleId, ':', routeData);
             
             if (routeData.ok && routeData.ok.answers && routeData.ok.answers.length > 0) {
                 const currentRoute = routeData.ok.answers[0].data;
@@ -1751,6 +1746,8 @@ class FleetCommandPro {
                     'x-service-method': 'route'
                 },
                 body: JSON.stringify({
+                    vehicle_id: vehicleId,
+                    delivery_id: routeId,
                     from_lat: fromLat,
                     from_lng: fromLng,
                     to_lat: toLat,
@@ -2099,7 +2096,6 @@ class FleetCommandPro {
     async displayVehicleRoute(vehicleId) {
         if (!this.map) return;
         
-        console.log(`🛣️ Displaying route for vehicle ${vehicleId}`);
         
         try {
             // Get assignment for this specific vehicle using the working operations endpoint
@@ -2124,7 +2120,6 @@ class FleetCommandPro {
             
             if (response.ok) {
                 const data = await response.json();
-                console.log(`🔍 Vehicle ${vehicleId} assignment response:`, data);
                 
                 if (data.ok && data.ok.answers && data.ok.answers.length > 0) {
                     // Find the assignment for this specific vehicle
@@ -2148,7 +2143,6 @@ class FleetCommandPro {
                         const deliveryTime = assignmentData.deliveryTime?.value;
                         
                         if (vLat && vLng && dLat && dLng && deliveryId) {
-                            console.log(`🗺️ Creating route: ${vehicleId} (${vLat}, ${vLng}) → ${deliveryId} (${dLat}, ${dLng})`);
                             
                             // Clear any existing tracked route and delivery marker (but preserve assignment routes)
                             this.clearTrackedRoute();
@@ -2165,11 +2159,9 @@ class FleetCommandPro {
                             this.showNotification(`No route data available for ${vehicleId}`, 'warning');
                         }
                     } else {
-                        console.log(`📭 No vehicle assignment found for ${vehicleId}`);
                         this.showNotification(`No active assignment for ${vehicleId}`, 'info');
                     }
                 } else {
-                    console.log(`📭 No active assignments found`);
                     this.showNotification(`No active assignment for ${vehicleId}`, 'info');
                 }
             } else {
@@ -2209,7 +2201,6 @@ class FleetCommandPro {
     async addTrackedDeliveryMarker(deliveryId, lat, lng, deliveryAddress = null, deliveryStatus = 'pending', customerName = null, packageWeight = null, deliveryTime = null) {
         if (!this.map) return;
         
-        console.log(`📦 Adding tracked delivery marker: ${deliveryId} at (${lat}, ${lng}) - CACHE_BUSTER_v20`);
         
         // Create delivery marker element
         const markerElement = document.createElement('div');
@@ -2263,26 +2254,19 @@ class FleetCommandPro {
         let finalDeliveryStatus = deliveryStatus;
         
         if (!finalDeliveryAddress || !finalDeliveryAddress.includes(',')) {
-            console.log('No delivery address provided, trying reverse geocoding...');
             try {
                 const address = await this.reverseGeocode(lat, lng, null);
                 if (address) {
                     finalDeliveryAddress = address;
-                    console.log('✅ Using reverse geocoded address:', finalDeliveryAddress);
                 } else {
                     finalDeliveryAddress = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-                    console.log('❌ Reverse geocoding failed, using coordinates');
                 }
             } catch (geoError) {
                 finalDeliveryAddress = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-                console.log('❌ Reverse geocoding error, using coordinates:', geoError);
             }
         } else {
-            console.log('✅ Using provided delivery address:', finalDeliveryAddress);
         }
 
-        console.log('Final delivery address for popup:', finalDeliveryAddress);
-        console.log('Final delivery status for popup:', finalDeliveryStatus);
 
         // Add popup for delivery marker
         const popup = new tt.Popup({ 
@@ -2363,14 +2347,12 @@ class FleetCommandPro {
             popup.setLngLat([lng, lat]).addTo(this.map);
         });
         
-        console.log(`✅ Tracked delivery marker added: ${deliveryId}`);
     }
 
     async createTrackedRoute(vehicleId, deliveryId, vLat, vLng, dLat, dLng) {
         const sourceId = `tracked-route`;
         const layerId = `tracked-route-line`;
         
-        console.log(`🛣️ Calculating TomTom route: ${vehicleId} → ${deliveryId}`);
         
         try {
             // Use TomTom route calculation API for actual road-based routes with geometry
@@ -2392,9 +2374,6 @@ class FleetCommandPro {
             
             if (response.ok) {
                 const routeData = await response.json();
-                console.log(`🗺️ TomTom route response:`, routeData);
-                console.log(`🔍 Response keys:`, Object.keys(routeData));
-                console.log(`🔍 Response status:`, routeData.status);
                 
                 let routeGeoJSON;
                 
@@ -2415,10 +2394,8 @@ class FleetCommandPro {
                             duration: routeData.duration_seconds || 0
                         }
                     };
-                    console.log(`✅ TomTom route calculated: ${coordinates.length} points, ${(routeData.distance_meters / 1000).toFixed(1)}km`);
                 } else {
                     console.error('❌ TomTom backend did not return route geometry');
-                    console.log('Response structure:', Object.keys(routeData));
                     throw new Error('No route geometry in TomTom response');
                 }
                 
@@ -2446,7 +2423,6 @@ class FleetCommandPro {
 
     async getTomTomTrafficForRoute(fromLat, fromLng, toLat, toLng) {
         try {
-            console.log(`🚦 Checking traffic conditions for route...`);
             
             const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
                 method: 'POST',
@@ -2465,7 +2441,6 @@ class FleetCommandPro {
             
             if (response.ok) {
                 const trafficData = await response.json();
-                console.log(`🚦 Traffic data received:`, trafficData);
                 
                 if (trafficData.status === 'success') {
                     return {
@@ -2489,7 +2464,6 @@ class FleetCommandPro {
     }
 
     enterTrackingMode(vehicleId) {
-        console.log(`🎯 Entering tracking mode for vehicle: ${vehicleId}`);
         this.trackedVehicleId = vehicleId;
         
         // Dim all other vehicles and highlight the tracked one
@@ -2522,7 +2496,6 @@ class FleetCommandPro {
     exitTrackingMode() {
         if (!this.trackedVehicleId) return;
         
-        console.log(`🔄 Exiting tracking mode for vehicle: ${this.trackedVehicleId}`);
         
         // Restore all vehicle markers to normal appearance
         this.vehicleMarkers.forEach((marker, id) => {
@@ -2569,7 +2542,6 @@ class FleetCommandPro {
             [maxLng + padding, maxLat + padding]  // Northeast
         ];
         
-        console.log(`🗺️ Fitting map to route bounds: ${vehicleId} → ${deliveryId}`);
         
         // Fit the map to show the entire route
         this.map.fitBounds(bounds, {
@@ -2678,7 +2650,6 @@ class FleetCommandPro {
             // Fit map to show the entire route
             this.fitMapToRoute(routeGeoJSON, vehicleId, deliveryId);
             
-            console.log(`✅ Tracked route added to map: ${vehicleId} → ${deliveryId}`);
             
         } catch (error) {
             console.error('Error adding tracked route to map:', error);
@@ -3383,9 +3354,12 @@ class FleetCommandPro {
     updateDispatchView() {
         this.updateAvailableDrivers();
         this.updatePendingQueue();
-        // Delivery markers now only show when tracking a vehicle
-        // this.addDeliveryMarkers();
-        this.addAssignmentRoutes();
+        this.addDeliveryMarkers();
+        // Draw assignment routes once — map is ready by the time updateUI() fires
+        if (!this.routesDrawn) {
+            this.routesDrawn = true;
+            this.addAssignmentRoutes();
+        }
     }
     
     updateAvailableDrivers() {
@@ -3639,7 +3613,6 @@ class FleetCommandPro {
     
     async assignDeliveryToDriver(deliveryId, driverId) {
         try {
-            console.log(`🎯 Assigning delivery ${deliveryId} to driver ${driverId}`);
             
             // Create assignment in TypeDB
             const response = await fetch(`${this.apiBaseUrl}/operations`, {
@@ -3666,7 +3639,6 @@ class FleetCommandPro {
     
     startRealTimeUpdates() {
         // Polling disabled - will use dog-realtime when implemented
-        console.log('🔄 Real-time polling disabled - awaiting dog-realtime integration');
     }
     
     setupDeliveryDetailsButton() {
@@ -3886,7 +3858,6 @@ class FleetCommandPro {
             
             if (data.status === 'success' && data.duration_seconds) {
                 const travelTimeHours = Math.ceil(data.duration_seconds / 3600); // Convert seconds to hours, round up
-                console.log(`TomTom routing: ${travelTimeHours} hours (${data.duration_seconds}s) for ${fromCoords.lat},${fromCoords.lng} to ${toCoords.lat},${toCoords.lng}`);
                 return travelTimeHours;
             }
         } catch (error) {
@@ -3916,7 +3887,6 @@ class FleetCommandPro {
             
             if (response.ok) {
                 const data = await response.json();
-                console.log('TomTom geocode response:', data);
                 
                 if (data.status === 'success') {
                     return { lat: data.latitude, lng: data.longitude };
@@ -3952,7 +3922,6 @@ class FleetCommandPro {
                 deliveryTimeInput.value = this.deliveryDetails.deliveryTime;
             }
             
-            console.log('Restored delivery details:', this.deliveryDetails);
         }
     }
     
@@ -3981,7 +3950,6 @@ class FleetCommandPro {
             }
             
             // Show success feedback
-            console.log('Delivery details saved:', this.deliveryDetails);
             
             // Optional: Show a brief success message
             this.showNotification('Delivery details saved successfully', 'success');
@@ -4103,7 +4071,6 @@ class FleetCommandPro {
 
 async assignDeliveryToDriver(deliveryId, driverId) {
     try {
-        console.log(`🎯 Assigning delivery ${deliveryId} to driver ${driverId}`);
         
         // Create assignment in TypeDB
         const response = await fetch(`${this.apiBaseUrl}/operations`, {
@@ -4130,45 +4097,154 @@ async assignDeliveryToDriver(deliveryId, driverId) {
 
 startRealTimeUpdates() {
     // Polling disabled - will use dog-realtime when implemented
-    console.log('🔄 Real-time polling disabled - awaiting dog-realtime integration');
 }
 
     updateDriversView() {
-        console.log('Updating drivers view...');
     }
     
     updateAnalyticsView() {
-        console.log('Updating analytics view...');
     }
     
     updateMaintenanceView() {
-        console.log('Updating maintenance view...');
     }
     
     updateSystemView() {
-        console.log('Updating system view...');
     }
     
     // Navigation methods
     showDashboard() {
-        console.log('Showing dashboard...');
         // Hide any open panels
         this.hideDriverAssignmentPanel();
     }
     
     showDriverAssignment() {
-        console.log('Showing driver assignment panel...');
         this.showDriverAssignmentPanel();
     }
     
     showVehicleManagement() {
-        console.log('Showing vehicle management...');
         this.hideDriverAssignmentPanel();
     }
     
-    showRouteOptimization() {
-        console.log('Showing route optimization...');
+    async showRouteOptimization() {
         this.hideDriverAssignmentPanel();
+
+        // Remove old panel if it exists
+        const existing = document.getElementById('route-optimization-panel');
+        if (existing) { existing.remove(); }
+
+        // Fetch active assignments from API
+        let activeAssignments = [];
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/operations`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-service-method': 'read' },
+                body: JSON.stringify({
+                    query: `
+                        match
+                        $assignment (assigned-employee: $employee, assigned-vehicle: $vehicle, assigned-delivery: $delivery) isa assignment,
+                            has assignment-status "active";
+                        $vehicle has vehicle-id $vehicleId;
+                        $delivery has delivery-id $deliveryId;
+                        select $vehicleId, $deliveryId;
+                    `
+                })
+            });
+            if (response.ok) {
+                const data = await response.json();
+                if (data.ok && data.ok.answers) {
+                    activeAssignments = data.ok.answers.map(a => ({
+                        vehicle_id: a.data?.vehicleId?.value || 'Unknown',
+                        delivery_id: a.data?.deliveryId?.value || 'Unknown',
+                    }));
+                }
+            }
+        } catch(e) {
+            console.warn('Could not fetch assignments for panel:', e);
+        }
+
+        const panel = document.createElement('div');
+        panel.id = 'route-optimization-panel';
+        panel.className = 'fixed z-50 bg-white rounded-lg shadow-xl border border-gray-200 w-80';
+
+        // Position next to nav, same as driver assignment panel
+        const navPanel = document.querySelector('nav');
+        if (navPanel) {
+            const navRect = navPanel.getBoundingClientRect();
+            panel.style.left = `${navRect.right + 16}px`;
+        } else {
+            panel.style.left = '288px';
+        }
+        panel.style.top = '1rem';
+        panel.style.maxHeight = 'calc(100vh - 2rem)';
+        panel.style.overflowY = 'auto';
+
+        const assignmentRows = activeAssignments.length > 0
+            ? activeAssignments.map(a => `
+                <div class="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
+                    <span class="text-lg">🚛</span>
+                    <div class="flex-1 min-w-0">
+                        <div class="text-sm font-medium text-slate-800 truncate">${a.vehicle_id}</div>
+                        <div class="text-xs text-slate-500 truncate">→ ${a.delivery_id}</div>
+                    </div>
+                    <span class="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">active</span>
+                </div>
+            `).join('')
+            : '<p class="text-sm text-slate-400 text-center py-2">No active assignments</p>';
+
+        panel.innerHTML = `
+            <div class="p-4 border-b border-gray-100">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-lg font-semibold text-slate-900">Route Optimization</h2>
+                    <button onclick="document.getElementById('route-optimization-panel').remove()"
+                        class="text-slate-400 hover:text-slate-600 p-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <p class="text-xs text-slate-500 mt-1">Trigger background route rebalancing via dog-queue</p>
+            </div>
+
+            <div class="p-4 space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-2">Active Assignments (${activeAssignments.length})</label>
+                    <div class="border border-gray-200 rounded-lg px-3 py-1">
+                        ${assignmentRows}
+                    </div>
+                </div>
+
+                <div class="flex gap-3 pt-2">
+                    <button id="optimize-routes-btn" onclick="window.fleetCommand.triggerRouteOptimization(this)"
+                        class="flex-1 bg-blue-500 text-white px-4 py-2 text-sm rounded-lg hover:bg-blue-600 transition-colors font-medium">
+                        ⚡ Optimize All Routes
+                    </button>
+                    <button onclick="document.getElementById('route-optimization-panel').remove()"
+                        class="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                        Cancel
+                    </button>
+                </div>
+                <p class="text-xs text-slate-400 text-center">
+                    Dispatches a <code class="text-blue-500">route_rebalancing</code> job to dog-queue
+                </p>
+            </div>
+        `;
+
+        document.body.appendChild(panel);
+    }
+
+    async triggerRouteOptimization(btn) {
+        btn.disabled = true;
+        btn.className = 'flex-1 bg-slate-400 text-white px-4 py-2 text-sm rounded-lg font-medium cursor-not-allowed';
+        btn.innerHTML = '⏳ Dispatching...';
+        try {
+            await this.optimizeRoutes();
+            btn.innerHTML = '✅ Job dispatched!';
+            btn.className = 'flex-1 bg-green-500 text-white px-4 py-2 text-sm rounded-lg font-medium cursor-not-allowed';
+        } catch(e) {
+            btn.innerHTML = '❌ Failed — retry?';
+            btn.disabled = false;
+            btn.className = 'flex-1 bg-red-500 text-white px-4 py-2 text-sm rounded-lg hover:bg-red-600 transition-colors font-medium';
+        }
     }
     
     // Driver Assignment Panel
@@ -4929,7 +5005,6 @@ startRealTimeUpdates() {
             // Get pickup time for location prediction
             const assignmentDateTime = scheduleInput?.value;
             if (!assignmentDateTime) {
-                console.log('No assignment time selected, using simple vehicle query');
                 // Fallback to simple query if no time selected
                 const response = await fetch(`${this.apiBaseUrl}/vehicles`, {
                     method: 'POST',
@@ -4973,7 +5048,6 @@ startRealTimeUpdates() {
             }
             
             const result = await response.json();
-            console.log('Loaded available vehicles from database:', result);
             
             this.processVehicleResponse(result, true);
             
@@ -4992,7 +5066,6 @@ startRealTimeUpdates() {
     
     processVehicleResponse(data, hasLocationData) {
         try {
-            console.log('Loaded available vehicles from database:', data);
             
             const availableVehicles = data.ok?.answers || [];
             const vehicleSelect = document.getElementById('vehicle-assignment');
@@ -5022,7 +5095,6 @@ startRealTimeUpdates() {
                 }
             });
             
-            console.log(`Loaded ${availableVehicles.length} available vehicles from database`);
             
             // Add event listener for vehicle selection to auto-populate pickup location
             if (hasLocationData) {
@@ -5059,7 +5131,6 @@ startRealTimeUpdates() {
                 // Convert coordinates to address using reverse geocoding
                 this.reverseGeocode(location.lat, location.lng, 'pickup-address');
                 
-                console.log(`Auto-populated pickup location for vehicle ${selectedVehicleId}:`, location);
             } else {
                 // Hide pickup location if no vehicle selected
                 pickupContainer.classList.add('hidden');
@@ -5117,11 +5188,9 @@ startRealTimeUpdates() {
                     // Auto-check the required certification checkboxes
                     this.updateCertificationCheckboxes(requiredCertifications);
                     
-                    console.log(`Auto-populated certification requirements for vehicle ${vehicleId}:`, requiredCertifications);
                 } else {
                     // No certification requirements for this vehicle
                     this.clearCertificationRequirements();
-                    console.log(`No certification requirements found for vehicle ${vehicleId}`);
                 }
             }
         } catch (error) {
@@ -5175,7 +5244,6 @@ startRealTimeUpdates() {
             
             if (response.ok) {
                 const data = await response.json();
-                console.log('TomTom reverse geocode response:', data);
                 
                 if (data.status === 'success' && data.address) {
                     const addressInput = document.getElementById(inputId);
@@ -5219,7 +5287,6 @@ startRealTimeUpdates() {
                 const deliveryLng = parseFloat(document.getElementById('delivery-lng').value);
                 
                 if (selectedDateTime && !isNaN(pickupLat) && !isNaN(pickupLng) && !isNaN(deliveryLat) && !isNaN(deliveryLng)) {
-                    console.log('Date, pickup and delivery locations available, loading drivers for:', selectedDateTime);
                     // Show the driver dropdown container
                     driverContainer.classList.remove('hidden');
                     this.loadAvailableDriversForDateAndLocation(selectedDateTime, pickupLat, pickupLng, deliveryLat, deliveryLng);
@@ -5320,7 +5387,6 @@ startRealTimeUpdates() {
             }
             
             const result = await response.json();
-            console.log('Loaded available drivers for date and location:', result);
             
             const availableDrivers = result.ok?.answers || [];
             
@@ -5582,7 +5648,6 @@ startRealTimeUpdates() {
                 vehicle_id: 'temp_vehicle'
             };
 
-            console.log('TomTom traffic request:', requestBody);
 
             const response = await fetch(`${this.apiBaseUrl}/tomtom`, {
                 method: 'POST',
@@ -5600,7 +5665,6 @@ startRealTimeUpdates() {
             }
             
             const data = await response.json();
-            console.log('TomTom traffic response:', data);
             
             if (data.status === 'success') {
                 return {
@@ -5836,7 +5900,6 @@ startRealTimeUpdates() {
             }
             
             const data = await response.json();
-            console.log('TomTom backend results:', data);
             
             // Handle TomTom backend service response format for search
             if (data.status === 'success' && data.results) {
@@ -6005,7 +6068,6 @@ startRealTimeUpdates() {
             
             if (rules.length > 0 && rules[0].data?.value?.value) {
                 const hoursLimit = parseFloat(rules[0].data.value.value);
-                console.log(`📋 Jurisdiction ${jurisdiction} hours limit: ${hoursLimit}`);
                 return hoursLimit;
             }
             
@@ -6030,7 +6092,6 @@ startRealTimeUpdates() {
         };
         
         const limit = defaults[jurisdiction] || defaults['INTL'];
-        console.log(`📋 Using default hours limit for ${jurisdiction}: ${limit}`);
         return limit;
     }
     
@@ -6050,7 +6111,6 @@ startRealTimeUpdates() {
                 const minDateTime = `${year}-${month}-${day}T${hours}:${minutes}`;
                 scheduleInput.setAttribute('min', minDateTime);
                 
-                console.log('Set minimum datetime to:', minDateTime);
             } else {
                 console.error('Schedule input not found for datetime constraints');
             }
@@ -6063,6 +6123,5 @@ startRealTimeUpdates() {
 
 // Initialize FleetCommand Pro when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('🚀 Starting FleetCommand Pro Enterprise System...');
     window.fleetCommand = new FleetCommandPro();
 });

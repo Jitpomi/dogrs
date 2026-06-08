@@ -16,7 +16,13 @@ async fn health_ok() {
 
     let res = ax
         .router
-        .oneshot(Request::builder().method("GET").uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -115,7 +121,13 @@ async fn posts_find_respects_include_drafts_query_param() {
     let res = ax
         .router
         .clone()
-        .oneshot(Request::builder().method("GET").uri("/posts").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/posts")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(res.status().as_u16(), 200);
@@ -396,7 +408,13 @@ async fn authors_on_delete_cascade_removes_posts() {
 
     let res = ax
         .router
-        .oneshot(Request::builder().method("GET").uri("/posts").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/posts")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(res.status().as_u16(), 200);
@@ -459,7 +477,13 @@ async fn authors_on_delete_nullify_clears_author_id_on_posts() {
 
     let res = ax
         .router
-        .oneshot(Request::builder().method("GET").uri("/posts").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/posts")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(res.status().as_u16(), 200);
@@ -491,8 +515,14 @@ async fn authors_nested_validation_errors_have_world_class_paths() {
     assert_eq!(res.status().as_u16(), 422);
     let body = json_body(res).await;
 
-    assert_eq!(body["errors"]["profile.display_name"][0], "display_name must be at least 2 chars");
-    assert_eq!(body["errors"]["tags[0].email"][0], "tag email must be a valid email");
+    assert_eq!(
+        body["errors"]["profile.display_name"][0],
+        "display_name must be at least 2 chars"
+    );
+    assert_eq!(
+        body["errors"]["tags[0].email"][0],
+        "tag email must be a valid email"
+    );
 }
 
 #[tokio::test]

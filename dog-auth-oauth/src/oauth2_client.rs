@@ -12,21 +12,39 @@ use serde_json::Value;
 
 use crate::strategy::OAuthProvider;
 
-/// A `BasicClient` with auth URL and token URL configured (type-state pattern in oauth2 5.0).
-/// HasAuthUrl=EndpointSet, HasDeviceAuthUrl=EndpointNotSet,
-/// HasIntrospectionUrl=EndpointNotSet, HasRevocationUrl=EndpointNotSet,
-/// HasTokenUrl=EndpointSet
-type ConfiguredClient = BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
+// ---------------------------------------------------------------------------
+// Type alias for the configured client with both auth_uri AND token_uri set.
+// oauth2 5.x uses type-state generics: each endpoint tracks Set/NotSet.
+// Parameters (in order): HasAuthUrl, HasDeviceAuthUrl, HasIntrospectionUrl,
+//                         HasRevocationUrl, HasTokenUrl
+// ---------------------------------------------------------------------------
+type ConfiguredBasicClient = BasicClient<
+    EndpointSet,    // HasAuthUrl    — set via .set_auth_uri()
+    EndpointNotSet, // HasDeviceAuthUrl
+    EndpointNotSet, // HasIntrospectionUrl
+    EndpointNotSet, // HasRevocationUrl
+    EndpointSet,    // HasTokenUrl   — set via .set_token_uri()
+>;
+
+pub struct OAuth2ClientConfig {
+    pub name: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub auth_url: String,
+    pub token_url: String,
+    pub redirect_uri: String,
+    pub scopes: Vec<String>,
+    pub userinfo_url: Option<String>,
+}
 
 pub struct OAuth2AuthorizationCodeProvider<P>
 where
     P: Clone + Send + Sync + 'static,
 {
     name: String,
-    client: ConfiguredClient,
+    client: ConfiguredBasicClient,
     scopes: Vec<String>,
     userinfo_url: Option<String>,
-    http_client: reqwest::Client,
     _marker: PhantomData<fn() -> P>,
 }
 
@@ -34,35 +52,27 @@ impl<P> OAuth2AuthorizationCodeProvider<P>
 where
     P: Clone + Send + Sync + 'static,
 {
-    pub fn new(
-        name: impl Into<String>,
-        client_id: impl Into<String>,
-        client_secret: impl Into<String>,
-        auth_url: impl Into<String>,
-        token_url: impl Into<String>,
-        redirect_uri: impl Into<String>,
-        scopes: Vec<String>,
-        userinfo_url: Option<String>,
-    ) -> Result<Self> {
-        // oauth2 5.0: Client::new takes only ClientId; other endpoints are set via builder methods.
-        // Each set_*_uri call changes the type param from EndpointNotSet to EndpointSet.
-        let client = BasicClient::new(ClientId::new(client_id.into()))
-            .set_client_secret(ClientSecret::new(client_secret.into()))
-            .set_auth_uri(AuthUrl::new(auth_url.into())?)
-            .set_token_uri(TokenUrl::new(token_url.into())?)
-            .set_redirect_uri(RedirectUrl::new(redirect_uri.into())?);
+    pub fn new(config: OAuth2ClientConfig) -> Result<Self> {
+        // oauth2 5.x: BasicClient::new() takes only ClientId; other fields via builders.
+        // Each set_* call changes the type-state, giving us ConfiguredBasicClient.
+        let client = BasicClient::new(ClientId::new(config.client_id))
+            .set_client_secret(ClientSecret::new(config.client_secret))
+            .set_auth_uri(AuthUrl::new(config.auth_url)?)
+            .set_token_uri(TokenUrl::new(config.token_url)?)
+            .set_redirect_uri(RedirectUrl::new(config.redirect_uri)?);
 
         Ok(Self {
-            name: name.into(),
+            name: config.name,
             client,
-            scopes,
-            userinfo_url,
-            http_client: reqwest::Client::new(),
+            scopes: config.scopes,
+            userinfo_url: config.userinfo_url,
             _marker: PhantomData,
         })
     }
 
     pub fn authorize_url(&self) -> String {
+        // oauth2 5.x with EndpointSet: authorize_url() returns AuthorizationRequest directly
+        // (infallible — no Result). Use .url() to extract the (Url, CsrfToken) pair.
         let mut req = self.client.authorize_url(CsrfToken::new_random);
         for s in &self.scopes {
             req = req.add_scope(Scope::new(s.clone()));
@@ -82,13 +92,14 @@ where
     }
 
     async fn exchange_code(&self, code: &str, _ctx: &mut HookContext<Value, P>) -> Result<String> {
-        // oauth2 5.0: pass reqwest::Client directly instead of the removed async_http_client fn
+        // oauth2 5.x with EndpointSet: exchange_code() returns CodeTokenRequest (not Result).
+        // request_async takes a &reqwest::Client (implements AsyncHttpClient).
+        let http_client = reqwest::Client::new();
         let token = self
             .client
             .exchange_code(AuthorizationCode::new(code.to_string()))
-            .request_async(&self.http_client)
-            .await
-            .map_err(|e| anyhow::anyhow!("Token exchange failed: {e}"))?;
+            .request_async(&http_client)
+            .await?;
 
         Ok(token.access_token().secret().to_string())
     }
@@ -102,7 +113,8 @@ where
             return Ok(None);
         };
 
-        let profile = self.http_client
+        let client = reqwest::Client::new();
+        let profile = client
             .get(url)
             .bearer_auth(access_token)
             .send()

@@ -758,7 +758,19 @@ async function deletePost(postId) {
         
         const currentUsername = currentUser.username;
         
-        // Delete post and all related data (posting relations, reactions, comments, views)
+        // 1. Delete all views of this post
+        await makeQuery('posts', `match $post isa post, has post-id "${postId}"; $v isa viewing; $v links (viewed: $post); delete $v;`, 'Write').catch(e => console.log('No views to delete', e));
+        
+        // 2. Delete all reactions to this post
+        await makeQuery('posts', `match $post isa post, has post-id "${postId}"; $r isa reaction; $r links (parent: $post); delete $r;`, 'Write').catch(e => console.log('No reactions to delete', e));
+        
+        // 3. Delete all reactions to comments of this post
+        await makeQuery('posts', `match $post isa post, has post-id "${postId}"; $c isa commenting links (parent: $post, comment: $comment); $r isa reaction links (parent: $comment); delete $r;`, 'Write').catch(e => console.log('No comment reactions', e));
+        
+        // 4. Delete all comments on this post
+        await makeQuery('posts', `match $post isa post, has post-id "${postId}"; $c isa commenting links (parent: $post, comment: $comment); delete $c; $comment;`, 'Write').catch(e => console.log('No comments to delete', e));
+        
+        // 5. Delete post and posting relation
         const deleteData = await makeQuery('posts', `
             match
             $post isa post, has post-id "${postId}";
@@ -883,7 +895,10 @@ async function deleteComment(commentId) {
         
         const currentUsername = currentUser.username;
         
-        // Delete comment and commenting relation
+        // 1. Delete all reactions to this comment
+        await makeQuery('posts', `match $comment isa comment, has comment-id "${commentId}"; $r isa reaction; $r links (parent: $comment); delete $r;`, 'Write').catch(e => console.log('No comment reactions to delete', e));
+        
+        // 2. Delete comment and commenting relation
         const deleteData = await makeQuery('posts', `
             match
             $comment isa comment, has comment-id "${commentId}";

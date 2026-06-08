@@ -1,11 +1,10 @@
-use std::sync::Arc;
-use std::collections::{HashMap, BTreeSet};
 use crate::{
-    BlobConfig, BlobCtx, BlobError, BlobId, BlobPut, BlobReceipt, BlobResult, BlobStore,
-    ByteRange, ByteStream, DefaultKeyStrategy, OpenedBlob,
-    UploadCoordinator, UploadId, UploadIntent, UploadSession, BlobKeyStrategy,
-    ChunkSessionId, ChunkResult, ChunkSession
+    BlobConfig, BlobCtx, BlobError, BlobId, BlobKeyStrategy, BlobPut, BlobReceipt, BlobResult,
+    BlobStore, ByteRange, ByteStream, ChunkResult, ChunkSession, ChunkSessionId,
+    DefaultKeyStrategy, OpenedBlob, UploadCoordinator, UploadId, UploadIntent, UploadSession,
 };
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 pub struct BlobState {
     store: Arc<dyn BlobStore>,
@@ -16,7 +15,7 @@ pub struct BlobState {
 }
 /// The main blob adapter - this is what DogService implementations embed
 pub struct BlobAdapter {
-   state: Arc<BlobState>,
+    state: Arc<BlobState>,
 }
 
 impl BlobState {
@@ -77,27 +76,32 @@ impl BlobAdapter {
         }
 
         let blob_id = BlobId::new();
-        let key = self.state.keys.object_key(&ctx.tenant_id, blob_id.as_str(), &put.key_hints);
+        let key = self
+            .state
+            .keys
+            .object_key(&ctx.tenant_id, blob_id.as_str(), &put.key_hints);
 
         // Store the blob with metadata if filename is available
         let result = if put.filename.is_some() {
-            self.state.store.put_with_metadata(
-                &key,
-                put.content_type.as_deref(),
-                put.filename.as_deref(),
-                body,
-            ).await?
+            self.state
+                .store
+                .put_with_metadata(
+                    &key,
+                    put.content_type.as_deref(),
+                    put.filename.as_deref(),
+                    body,
+                )
+                .await?
         } else {
-            self.state.store.put(
-                &key,
-                put.content_type.as_deref(),
-                body,
-            ).await?
+            self.state
+                .store
+                .put(&key, put.content_type.as_deref(), body)
+                .await?
         };
 
         // Create receipt
-        let mut receipt = BlobReceipt::new(blob_id, key, result.size_bytes)
-            .with_attributes(put.attributes);
+        let mut receipt =
+            BlobReceipt::new(blob_id, key, result.size_bytes).with_attributes(put.attributes);
 
         if let Some(ct) = put.content_type {
             receipt = receipt.with_content_type(ct);
@@ -127,7 +131,11 @@ impl BlobAdapter {
         id: BlobId,
         range: Option<ByteRange>,
     ) -> BlobResult<OpenedBlob> {
-        let key = self.state.keys.object_key(&ctx.tenant_id, id.as_str(), &std::collections::BTreeMap::new());
+        let key = self.state.keys.object_key(
+            &ctx.tenant_id,
+            id.as_str(),
+            &std::collections::BTreeMap::new(),
+        );
 
         // Try signed URL first if available and no range requested
         if range.is_none() && self.can_sign_urls() {
@@ -135,7 +143,8 @@ impl BlobAdapter {
                 let expires_at = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_secs() as i64 + 3600;
+                    .as_secs() as i64
+                    + 3600;
 
                 let receipt = self.build_receipt_from_key(&key, &id).await?;
                 return Ok(OpenedBlob::signed_url(receipt, url, expires_at));
@@ -145,7 +154,7 @@ impl BlobAdapter {
         // Fall back to streaming
         let get_result = self.state.store.get(&key, range).await?;
         let receipt = self.build_receipt_from_get_result(&get_result, id, key);
-        
+
         Ok(OpenedBlob::stream(
             receipt,
             get_result.stream,
@@ -159,30 +168,39 @@ impl BlobAdapter {
 
     /// Delete a blob
     pub async fn delete(&self, ctx: BlobCtx, id: BlobId) -> BlobResult<()> {
-        let key = self.state.keys.object_key(&ctx.tenant_id, id.as_str(), &std::collections::BTreeMap::new());
+        let key = self.state.keys.object_key(
+            &ctx.tenant_id,
+            id.as_str(),
+            &std::collections::BTreeMap::new(),
+        );
         self.state.store.delete(&key).await
     }
 
     /// Begin a multipart upload
-    pub async fn begin_multipart(
-        &self,
-        ctx: BlobCtx,
-        put: BlobPut,
-    ) -> BlobResult<UploadSession> {
-        let uploads = self.state.uploads.as_ref().ok_or_else(|| {
-            BlobError::invalid("Upload coordinator not configured")
-        })?;
+    pub async fn begin_multipart(&self, ctx: BlobCtx, put: BlobPut) -> BlobResult<UploadSession> {
+        let uploads = self
+            .state
+            .uploads
+            .as_ref()
+            .ok_or_else(|| BlobError::invalid("Upload coordinator not configured"))?;
 
         let blob_id = BlobId::new();
-        let key = self.state.keys.object_key(&ctx.tenant_id, blob_id.as_str(), &put.key_hints);
+        let key = self
+            .state
+            .keys
+            .object_key(&ctx.tenant_id, blob_id.as_str(), &put.key_hints);
 
         let intent = UploadIntent::new(blob_id, key)
-            .with_content_type(put.content_type.unwrap_or_else(|| "application/octet-stream".to_string()))
+            .with_content_type(
+                put.content_type
+                    .unwrap_or_else(|| "application/octet-stream".to_string()),
+            )
             .with_filename(put.filename.unwrap_or_default())
             .with_attributes(put.attributes)
             .with_parts(
                 self.state.config.upload_rules.part_size,
-                put.size_hint.map(|s| ((s + self.state.config.upload_rules.part_size - 1) / self.state.config.upload_rules.part_size) as u32)
+                put.size_hint
+                    .map(|s| s.div_ceil(self.state.config.upload_rules.part_size) as u32),
             );
 
         uploads.begin(ctx, intent).await
@@ -196,11 +214,15 @@ impl BlobAdapter {
         part_number: u32,
         body: ByteStream,
     ) -> BlobResult<crate::PartReceipt> {
-        let uploads = self.state.uploads.as_ref().ok_or_else(|| {
-            BlobError::invalid("Upload coordinator not configured")
-        })?;
+        let uploads = self
+            .state
+            .uploads
+            .as_ref()
+            .ok_or_else(|| BlobError::invalid("Upload coordinator not configured"))?;
 
-        uploads.accept_part(ctx, &upload_id, part_number, body).await
+        uploads
+            .accept_part(ctx, &upload_id, part_number, body)
+            .await
     }
 
     /// Complete a multipart upload
@@ -209,22 +231,22 @@ impl BlobAdapter {
         ctx: BlobCtx,
         upload_id: UploadId,
     ) -> BlobResult<BlobReceipt> {
-        let uploads = self.state.uploads.as_ref().ok_or_else(|| {
-            BlobError::invalid("Upload coordinator not configured")
-        })?;
+        let uploads = self
+            .state
+            .uploads
+            .as_ref()
+            .ok_or_else(|| BlobError::invalid("Upload coordinator not configured"))?;
 
         uploads.complete(ctx, &upload_id).await
     }
 
     /// Abort a multipart upload
-    pub async fn abort_multipart(
-        &self,
-        ctx: BlobCtx,
-        upload_id: UploadId,
-    ) -> BlobResult<()> {
-        let uploads = self.state.uploads.as_ref().ok_or_else(|| {
-            BlobError::invalid("Upload coordinator not configured")
-        })?;
+    pub async fn abort_multipart(&self, ctx: BlobCtx, upload_id: UploadId) -> BlobResult<()> {
+        let uploads = self
+            .state
+            .uploads
+            .as_ref()
+            .ok_or_else(|| BlobError::invalid("Upload coordinator not configured"))?;
 
         uploads.abort(ctx, &upload_id).await
     }
@@ -235,9 +257,11 @@ impl BlobAdapter {
         ctx: BlobCtx,
         upload_id: UploadId,
     ) -> BlobResult<UploadSession> {
-        let uploads = self.state.uploads.as_ref().ok_or_else(|| {
-            BlobError::invalid("Upload coordinator not configured")
-        })?;
+        let uploads = self
+            .state
+            .uploads
+            .as_ref()
+            .ok_or_else(|| BlobError::invalid("Upload coordinator not configured"))?;
 
         uploads.get_session(ctx, &upload_id).await
     }
@@ -259,9 +283,9 @@ impl BlobAdapter {
     /// Build receipt from key (for signed URLs)
     async fn build_receipt_from_key(&self, key: &str, id: &BlobId) -> BlobResult<BlobReceipt> {
         let head = self.state.store.head(key).await?;
-        
+
         let mut receipt = BlobReceipt::new(id.clone(), key.to_string(), head.size_bytes);
-        
+
         if let Some(ct) = head.content_type {
             receipt = receipt.with_content_type(ct);
         }
@@ -283,7 +307,7 @@ impl BlobAdapter {
         key: String,
     ) -> BlobReceipt {
         let mut receipt = BlobReceipt::new(id, key, get_result.size_bytes);
-        
+
         if let Some(ct) = &get_result.content_type {
             receipt = receipt.with_content_type(ct.clone());
         }
@@ -299,12 +323,12 @@ impl BlobAdapter {
 
     /// Get configuration
     pub fn config(&self) -> &BlobConfig {
-&self.state.config
+        &self.state.config
     }
 
     /// Check if multipart uploads are available
     pub fn supports_multipart(&self) -> bool {
-self.state.uploads.is_some()
+        self.state.uploads.is_some()
     }
 
     /// Check if range requests are supported
@@ -334,12 +358,13 @@ self.state.uploads.is_some()
         if let Some(blob_ref) = request_data.get("file").and_then(|v| v.as_object()) {
             // Handle BlobRef format
             if let Some(temp_path) = blob_ref.get("temp_path").and_then(|v| v.as_str()) {
-                let file_bytes = tokio::fs::read(temp_path).await
-                    .map_err(|e| BlobError::invalid(format!("Failed to read temp file {}: {}", temp_path, e)))?;
-                
+                let file_bytes = tokio::fs::read(temp_path).await.map_err(|e| {
+                    BlobError::invalid(format!("Failed to read temp file {}: {}", temp_path, e))
+                })?;
+
                 // Clean up temp file after reading
                 let _ = tokio::fs::remove_file(temp_path).await;
-                
+
                 Ok(file_bytes)
             } else {
                 Err(BlobError::invalid("BlobRef missing temp_path field"))
@@ -353,7 +378,7 @@ self.state.uploads.is_some()
             Ok(decoded)
         } else {
             Err(BlobError::invalid(
-                "Missing or invalid 'file' field - expected BlobRef object or base64 string"
+                "Missing or invalid 'file' field - expected BlobRef object or base64 string",
             ))
         }
     }
@@ -378,7 +403,7 @@ self.state.uploads.is_some()
         let session = sessions.entry(session_id.clone()).or_insert_with(|| {
             let blob_id = BlobId::new();
             let temp_dir = format!("/tmp/dog_blob_chunks_{}", session_id.as_str());
-            
+
             ChunkSession {
                 session_id: session_id.clone(),
                 blob_id,
@@ -394,57 +419,72 @@ self.state.uploads.is_some()
 
         // Store this chunk to temporary file
         let chunk_path = format!("{}/chunk_{:03}", session.temp_dir, chunk_index);
-        
+
         // Ensure temp directory exists
         if let Some(parent) = std::path::Path::new(&chunk_path).parent() {
-            tokio::fs::create_dir_all(parent).await
-                .map_err(|e| BlobError::invalid(format!("Failed to create chunk directory: {}", e)))?;
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                BlobError::invalid(format!("Failed to create chunk directory: {}", e))
+            })?;
         }
-        
+
         // Write chunk data to file
-        tokio::fs::write(&chunk_path, &chunk_data).await
+        tokio::fs::write(&chunk_path, &chunk_data)
+            .await
             .map_err(|e| BlobError::invalid(format!("Failed to write chunk: {}", e)))?;
-        
+
         // Mark chunk as received
         session.received_chunks.insert(chunk_index);
         let chunks_received = session.received_chunks.len() as u32;
-        
+
         // Check if we have all chunks
         if chunks_received == total_chunks {
             // All chunks received - reassemble and upload
             let mut reassembled_data = Vec::new();
             for i in 0..total_chunks {
                 let chunk_path = format!("{}/chunk_{:03}", session.temp_dir, i);
-                let chunk_data = tokio::fs::read(&chunk_path).await
-                    .map_err(|e| BlobError::invalid(format!("Failed to read chunk {}: {}", i, e)))?;
+                let chunk_data = tokio::fs::read(&chunk_path).await.map_err(|e| {
+                    BlobError::invalid(format!("Failed to read chunk {}: {}", i, e))
+                })?;
                 reassembled_data.extend_from_slice(&chunk_data);
             }
-            
+
             // Create blob put request
             let blob_put = BlobPut::new()
-                .with_content_type(session.content_type.clone().unwrap_or_else(|| "application/octet-stream".to_string()))
-                .with_filename(session.filename.clone().unwrap_or_else(|| "upload.bin".to_string()))
+                .with_content_type(
+                    session
+                        .content_type
+                        .clone()
+                        .unwrap_or_else(|| "application/octet-stream".to_string()),
+                )
+                .with_filename(
+                    session
+                        .filename
+                        .clone()
+                        .unwrap_or_else(|| "upload.bin".to_string()),
+                )
                 .with_size_hint(reassembled_data.len() as u64);
-            
+
             // Create stream from reassembled data
             let bytes = bytes::Bytes::from(reassembled_data);
             let stream = async_stream::stream! {
                 yield Ok(bytes);
             };
             let stream = Box::pin(stream);
-            
+
             // Upload the complete file
             let receipt = self.put(ctx, blob_put, stream).await?;
-            
+
             // Clean up chunk directory
             let temp_dir = session.temp_dir.clone();
             let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-            
+
             // Remove session from tracking
             sessions.remove(&session_id);
             drop(sessions);
-            
-            Ok(ChunkResult::Complete { receipt })
+
+            Ok(ChunkResult::Complete {
+                receipt: Box::new(receipt),
+            })
         } else {
             // Still waiting for more chunks
             drop(sessions);
@@ -482,24 +522,36 @@ self.state.uploads.is_some()
         // Extract Dropzone chunk metadata
         let dzuuid = request_data.get("dzuuid").and_then(|v| v.as_str());
         let dzchunkindex = request_data.get("dzchunkindex").and_then(|v| {
-            v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
         });
         let dztotalchunkcount = request_data.get("dztotalchunkcount").and_then(|v| {
-            v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
         });
 
         // Extract file data
         let content_bytes = Self::extract_file_data(request_data).await?;
 
         // Handle chunked vs single upload
-        if let (Some(uuid), Some(chunk_index), Some(total_chunks)) = (dzuuid, dzchunkindex, dztotalchunkcount) {
+        if let (Some(uuid), Some(chunk_index), Some(total_chunks)) =
+            (dzuuid, dzchunkindex, dztotalchunkcount)
+        {
             // Chunked upload
             let session_id = ChunkSessionId::from_string(uuid.to_string());
             let put_request = BlobPut::new()
                 .with_content_type(content_type)
                 .with_filename(filename);
-            
-            self.put_chunk(ctx, session_id, chunk_index as u32, total_chunks as u32, put_request, content_bytes).await
+
+            self.put_chunk(
+                ctx,
+                session_id,
+                chunk_index as u32,
+                total_chunks as u32,
+                put_request,
+                content_bytes,
+            )
+            .await
         } else {
             // Single file upload
             let put_request = BlobPut::new()
@@ -516,7 +568,9 @@ self.state.uploads.is_some()
 
             // Upload and wrap result in ChunkResult::Complete
             let receipt = self.put(ctx, put_request, stream).await?;
-            Ok(ChunkResult::Complete { receipt })
+            Ok(ChunkResult::Complete {
+                receipt: Box::new(receipt),
+            })
         }
     }
 }

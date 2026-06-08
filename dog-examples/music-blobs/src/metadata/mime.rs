@@ -22,7 +22,7 @@ impl MimeDecoder {
                 .iter()
                 .filter_map(|segment| Self::decode_segment(segment))
                 .collect();
-            
+
             if !decoded_parts.is_empty() {
                 return decoded_parts.join("");
             }
@@ -35,7 +35,9 @@ impl MimeDecoder {
     /// Decode a single MIME segment
     fn decode_segment(segment: &str) -> Option<String> {
         let content = segment.strip_prefix("=?UTF-8?B?")?.strip_suffix("?=")?;
-        let decoded_bytes = base64::engine::general_purpose::STANDARD.decode(content).ok()?;
+        let decoded_bytes = base64::engine::general_purpose::STANDARD
+            .decode(content)
+            .ok()?;
         String::from_utf8(decoded_bytes).ok()
     }
 

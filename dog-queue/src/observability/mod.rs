@@ -1,15 +1,18 @@
+pub mod analytics;
 pub mod metrics;
 pub mod tracing;
-pub mod analytics;
 
-#[cfg(feature = "ui")]
-pub mod ui;
+// #[cfg(feature = "ui")]
+// pub mod ui;
 
+pub use analytics::{ObservabilityLayer, PerformanceAnalytics};
 pub use metrics::{LiveMetrics, MetricsCollector, PerformanceMetrics};
-pub use analytics::{PerformanceAnalytics, ObservabilityLayer};
+
+#[cfg(feature = "metrics")]
+pub use metrics::PrometheusExporter;
 
 #[cfg(feature = "tracing-opentelemetry")]
 pub use tracing::{DistributedTracing, SpanCollector};
 
-#[cfg(feature = "ui")]
-pub use ui::WebUI;
+// #[cfg(feature = "ui")]
+// pub use ui::WebUI;

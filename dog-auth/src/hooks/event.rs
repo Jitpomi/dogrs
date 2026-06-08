@@ -9,7 +9,7 @@ use dog_core::HookContext;
 use serde_json::Value;
 
 use crate::core::{AuthenticationResult, ConnectionEvent};
-use crate::service::{AuthenticationService, AUTHENTICATION_KEY};
+use crate::service::AUTHENTICATION_KEY;
 
 pub trait EventHookParams: Clone + Send + Sync {
     fn provider(&self) -> Option<&str>;
@@ -28,7 +28,7 @@ pub struct EventHook<P>
 where
     P: EventHookParams + 'static,
 {
-    auth_service: Arc<AuthenticationService<P>>,
+    _marker: std::marker::PhantomData<P>,
     event: ConnectionEvent,
 }
 
@@ -36,8 +36,11 @@ impl<P> EventHook<P>
 where
     P: EventHookParams + 'static,
 {
-    pub fn new(auth_service: Arc<AuthenticationService<P>>, event: ConnectionEvent) -> Self {
-        Self { auth_service, event }
+    pub fn new(event: ConnectionEvent) -> Self {
+        Self {
+            _marker: std::marker::PhantomData,
+            event,
+        }
     }
 
     fn event_name(&self) -> &'static str {
@@ -66,13 +69,13 @@ where
 
         let auth_result: AuthenticationResult = match result {
             dog_core::HookResult::One(v) => v.clone(),
-            dog_core::HookResult::Many(vs) => serde_json::to_value(vs).map_err(|e| anyhow::anyhow!(e))?,
+            dog_core::HookResult::Many(vs) => {
+                serde_json::to_value(vs).map_err(|e| anyhow::anyhow!(e))?
+            }
         };
 
         // Emit on the app event hub. This is transport-agnostic; adapters can choose how to publish.
-        self.auth_service
-            .base
-            .app()
+        ctx.app()
             .emit_custom(
                 AUTHENTICATION_KEY,
                 self.event_name(),

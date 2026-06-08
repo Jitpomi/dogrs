@@ -1,8 +1,8 @@
+use crate::services::types::FleetParams;
 use anyhow::Result;
 use async_trait::async_trait;
-use dog_core::hooks::{DogBeforeHook, DogAfterHook, HookContext};
+use dog_core::hooks::{DogAfterHook, DogBeforeHook, HookContext};
 use serde_json::Value;
-use crate::services::types::FleetParams;
 
 pub struct BeforeRead;
 
@@ -28,8 +28,6 @@ pub struct AfterRead;
 #[async_trait]
 impl DogAfterHook<Value, FleetParams> for AfterRead {
     async fn run(&self, _ctx: &mut HookContext<Value, FleetParams>) -> Result<()> {
-        // Log vehicle queries for audit purposes
-        println!("🚗 Vehicle query completed successfully");
         Ok(())
     }
 }
@@ -61,8 +59,6 @@ pub struct AfterWrite;
 #[async_trait]
 impl DogAfterHook<Value, FleetParams> for AfterWrite {
     async fn run(&self, _ctx: &mut HookContext<Value, FleetParams>) -> Result<()> {
-        // Log vehicle write operations for audit trail
-        println!("🚗 Vehicle data write operation completed");
         Ok(())
     }
 }

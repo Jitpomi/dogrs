@@ -57,16 +57,18 @@ where
         let mut cur = &mut value;
         for part in &parts[..parts.len() - 1] {
             if !cur.is_object() {
-                return Err(DogError::bad_request("Password hash target must be an object").into_anyhow());
+                return Err(
+                    DogError::bad_request("Password hash target must be an object").into_anyhow(),
+                );
             }
             if cur.get(*part).is_none() {
                 if let Some(map) = cur.as_object_mut() {
                     map.insert((*part).to_string(), Value::Object(Default::default()));
                 }
             }
-            cur = cur
-                .get_mut(*part)
-                .ok_or_else(|| DogError::bad_request("Password hash target path invalid").into_anyhow())?;
+            cur = cur.get_mut(*part).ok_or_else(|| {
+                DogError::bad_request("Password hash target path invalid").into_anyhow()
+            })?;
         }
 
         if let Some(map) = cur.as_object_mut() {

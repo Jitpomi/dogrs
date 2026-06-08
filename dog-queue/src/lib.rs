@@ -1,12 +1,12 @@
 //! # dog-queue: Production-Grade Job Processing Infrastructure
-//! 
+//!
 //! **Multi-tenant job queue with superior correctness guarantees**
-//! 
+//!
 //! dog-queue delivers genuine advantages over existing solutions like Apalis
 //! through stronger semantics and multi-tenant design:
-//! 
+//!
 //! ## 🎯 Production-Ready Features
-//! 
+//!
 //! - **Stronger Correctness**: Lease tokens + expiry reaper + cancel-wins + tenant-scoped idempotency
 //! - **Multi-Tenant by Design**: Tenant isolation built into API contract, not manual key prefixing
 //! - **Reference Payloads**: Minimal serialization using BlobId/TrackId references for DogRS integration
@@ -14,63 +14,74 @@
 //! - **Unified Semantics**: Consistent lease behavior across Memory, Redis, PostgreSQL backends
 //! - **Structured Observability**: Event streams and distributed tracing, not just basic metrics
 //! - **Safe Backend Migration**: Consistent semantics enable zero-downtime storage transitions
-//! 
-//! ## 🚀 Reference Payload Quick Start
-//! 
-//! ```rust
+//!
+//! ## Quick Start
+//!
+//! ```rust,ignore
 //! use dog_queue::prelude::*;
 //! use serde::{Deserialize, Serialize};
-//! 
-//! // Reference payload - constant size serialization
+//!
+//! // Define a job — payload must be Serialize + Deserialize
 //! #[derive(Serialize, Deserialize)]
-//! struct GenerateWaveformJob {
-//!     track_id: TrackId,    // Reference, not audio data
-//!     blob_id: BlobId,      // Reference to dog-blob storage
-//!     resolution: u32,      // Small config data
+//! struct SendEmailJob {
+//!     recipient: String,
+//!     subject: String,
 //! }
-//! 
-//! #[async_trait::async_trait]
-//! impl Job for GenerateWaveformJob {
-//!     type Context = AudioContext;
+//!
+//! // Shared execution context (e.g. database pool, SMTP client)
+//! #[derive(Clone)]
+//! struct AppContext {
+//!     smtp_host: String,
+//! }
+//!
+//! #[async_trait]
+//! impl Job for SendEmailJob {
+//!     type Context = AppContext;
 //!     type Result = ();
-//!     type Error = AudioError;
-//!     
-//!     // Type-safe execution with reference payloads
-//!     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, Self::Error> {
-//!         // Load audio from dog-blob using reference
-//!         let audio_data = ctx.blob_store.get(&self.blob_id).await?;
-//!         let waveform = generate_waveform(audio_data, self.resolution).await?;
-//!         
-//!         // Store result in blob metadata, not queue
-//!         ctx.blob_store.update_metadata(&self.blob_id, waveform).await?;
+//!
+//!     const JOB_TYPE: &'static str = "send_email";
+//!     const PRIORITY: JobPriority = JobPriority::Normal;
+//!     const MAX_RETRIES: u32 = 3;
+//!
+//!     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
+//!         // use ctx.smtp_host to send self.recipient / self.subject
 //!         Ok(())
 //!     }
-//!     
-//!     // Compile-time job identification
-//!     const JOB_TYPE: &'static str = "generate_waveform";
-//!     const PRIORITY: JobPriority = JobPriority::High;
 //! }
-//! 
-//! // Multi-tenant queue with lease semantics
-//! let engine = QueueEngine::new(redis_backend)
-//!     .with_codec_registry()
-//!     .with_observability();
-//!     
-//! let tenant_ctx = QueueCtx::new("tenant_123".to_string())
-//!     .with_trace_id(trace_id);
-//!     
-//! let job_id = engine.enqueue(tenant_ctx, job).await?;
+//!
+//! // Wire up the adapter
+//! let backend = dog_queue::backend::memory::MemoryBackend::new();
+//! let adapter = QueueAdapter::new(backend);
+//! adapter.register_job::<SendEmailJob>().await?;
+//!
+//! // Enqueue from any tenant context
+//! let ctx = QueueCtx::new("tenant_abc".to_string());
+//! let job_id = adapter.enqueue(ctx.clone(), SendEmailJob {
+//!     recipient: "user@example.com".to_string(),
+//!     subject: "Welcome!".to_string(),
+//! }).await?;
+//!
+//! // Start a worker — it polls and dispatches jobs automatically
+//! let app_ctx = AppContext { smtp_host: "smtp.example.com".to_string() };
+//! let handle = adapter
+//!     .start_workers(ctx, app_ctx, vec!["send_email".to_string()])
+//!     .await?;
+//!
+//! // Graceful shutdown
+//! handle.shutdown().await?;
 //! ```
 
 // Production-ready architecture modules
-pub mod engine;
-pub mod types;
-pub mod error;
-pub mod codec;
-pub mod job;
-pub mod backend;
 pub mod adapter;
+pub mod backend;
+pub mod codec;
+pub mod error;
+pub mod job;
 pub mod observability;
+pub mod types;
+
+#[cfg(test)]
+mod tests;
 
 // Optional advanced features (placeholder for future implementation)
 // #[cfg(feature = "workflows")]
@@ -81,74 +92,71 @@ pub mod observability;
 
 // Core API exports - standardize on QueueAdapter for DogRS consistency
 pub use adapter::QueueAdapter;
-pub use types::{
-    JobId, QueueCtx, JobPriority, JobStatus, JobMessage, JobRecord, 
-    LeasedJob, QueueCapabilities, JobEvent
-};
-pub use error::{QueueError, QueueResult, JobError};
-pub use codec::{JobCodec, CodecRegistry};
-pub use codec::json::JsonCodec;
-pub use job::{Job, JobRegistry};
+pub use adapter::{QueueConfig, WorkerHandle};
 pub use backend::QueueBackend;
-pub use adapter::{WorkerHandle, QueueConfig};
+pub use codec::json::JsonCodec;
+pub use codec::{CodecRegistry, EnqueueOptions, JobCodec};
+pub use error::{JobError, QueueError, QueueResult};
+pub use job::{Job, JobRegistry};
+pub use types::{
+    JobEvent, JobId, JobMessage, JobPriority, JobRecord, JobStatus, LeaseToken, LeasedJob,
+    QueueCapabilities, QueueCtx, QueueFeature,
+};
 
 // Observability exports
-pub use observability::{ObservabilityLayer, LiveMetrics};
+pub use observability::{LiveMetrics, ObservabilityLayer, PerformanceAnalytics};
 
 // Optional feature exports
 #[cfg(feature = "cron-scheduling")]
-pub use scheduling::{Schedule, Scheduler};
+// pub use scheduling::{Schedule, Scheduler};
 
 // Backend implementations
 #[cfg(feature = "redis")]
-pub use backend::redis::RedisBackend;
+// pub use backend::redis::RedisBackend;
 
 #[cfg(feature = "postgres")]
-pub use backend::postgres::PostgresBackend;
+// pub use backend::postgres::PostgresBackend;
 
 #[cfg(feature = "sqlite")]
-pub use backend::sqlite::SqliteBackend;
+// pub use backend::sqlite::SqliteBackend;
 
 // Observability features
 #[cfg(feature = "metrics")]
-pub use observability::metrics::{PrometheusExporter, MetricsCollector};
+pub use observability::metrics::{MetricsCollector, PrometheusExporter};
 
 #[cfg(feature = "tracing-opentelemetry")]
-pub use observability::tracing::{DistributedTracing, SpanCollector};
+// pub use observability::tracing::{DistributedTracing, SpanCollector};
 
 #[cfg(feature = "ui")]
-pub use observability::ui::WebUI;
+// pub use observability::ui::WebUI;
 
 /// Production-ready prelude for multi-tenant job processing
 pub mod prelude {
     // Core engine and types
-    pub use crate::{
-        QueueAdapter, Job, QueueBackend
-    };
-    
+    pub use crate::{Job, QueueAdapter, QueueBackend};
+
     // Essential types
-    pub use crate::{
-        QueueCtx, JobId, JobPriority, JobStatus, JobError, QueueResult
-    };
-    
+    pub use crate::{JobError, JobId, JobPriority, JobStatus, LeaseToken, QueueCtx, QueueResult};
+
+    // Adapter configuration and lifecycle
+    pub use crate::{EnqueueOptions, QueueConfig, WorkerHandle};
+
     // Codec system
-    pub use crate::{
-        JobCodec, JsonCodec, CodecRegistry
-    };
-    
+    pub use crate::{CodecRegistry, JobCodec, JsonCodec};
+
     // Job registry
     pub use crate::JobRegistry;
-    
+
     // Observability
-    pub use crate::{ObservabilityLayer, LiveMetrics};
-    
+    pub use crate::{LiveMetrics, ObservabilityLayer, PerformanceAnalytics};
+
     // Essential traits
     pub use async_trait::async_trait;
-    
+
     // Optional features (placeholder for future implementation)
     // #[cfg(feature = "workflows")]
     // pub use crate::{Workflow, WorkflowBuilder};
-    
+
     // #[cfg(feature = "scheduling")]
     // pub use crate::{Schedule, Scheduler};
 }

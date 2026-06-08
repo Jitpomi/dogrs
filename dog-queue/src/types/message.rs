@@ -8,25 +8,25 @@ use super::JobPriority;
 pub struct JobMessage {
     /// Job type identifier for dispatch
     pub job_type: String,
-    
+
     /// Serialized job payload (opaque bytes)
     pub payload_bytes: Vec<u8>,
-    
+
     /// Codec used for serialization
     pub codec: String,
-    
+
     /// Target queue name
     pub queue: String,
-    
+
     /// Job priority for ordering
     pub priority: JobPriority,
-    
+
     /// Maximum retry attempts
     pub max_retries: u32,
-    
+
     /// When the job should be eligible for processing
     pub run_at: DateTime<Utc>,
-    
+
     /// Optional idempotency key (scoped by tenant/queue/job_type)
     pub idempotency_key: Option<String>,
 }
@@ -34,16 +34,16 @@ pub struct JobMessage {
 impl JobMessage {
     /// Create a new job message
     pub fn new(
-        job_type: String,
+        job_type: impl Into<String>,
         payload_bytes: Vec<u8>,
-        codec: String,
-        queue: String,
+        codec: impl Into<String>,
+        queue: impl Into<String>,
     ) -> Self {
         Self {
-            job_type,
+            job_type: job_type.into(),
             payload_bytes,
-            codec,
-            queue,
+            codec: codec.into(),
+            queue: queue.into(),
             priority: JobPriority::default(),
             max_retries: 3,
             run_at: Utc::now(),
@@ -70,14 +70,18 @@ impl JobMessage {
     }
 
     /// Set the idempotency key
-    pub fn with_idempotency_key(mut self, key: String) -> Self {
-        self.idempotency_key = Some(key);
+    pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(key.into());
         self
     }
 
-    /// Check if the job is eligible to run now
-    pub fn is_eligible(&self) -> bool {
-        self.run_at <= Utc::now()
+    /// Check if the job is eligible to run at the given reference time.
+    ///
+    /// Takes an explicit `now` rather than calling `Utc::now()` internally so
+    /// that callers control the reference timestamp. This makes eligibility checks
+    /// deterministic in tests and consistent with [`JobRecord::is_eligible`].
+    pub fn is_eligible(&self, now: DateTime<Utc>) -> bool {
+        self.run_at <= now
     }
 
     /// Get the payload size in bytes

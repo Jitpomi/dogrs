@@ -42,7 +42,7 @@ impl WriteMethods {
                 ServiceMethodKind::Create | ServiceMethodKind::Patch | ServiceMethodKind::Update
             ),
             WriteMethods::Create => matches!(method, ServiceMethodKind::Create),
-            WriteMethods::Patch  => matches!(method, ServiceMethodKind::Patch),
+            WriteMethods::Patch => matches!(method, ServiceMethodKind::Patch),
             WriteMethods::Update => matches!(method, ServiceMethodKind::Update),
         }
     }
@@ -340,10 +340,18 @@ where
     ) -> &mut Self {
         let hook = Arc::new(ResolveData::<R, P>::new(f).with_methods(self.current_methods));
         match self.current_methods {
-            WriteMethods::AllWrites => { self.hooks.before_all(hook); }
-            WriteMethods::Create    => { self.hooks.before_create(hook); }
-            WriteMethods::Patch     => { self.hooks.before_patch(hook); }
-            WriteMethods::Update    => { self.hooks.before_update(hook); }
+            WriteMethods::AllWrites => {
+                self.hooks.before_all(hook);
+            }
+            WriteMethods::Create => {
+                self.hooks.before_create(hook);
+            }
+            WriteMethods::Patch => {
+                self.hooks.before_patch(hook);
+            }
+            WriteMethods::Update => {
+                self.hooks.before_update(hook);
+            }
         }
         self.current_methods = WriteMethods::AllWrites;
         self
@@ -355,10 +363,18 @@ where
     ) -> &mut Self {
         let hook = Arc::new(ValidateData::<R, P>::new(f).with_methods(self.current_methods));
         match self.current_methods {
-            WriteMethods::AllWrites => { self.hooks.before_all(hook); }
-            WriteMethods::Create    => { self.hooks.before_create(hook); }
-            WriteMethods::Patch     => { self.hooks.before_patch(hook); }
-            WriteMethods::Update    => { self.hooks.before_update(hook); }
+            WriteMethods::AllWrites => {
+                self.hooks.before_all(hook);
+            }
+            WriteMethods::Create => {
+                self.hooks.before_create(hook);
+            }
+            WriteMethods::Patch => {
+                self.hooks.before_patch(hook);
+            }
+            WriteMethods::Update => {
+                self.hooks.before_update(hook);
+            }
         }
         self.current_methods = WriteMethods::AllWrites;
         self
@@ -384,7 +400,8 @@ impl<R, P> private::Sealed for ServiceHooks<R, P>
 where
     R: Send + 'static,
     P: Send + Clone + 'static,
-{}
+{
+}
 
 impl<R, P> SchemaHooksExt<R, P> for ServiceHooks<R, P>
 where
@@ -468,7 +485,10 @@ mod tests {
 
     #[test]
     fn max_len_fails_on_long_field() {
-        let err = Rules::new().max_len("bio", "hello world", 5).check().unwrap_err();
+        let err = Rules::new()
+            .max_len("bio", "hello world", 5)
+            .check()
+            .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("Schema validation failed"));
         assert!(msg.contains("at most 5 chars"));
@@ -479,7 +499,10 @@ mod tests {
         // trailing spaces don't count toward the length
         assert!(Rules::new().max_len("bio", "hi   ", 5).check().is_ok());
         // but real chars do
-        let err = Rules::new().max_len("bio", "toolongvalue", 5).check().unwrap_err();
+        let err = Rules::new()
+            .max_len("bio", "toolongvalue", 5)
+            .check()
+            .unwrap_err();
         assert!(err.to_string().contains("at most 5 chars"));
     }
 
@@ -608,8 +631,13 @@ mod tests {
         });
 
         // Hook goes to before_create bucket, NOT before_all
-        assert_eq!(hooks.before_all.len(), 0, "expected hook in before_create, not before_all");
-        let create_hooks = hooks.before_by_method
+        assert_eq!(
+            hooks.before_all.len(),
+            0,
+            "expected hook in before_create, not before_all"
+        );
+        let create_hooks = hooks
+            .before_by_method
             .get(&ServiceMethodKind::Create)
             .expect("no hooks in before_create bucket");
         assert_eq!(create_hooks.len(), 1);
@@ -617,7 +645,10 @@ mod tests {
         // Hook fires on Create and marks the flag
         let mut ctx = make_ctx(ServiceMethodKind::Create, Some("test".to_string()));
         create_hooks[0].run(&mut ctx).await.unwrap();
-        assert!(*called.lock().unwrap(), "validator was not called on Create");
+        assert!(
+            *called.lock().unwrap(),
+            "validator was not called on Create"
+        );
     }
 
     #[tokio::test]
@@ -631,9 +662,10 @@ mod tests {
         // Hook is in before_create, not before_all or before_patch
         assert_eq!(hooks.before_all.len(), 0);
         assert!(
-            hooks.before_by_method
+            hooks
+                .before_by_method
                 .get(&ServiceMethodKind::Patch)
-                .map_or(true, |v| v.is_empty()),
+                .is_none_or(|v| v.is_empty()),
             "hook must not appear in before_patch bucket"
         );
     }
@@ -648,7 +680,8 @@ mod tests {
         });
 
         // Create-scoped hook in before_create bucket
-        let create_hooks = hooks.before_by_method
+        let create_hooks = hooks
+            .before_by_method
             .get(&ServiceMethodKind::Create)
             .expect("no hooks in before_create");
         assert_eq!(create_hooks.len(), 1);

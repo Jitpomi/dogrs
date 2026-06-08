@@ -1,7 +1,10 @@
 use dog_schema::schema;
 
-#[schema(service = "messages", error_message = "Messages schema validation failed")]
-pub mod messages_schema {
+#[schema(
+    service = "messages",
+    error_message = "Messages schema validation failed"
+)]
+pub mod def {
 
     #[create]
     pub struct CreateMessage {
@@ -28,4 +31,4 @@ pub mod messages_schema {
     }
 }
 
-pub use messages_schema::register;
+pub use def::*;

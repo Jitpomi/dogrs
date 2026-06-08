@@ -1,3 +1,3 @@
 pub mod multipart;
 
-pub use multipart::{MultipartToJson, MultipartConfig, FileEncoding, FieldContext, FieldProcessor};
+pub use multipart::{FieldContext, FieldProcessor, FileEncoding, MultipartConfig, MultipartToJson};

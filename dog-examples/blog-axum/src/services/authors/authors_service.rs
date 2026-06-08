@@ -33,15 +33,32 @@ impl DogService<Value, BlogParams> for AuthorsService {
         self.adapter._get(ctx, id, params).await
     }
 
-    async fn update(&self, ctx: &TenantContext, id: &str, data: Value, params: BlogParams) -> Result<Value> {
+    async fn update(
+        &self,
+        ctx: &TenantContext,
+        id: &str,
+        data: Value,
+        params: BlogParams,
+    ) -> Result<Value> {
         self.adapter._update(ctx, id, data, params).await
     }
 
-    async fn patch(&self, ctx: &TenantContext, id: Option<&str>, data: Value, params: BlogParams) -> Result<Value> {
+    async fn patch(
+        &self,
+        ctx: &TenantContext,
+        id: Option<&str>,
+        data: Value,
+        params: BlogParams,
+    ) -> Result<Value> {
         self.adapter._patch(ctx, id, data, params).await
     }
 
-    async fn remove(&self, ctx: &TenantContext, id: Option<&str>, params: BlogParams) -> Result<Value> {
+    async fn remove(
+        &self,
+        ctx: &TenantContext,
+        id: Option<&str>,
+        params: BlogParams,
+    ) -> Result<Value> {
         self.adapter._remove(ctx, id, params).await
     }
 }

@@ -25,6 +25,8 @@ pub enum ServiceMiddleware<L> {
     None,
 }
 
+type MiddlewareFn = Box<dyn Fn(Router<()>) -> Router<()> + Send + Sync>;
+
 impl<L> ServiceMiddleware<L>
 where
     L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
@@ -94,7 +96,7 @@ where
 {
     pub app: Arc<DogApp<R, P>>,
     pub router: Router<()>,
-    pending_middleware: Vec<Box<dyn Fn(Router<()>) -> Router<()> + Send + Sync>>,
+    pending_middleware: Vec<MiddlewareFn>,
 }
 
 impl<R, P> Clone for AxumApp<R, P>
@@ -154,15 +156,39 @@ where
         self.use_get(path, handler)
     }
 
-    pub fn use_service(mut self, path: &'static str, service: Arc<dyn DogService<R, P>>) -> Self
+    pub fn use_service(self, path: &'static str, service: Arc<dyn DogService<R, P>>) -> Self
     where
         R: Serialize + DeserializeOwned,
         P: FromRestParams,
     {
         let name = path.trim_start_matches('/');
-        self.app.register_service(name, service);
+        self.use_service_as(path, name, service)
+    }
 
-        let service_name = Arc::new(name.to_string());
+    /// Mount a service at `path`, routing requests to the service registered under `service_name`.
+    ///
+    /// Also registers `service` in the app under `service_name` so it can be looked up at
+    /// request time. This is equivalent to calling `DogAppBuilder::register_service` at build
+    /// time — if the service was already registered there, this call overwrites with the same Arc.
+    ///
+    /// # Migration note
+    /// Prior to the builder pattern, `use_service` registered services directly on the app.
+    /// If you previously relied on that implicit registration, pass the Arc here as the third
+    /// argument — it will be registered under `service_name` automatically.
+    pub fn use_service_as(
+        mut self,
+        path: &'static str,
+        service_name: &'static str,
+        service: Arc<dyn DogService<R, P>>,
+    ) -> Self
+    where
+        R: Serialize + DeserializeOwned,
+        P: FromRestParams,
+    {
+        // Register the service so it can be resolved at request time.
+        self.app.register_service(service_name, service);
+
+        let service_name = Arc::new(service_name.to_string());
         let mut router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
 
         // Apply pending middleware to this service router
@@ -174,19 +200,45 @@ where
         self
     }
 
-    pub fn use_service_with<L>(mut self, path: &'static str, service: Arc<dyn DogService<R, P>>, middleware: L) -> Self
+    pub fn use_service_with<L>(
+        self,
+        path: &'static str,
+        service: Arc<dyn DogService<R, P>>,
+        middleware: L,
+    ) -> Self
     where
         R: Serialize + DeserializeOwned,
         P: FromRestParams,
         L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
-        L::Service: tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
+        L::Service:
+            tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
         <L::Service as tower::Service<Request<Body>>>::Future: Send,
         <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
     {
         let name = path.trim_start_matches('/');
-        self.app.register_service(name, service);
+        self.use_service_as_with(path, name, service, middleware)
+    }
 
-        let service_name = Arc::new(name.to_string());
+    pub fn use_service_as_with<L>(
+        mut self,
+        path: &'static str,
+        service_name: &'static str,
+        service: Arc<dyn DogService<R, P>>,
+        middleware: L,
+    ) -> Self
+    where
+        R: Serialize + DeserializeOwned,
+        P: FromRestParams,
+        L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
+        L::Service:
+            tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
+        <L::Service as tower::Service<Request<Body>>>::Future: Send,
+        <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
+    {
+        // Register the service so it can be resolved at request time.
+        self.app.register_service(service_name, service);
+
+        let service_name = Arc::new(service_name.to_string());
         let router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
 
         // Apply the specific middleware to this service router
@@ -199,12 +251,14 @@ where
     pub fn use_middleware<L>(mut self, layer: L) -> Self
     where
         L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
-        L::Service: tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
+        L::Service:
+            tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
         <L::Service as tower::Service<Request<Body>>>::Future: Send,
         <L::Service as tower::Service<Request<Body>>>::Error: Into<std::convert::Infallible>,
     {
         // Store middleware to be applied to next service
-        self.pending_middleware.push(Box::new(move |router| router.layer(layer.clone())));
+        self.pending_middleware
+            .push(Box::new(move |router| router.layer(layer.clone())));
         self
     }
 

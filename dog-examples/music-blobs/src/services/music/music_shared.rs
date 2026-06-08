@@ -15,12 +15,17 @@ pub fn capabilities() -> ServiceCapabilities {
         ServiceMethodKind::Custom("resume"),
         ServiceMethodKind::Custom("cancel"),
         ServiceMethodKind::Custom("peaks"),
+        ServiceMethodKind::Custom("cover"),
     ])
 }
 
-pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, MusicParams>) -> Result<()> {
-    app.service("music")?.hooks(|h| {
+pub fn register_hooks(
+    app: &mut dog_core::DogAppBuilder<serde_json::Value, MusicParams>,
+    state: Arc<crate::rustfs::RustFsState>,
+) -> Result<()> {
+    app.service_hooks("music", |h| {
         h.before_all(Arc::new(super::music_hooks::ProcessMulterParams));
+        h.after_all(Arc::new(super::music_hooks::UploadCoverArtHook { state }));
     });
 
     Ok(())

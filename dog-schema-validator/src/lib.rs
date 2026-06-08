@@ -27,7 +27,11 @@ fn join_index(prefix: &str, idx: usize) -> String {
     format!("{prefix}[{idx}]")
 }
 
-fn push_validation_errors(out: &mut SchemaErrors, prefix: &str, errs: &validator::ValidationErrors) {
+fn push_validation_errors(
+    out: &mut SchemaErrors,
+    prefix: &str,
+    errs: &validator::ValidationErrors,
+) {
     for (field, kind) in errs.errors() {
         match kind {
             validator::ValidationErrorsKind::Field(field_errors) => {
@@ -69,12 +73,13 @@ pub fn validate<T>(data: &Value, error_message: &str) -> anyhow::Result<T>
 where
     T: DeserializeOwned + Validate,
 {
-    let parsed: T = serde_json::from_value(data.clone())
-        .map_err(|e| dog_schema::unprocessable(error_message, json!({"_schema": [e.to_string()]})))?;
+    let parsed: T = serde_json::from_value(data.clone()).map_err(|e| {
+        dog_schema::unprocessable(error_message, json!({"_schema": [e.to_string()]}))
+    })?;
 
-    parsed
-        .validate()
-        .map_err(|e| validator_errors_to_schema_errors(&e).into_unprocessable_anyhow(error_message))?;
+    parsed.validate().map_err(|e| {
+        validator_errors_to_schema_errors(&e).into_unprocessable_anyhow(error_message)
+    })?;
 
     Ok(parsed)
 }
@@ -120,7 +125,10 @@ mod tests {
         let dog = DogError::from_anyhow(&err).expect("must be DogError");
         let errors = dog.errors.as_ref().unwrap();
 
-        assert_eq!(errors["profile.display_name"][0], "display_name must be at least 2 chars");
+        assert_eq!(
+            errors["profile.display_name"][0],
+            "display_name must be at least 2 chars"
+        );
         assert_eq!(errors["tags[0].email"][0], "tag email must be valid");
     }
 }

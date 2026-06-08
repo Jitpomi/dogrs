@@ -1,14 +1,14 @@
-use std::sync::Arc;
+use crate::services::SocialParams;
+use crate::typedb::TypeDBState;
 use anyhow::Result;
 use async_trait::async_trait;
-use dog_core::tenant::TenantContext;
-use dog_core::{DogService, ServiceCapabilities};
 use dog_core::errors::{DogError, ErrorKind};
-use serde_json::Value;
-use crate::typedb::TypeDBState;
-use crate::services::SocialParams;
+use dog_core::tenant::TenantContext;
+use dog_core::ServiceMethodKind;
+use dog_core::{DogService, ServiceCapabilities};
 use dog_typedb::TypeDBAdapter;
-use super::comments_shared;
+use serde_json::Value;
+use std::sync::Arc;
 
 pub struct CommentsService {
     adapter: TypeDBAdapter,
@@ -25,7 +25,10 @@ impl CommentsService {
 #[async_trait]
 impl DogService<Value, SocialParams> for CommentsService {
     fn capabilities(&self) -> ServiceCapabilities {
-        comments_shared::capabilities()
+        ServiceCapabilities::from_methods(vec![
+            ServiceMethodKind::Custom("read"),
+            ServiceMethodKind::Custom("write"),
+        ])
     }
 
     async fn custom(
@@ -38,7 +41,11 @@ impl DogService<Value, SocialParams> for CommentsService {
         match method {
             "read" => self.adapter.read(data.unwrap()).await,
             "write" => self.adapter.write(data.unwrap()).await,
-            _ => Err(DogError::new(ErrorKind::MethodNotAllowed, format!("Unknown method: {}", method)).into_anyhow())
+            _ => Err(DogError::new(
+                ErrorKind::MethodNotAllowed,
+                format!("Unknown method: {}", method),
+            )
+            .into_anyhow()),
         }
     }
 }

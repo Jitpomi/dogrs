@@ -1,12 +1,12 @@
-use async_trait::async_trait;
 use crate::{
     BlobError, BlobResult, PartReceipt, UploadId, UploadSession, UploadSessionStore, UploadStatus,
 };
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Simple in-memory upload session store provided by dog-blob
-/// 
+///
 /// This is a basic implementation suitable for development and single-instance deployments.
 /// For production use with multiple instances, consider implementing a database-backed store.
 #[derive(Clone)]

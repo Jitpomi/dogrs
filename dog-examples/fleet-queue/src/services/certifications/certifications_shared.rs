@@ -1,6 +1,5 @@
-use dog_core::{ServiceCapabilities, ServiceMethodKind};
-use std::sync::Arc;
 use crate::services::types::FleetParams;
+use dog_core::{ServiceCapabilities, ServiceMethodKind};
 
 pub fn capabilities() -> ServiceCapabilities {
     ServiceCapabilities::from_methods(vec![
@@ -9,13 +8,8 @@ pub fn capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, FleetParams>) -> anyhow::Result<()> {
-    app.service("certifications")?.hooks(|h| {
-        h.before_find(Arc::new(super::certifications_hooks::BeforeRead));
-        h.after_find(Arc::new(super::certifications_hooks::AfterRead));
-        h.before_create(Arc::new(super::certifications_hooks::BeforeWrite));
-        h.after_create(Arc::new(super::certifications_hooks::AfterWrite));
-    });
-    
+pub fn register_hooks(
+    _app: &mut dog_core::DogAppBuilder<serde_json::Value, FleetParams>,
+) -> anyhow::Result<()> {
     Ok(())
 }

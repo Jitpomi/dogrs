@@ -1,17 +1,20 @@
 use serde::{Deserialize, Serialize};
 
 /// Job priority levels for queue ordering (Higher values = higher priority)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 pub enum JobPriority {
     /// Low priority jobs (processed last)
     Low = 1,
-    
+
     /// Normal priority jobs (default)
+    #[default]
     Normal = 2,
-    
+
     /// High priority jobs (processed first)
     High = 3,
-    
+
     /// Critical priority jobs (processed immediately)
     Critical = 4,
 }
@@ -20,12 +23,6 @@ pub enum JobPriority {
 // This ensures:
 // - Higher priority jobs first: Critical > High > Normal > Low
 // - Within same priority: older jobs first (created_at ascending)
-
-impl Default for JobPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
 
 impl JobPriority {
     /// Get all priority levels in order (low to high)
@@ -70,12 +67,23 @@ impl std::str::FromStr for JobPriority {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "low" => Ok(Self::Low),
-            "normal" => Ok(Self::Normal),
-            "high" => Ok(Self::High),
-            "critical" => Ok(Self::Critical),
-            _ => Err(format!("Invalid priority: {}", s)),
+        // `eq_ignore_ascii_case` avoids the heap allocation that `to_lowercase()`
+        // produces on every call. All four variant names are pure ASCII, so
+        // ASCII-only case folding is correct here.
+        if s.eq_ignore_ascii_case("low") {
+            return Ok(Self::Low);
         }
+        if s.eq_ignore_ascii_case("normal") {
+            return Ok(Self::Normal);
+        }
+        if s.eq_ignore_ascii_case("high") {
+            return Ok(Self::High);
+        }
+        if s.eq_ignore_ascii_case("critical") {
+            return Ok(Self::Critical);
+        }
+        Err(format!(
+            "Invalid priority: {s} (expected one of: low, normal, high, critical)"
+        ))
     }
 }

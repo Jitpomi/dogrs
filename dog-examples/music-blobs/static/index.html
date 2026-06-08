@@ -1,40 +1,42 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MusicBlobs - Royalty Free Music</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://code.iconify.design/iconify-icon/1.0.8/iconify-icon.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
     <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.esm.js" type="module"></script>
 </head>
+
 <body>
     <div class="app-container">
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
             <div class="logo">
-                <i class="fas fa-music"></i>
+                <iconify-icon icon="ph:music-notes-simple-fill"></iconify-icon>
                 <span>MusicBlobs</span>
             </div>
-            
+
             <nav class="nav-menu">
                 <div class="nav-section">
                     <h3>Browse</h3>
                     <ul>
-                        <li class="active"><i class="fas fa-home"></i> Home</li>
-                        <li><i class="fas fa-music"></i> All Music</li>
-                        <li><i class="fas fa-microphone"></i> AI Voiceover</li>
+                        <li class="active"><iconify-icon icon="ph:house-fill"></iconify-icon> Home</li>
+                        <li><iconify-icon icon="ph:music-notes-simple-fill"></iconify-icon> All Music</li>
+                        <li><iconify-icon icon="ph:microphone-fill"></iconify-icon> AI Voiceover</li>
                     </ul>
                 </div>
-                
+
                 <div class="nav-section">
                     <h3>Library</h3>
                     <ul>
-                        <li><i class="fas fa-heart"></i> Favorites</li>
-                        <li><i class="fas fa-download"></i> Downloads</li>
-                        <li><i class="fas fa-list"></i> Playlists</li>
+                        <li><iconify-icon icon="ph:heart-fill"></iconify-icon> Favorites</li>
+                        <li><iconify-icon icon="ph:download-simple-bold"></iconify-icon> Downloads</li>
+                        <li><iconify-icon icon="ph:list-bold"></iconify-icon> Playlists</li>
                     </ul>
                 </div>
             </nav>
@@ -46,22 +48,22 @@
             <header class="header">
                 <div class="header-left">
                     <button class="mobile-menu-btn" id="mobileMenuBtn">
-                        <i class="fas fa-bars"></i>
+                        <iconify-icon icon="ph:list-bold"></iconify-icon>
                     </button>
                 </div>
-                
+
                 <div class="search-container">
-                    <i class="fas fa-search"></i>
+                    <iconify-icon icon="ph:magnifying-glass-bold"></iconify-icon>
                     <input type="text" placeholder="Search music, artists, genres..." class="search-input">
                 </div>
-                
+
                 <div class="header-actions">
                     <button class="upload-btn">
-                        <i class="fas fa-upload"></i>
+                        <iconify-icon icon="ph:upload-simple-bold"></iconify-icon>
                         Upload Music
                     </button>
                     <div class="user-menu">
-                        <i class="fas fa-user-circle"></i>
+                        <iconify-icon icon="ph:user-circle-fill"></iconify-icon>
                     </div>
                 </div>
             </header>
@@ -79,7 +81,7 @@
                         <option>Classical</option>
                     </select>
                 </div>
-                
+
                 <div class="filter-group">
                     <label>Mood</label>
                     <select class="filter-select">
@@ -91,7 +93,7 @@
                         <option>Sad</option>
                     </select>
                 </div>
-                
+
                 <div class="filter-group">
                     <label>Duration</label>
                     <select class="filter-select">
@@ -102,13 +104,13 @@
                         <option>3+ minutes</option>
                     </select>
                 </div>
-                
+
                 <div class="view-options">
                     <button class="view-btn active" data-view="list">
-                        <i class="fas fa-list"></i>
+                        <iconify-icon icon="ph:list-bold"></iconify-icon>
                     </button>
                     <button class="view-btn" data-view="grid">
-                        <i class="fas fa-th"></i>
+                        <iconify-icon icon="ph:squares-four-bold"></iconify-icon>
                     </button>
                 </div>
             </div>
@@ -140,11 +142,11 @@
                     <div class="modal-header">
                         <h3>Upload Music</h3>
                         <button class="close-btn" onclick="closeUploadModal()">
-                            <i class="fas fa-times"></i>
+                            <iconify-icon icon="ph:x-bold"></iconify-icon>
                         </button>
                     </div>
                     <div class="upload-area" id="uploadArea">
-                        <i class="fas fa-cloud-upload-alt"></i>
+                        <iconify-icon icon="ph:cloud-arrow-up-fill"></iconify-icon>
                         <h4>Drop your music files here</h4>
                         <p>or click to browse (MP3, WAV, FLAC supported)</p>
                         <input type="file" id="fileInput" multiple accept="audio/*" style="display: none;">
@@ -165,19 +167,19 @@
                 <div class="track-artist" id="playerArtist">Artist Name</div>
             </div>
         </div>
-        
+
         <div class="player-controls">
             <button class="control-btn" id="prevBtn">
-                <i class="fas fa-step-backward"></i>
+                <iconify-icon icon="ph:skip-back-fill"></iconify-icon>
             </button>
             <button class="control-btn play-pause-btn" id="playPauseBtn">
-                <i class="fas fa-play"></i>
+                <iconify-icon icon="ph:play-fill"></iconify-icon>
             </button>
             <button class="control-btn" id="nextBtn">
-                <i class="fas fa-step-forward"></i>
+                <iconify-icon icon="ph:skip-forward-fill"></iconify-icon>
             </button>
         </div>
-        
+
         <div class="player-progress">
             <span class="time-current" id="currentTime">0:00</span>
             <div class="progress-bar">
@@ -186,20 +188,21 @@
             </div>
             <span class="time-total" id="totalTime">0:00</span>
         </div>
-        
+
         <div class="player-actions">
             <button class="action-btn" id="volumeBtn">
-                <i class="fas fa-volume-up"></i>
+                <iconify-icon icon="ph:speaker-high-fill"></iconify-icon>
             </button>
             <button class="action-btn" id="downloadBtn">
-                <i class="fas fa-download"></i>
+                <iconify-icon icon="ph:download-simple-bold"></iconify-icon>
             </button>
             <button class="action-btn" id="favoriteBtn">
-                <i class="far fa-heart"></i>
+                <iconify-icon icon="ph:heart"></iconify-icon>
             </button>
         </div>
     </div>
 
     <script src="app.js" type="module"></script>
 </body>
+
 </html>

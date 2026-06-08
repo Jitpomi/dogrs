@@ -14,10 +14,12 @@ pub fn crud_capabilities() -> ServiceCapabilities {
     ])
 }
 
-pub fn register_hooks(app: &dog_core::DogApp<serde_json::Value, BlogParams>) -> anyhow::Result<()> {
+pub fn register_hooks(
+    app: &mut dog_core::DogAppBuilder<serde_json::Value, BlogParams>,
+) -> anyhow::Result<()> {
     super::authors_schema::register(app)?;
 
-    app.service("authors")?.hooks(|h| {
+    app.service_hooks("authors", |h| {
         h.before_remove(Arc::new(super::authors_hooks::EnforceAuthorOnDelete));
     });
 

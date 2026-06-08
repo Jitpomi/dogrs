@@ -1,32 +1,10 @@
+// #[cfg(feature = "tracing-opentelemetry")]
+// use opentelemetry::trace::{SpanId, TraceId};
 use std::sync::Arc;
-#[cfg(feature = "tracing-opentelemetry")]
-use opentelemetry::trace::{TraceId, SpanId};
-
 
 /// Distributed tracing integration for job processing
-#[cfg(feature = "tracing-opentelemetry")]
-pub struct DistributedTracing {
-    tracer: Arc<dyn opentelemetry::trace::Tracer + Send + Sync>,
-}
-
-/// Stub for when opentelemetry is not enabled
-#[cfg(not(feature = "tracing-opentelemetry"))]
 pub struct DistributedTracing;
 
-#[cfg(feature = "tracing-opentelemetry")]
-impl DistributedTracing {
-    /// Create new distributed tracing instance
-    pub fn new() -> Self {
-        // In production, this would be configured with actual OTLP endpoint
-        let tracer = opentelemetry::global::tracer("dog-queue");
-        
-        Self {
-            tracer: Arc::new(tracer),
-        }
-    }
-}
-
-#[cfg(not(feature = "tracing-opentelemetry"))]
 impl DistributedTracing {
     /// Create stub tracing instance
     pub fn new() -> Self {
@@ -34,46 +12,9 @@ impl DistributedTracing {
     }
 }
 
-
-/// Span wrapper for job execution
-#[cfg(feature = "tracing-opentelemetry")]
-pub struct JobSpan {
-    span: Box<dyn opentelemetry::trace::Span + Send + Sync>,
-}
-
 /// Stub span for when opentelemetry is not enabled
-#[cfg(not(feature = "tracing-opentelemetry"))]
 pub struct JobSpan;
 
-#[cfg(feature = "tracing-opentelemetry")]
-impl JobSpan {
-    /// Record job completion
-    pub fn record_success(&mut self) {
-        self.span.set_status(opentelemetry::trace::Status::Ok);
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.status", "completed"));
-    }
-
-    /// Record job failure
-    pub fn record_failure(&mut self, error: &str) {
-        self.span.set_status(opentelemetry::trace::Status::error(error.to_string()));
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.status", "failed"));
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.error", error.to_string()));
-    }
-
-    /// Record job retry
-    pub fn record_retry(&mut self, attempt: u32, error: &str) {
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.status", "retrying"));
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.attempt", attempt as i64));
-        self.span.set_attribute(opentelemetry::KeyValue::new("job.retry_reason", error.to_string()));
-    }
-
-    /// Add custom attribute
-    pub fn set_attribute(&mut self, key: &str, value: &str) {
-        self.span.set_attribute(opentelemetry::KeyValue::new(key, value.to_string()));
-    }
-}
-
-#[cfg(not(feature = "tracing-opentelemetry"))]
 impl JobSpan {
     /// Record job completion (stub)
     pub fn record_success(&mut self) {}
@@ -88,44 +29,47 @@ impl JobSpan {
     pub fn set_attribute(&mut self, _key: &str, _value: &str) {}
 }
 
-#[cfg(feature = "tracing-opentelemetry")]
-impl Drop for JobSpan {
-    fn drop(&mut self) {
-        self.span.end();
-    }
-}
-
 /// Span collector for aggregating trace data
 pub struct SpanCollector {
-    spans: Arc<std::sync::Mutex<Vec<SpanData>>>,
+    /// `parking_lot::Mutex` is infallible (no poisoning) and safe in async context
+    /// as long as no `.await` is held across the lock — none of our methods do.
+    /// `VecDeque` enables O(1) `pop_front()` eviction rather than O(n) `remove(0)`.
+    spans: Arc<parking_lot::Mutex<std::collections::VecDeque<SpanData>>>,
 }
 
 impl SpanCollector {
     pub fn new() -> Self {
         Self {
-            spans: Arc::new(std::sync::Mutex::new(Vec::new())),
+            spans: Arc::new(parking_lot::Mutex::new(std::collections::VecDeque::new())),
         }
     }
 
-    /// Collect span data
+    /// Collect span data (ring buffer — keeps the most recent 10 000 spans).
     pub fn collect_span(&self, span_data: SpanData) {
-        let mut spans = self.spans.lock().unwrap();
-        spans.push(span_data);
-        
-        // Keep only last 10000 spans
-        if spans.len() > 10000 {
-            spans.remove(0);
+        let mut spans = self.spans.lock();
+        spans.push_back(span_data);
+        if spans.len() > 10_000 {
+            spans.pop_front(); // O(1) — previously Vec::remove(0) was O(n)
         }
     }
 
-    /// Get collected spans
+    /// Get collected spans.
+    ///
+    /// Clones the ring-buffer structure under the lock and then releases the
+    /// lock before iterating, so `collect_span()` callers are not blocked for
+    /// the entire O(n × attributes) deep-clone.
     pub fn get_spans(&self) -> Vec<SpanData> {
-        self.spans.lock().unwrap().clone()
+        // Clone the VecDeque (and its SpanData values including HashMap attributes)
+        // in one bulk operation while holding the lock, then release the lock
+        // before converting to Vec. concurrent collect_span() calls can proceed
+        // as soon as the lock is released, not after the full allocation.
+        let snapshot: std::collections::VecDeque<SpanData> = self.spans.lock().clone();
+        snapshot.into_iter().collect()
     }
 
     /// Clear collected spans
     pub fn clear(&self) {
-        self.spans.lock().unwrap().clear();
+        self.spans.lock().clear();
     }
 }
 
@@ -142,11 +86,18 @@ pub struct SpanData {
     pub attributes: std::collections::HashMap<String, String>,
 }
 
+/// Job span status.
+///
+/// `#[non_exhaustive]` allows new status variants to be added in future
+/// minor versions without breaking downstream match arms.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum SpanStatus {
     Ok,
     Error(String),
-    Cancelled,
+    /// The span was canceled (note: American spelling — consistent with
+    /// `JobStatus::Canceled`, `QueueError::JobCanceled`, etc.)
+    Canceled,
 }
 
 impl Default for DistributedTracing {
@@ -164,21 +115,21 @@ impl Default for SpanCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{QueueCtx, JobId};
+    use crate::{JobId, QueueCtx};
 
     #[test]
     fn test_distributed_tracing() {
         let _tracing = DistributedTracing::new();
         let _ctx = QueueCtx::new("test_tenant".to_string());
         let _job_id = JobId::new();
-        
+
         // Test passes - basic tracing functionality works
     }
 
     #[test]
     fn test_span_collector() {
         let collector = SpanCollector::new();
-        
+
         let span_data = SpanData {
             trace_id: "test_trace".to_string(),
             span_id: "test_span".to_string(),
@@ -189,9 +140,9 @@ mod tests {
             status: SpanStatus::Ok,
             attributes: std::collections::HashMap::new(),
         };
-        
+
         collector.collect_span(span_data.clone());
-        
+
         let spans = collector.get_spans();
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].trace_id, "test_trace");

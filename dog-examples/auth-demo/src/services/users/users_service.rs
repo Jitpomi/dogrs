@@ -1,4 +1,3 @@
-
 use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::tenant::TenantContext;
@@ -20,7 +19,12 @@ impl DogService<Value, AuthDemoParams> for UsersService {
         users_shared::crud_capabilities()
     }
 
-    async fn create(&self, ctx: &TenantContext, data: Value, params: AuthDemoParams) -> Result<Value> {
+    async fn create(
+        &self,
+        ctx: &TenantContext,
+        data: Value,
+        params: AuthDemoParams,
+    ) -> Result<Value> {
         self.adapter.create(ctx, data, params).await
     }
 
@@ -32,15 +36,32 @@ impl DogService<Value, AuthDemoParams> for UsersService {
         self.adapter.get(ctx, id, params).await
     }
 
-    async fn update(&self, ctx: &TenantContext, id: &str, data: Value, params: AuthDemoParams) -> Result<Value> {
+    async fn update(
+        &self,
+        ctx: &TenantContext,
+        id: &str,
+        data: Value,
+        params: AuthDemoParams,
+    ) -> Result<Value> {
         self.adapter.update(ctx, id, data, params).await
     }
 
-    async fn patch(&self, ctx: &TenantContext, id: Option<&str>, data: Value, params: AuthDemoParams) -> Result<Value> {
+    async fn patch(
+        &self,
+        ctx: &TenantContext,
+        id: Option<&str>,
+        data: Value,
+        params: AuthDemoParams,
+    ) -> Result<Value> {
         self.adapter.patch(ctx, id, data, params).await
     }
 
-    async fn remove(&self, ctx: &TenantContext, id: Option<&str>, params: AuthDemoParams) -> Result<Value> {
+    async fn remove(
+        &self,
+        ctx: &TenantContext,
+        id: Option<&str>,
+        params: AuthDemoParams,
+    ) -> Result<Value> {
         self.adapter.remove(ctx, id, params).await
     }
 }

@@ -14,14 +14,14 @@ pub struct MusicServices {
 }
 
 pub fn configure(
-    app: &dog_core::DogApp<serde_json::Value, MusicParams>,
+    app: &mut dog_core::DogAppBuilder<serde_json::Value, MusicParams>,
     state: Arc<RustFsState>,
 ) -> anyhow::Result<MusicServices> {
     let music: Arc<dyn DogService<serde_json::Value, MusicParams>> =
         Arc::new(music::MusicService::new(Arc::clone(&state)));
     app.register_service("music", Arc::clone(&music));
 
-    music::music_shared::register_hooks(app)?;
+    music::music_shared::register_hooks(app, state)?;
 
     Ok(MusicServices { music })
 }

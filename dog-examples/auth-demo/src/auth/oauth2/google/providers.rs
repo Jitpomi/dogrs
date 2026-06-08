@@ -1,45 +1,49 @@
 use std::sync::Arc;
 
 use crate::services::AuthDemoParams;
-use dog_auth::AuthenticationService;
-use dog_auth_oauth::{OAuth2AuthorizationCodeProvider, OAuthEntityResolver, OAuthStrategy, OAuthStrategyOptions};
+
+use dog_auth_oauth::{
+    OAuth2AuthorizationCodeProvider, OAuthEntityResolver, OAuthStrategy, OAuthStrategyOptions,
+};
 use dog_core::HookContext;
 use serde_json::{json, Value};
 
 type GoogleOAuthProvider = OAuth2AuthorizationCodeProvider<AuthDemoParams>;
 
 fn google_provider_with_redirect(
-    auth: &AuthenticationService<AuthDemoParams>,
+    config: &dog_core::DogConfigSnapshot,
     name: &'static str,
     redirect_uri: &str,
 ) -> anyhow::Result<GoogleOAuthProvider> {
-    let app = auth.base.app();
-
-    let client_id = app
-        .get::<String>("oauth.google.client_id")
+    let client_id = config
+        .get_string("oauth.google.client_id")
         .ok_or_else(|| anyhow::anyhow!("Missing oauth.google.client_id"))?;
 
-    let client_secret = app
-        .get::<String>("oauth.google.client_secret")
+    let client_secret = config
+        .get_string("oauth.google.client_secret")
         .ok_or_else(|| anyhow::anyhow!("Missing oauth.google.client_secret"))?;
 
-    Ok(GoogleOAuthProvider::new(
-        name,
+    GoogleOAuthProvider::new(dog_auth_oauth::oauth2_client::OAuth2ClientConfig {
+        name: name.to_string(),
         client_id,
         client_secret,
-        "https://accounts.google.com/o/oauth2/v2/auth",
-        "https://oauth2.googleapis.com/token",
-        redirect_uri.to_string(),
-        vec!["openid".to_string(), "email".to_string(), "profile".to_string()],
-        Some("https://openidconnect.googleapis.com/v1/userinfo".to_string()),
-    )?)
+        auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
+        token_url: "https://oauth2.googleapis.com/token".to_string(),
+        redirect_uri: redirect_uri.to_string(),
+        scopes: vec![
+            "openid".to_string(),
+            "email".to_string(),
+            "profile".to_string(),
+        ],
+        userinfo_url: Some("https://openidconnect.googleapis.com/v1/userinfo".to_string()),
+    })
 }
 
 pub fn authorize_url_for_redirect(
-    auth: &AuthenticationService<AuthDemoParams>,
+    config: &dog_core::DogConfigSnapshot,
     redirect_uri: &str,
 ) -> anyhow::Result<String> {
-    Ok(google_provider_with_redirect(auth, "google", redirect_uri)?.authorize_url())
+    Ok(google_provider_with_redirect(config, "google", redirect_uri)?.authorize_url())
 }
 
 struct GoogleEntityResolver;
@@ -53,7 +57,7 @@ impl OAuthEntityResolver<AuthDemoParams> for GoogleEntityResolver {
         ctx: &mut HookContext<Value, AuthDemoParams>,
     ) -> anyhow::Result<Option<Value>> {
         let _ = provider;
-        let users = ctx.services.service::<Value, AuthDemoParams>("users")?;
+        let users = ctx.services.service("users")?;
 
         let google_id = profile.get("sub").and_then(|v| v.as_str()).unwrap_or("");
         if google_id.trim().is_empty() {
@@ -93,15 +97,19 @@ impl OAuthEntityResolver<AuthDemoParams> for GoogleEntityResolver {
 }
 
 pub fn register_google_oauth(
-    auth: Arc<AuthenticationService<AuthDemoParams>>,
+    builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>,
+    auth: &mut dog_auth::core::AuthenticationBuilder<AuthDemoParams>,
 ) -> anyhow::Result<String> {
-    let redirect_uri = auth
-        .base
-        .app()
-        .get::<String>("oauth.google.redirect_uri")
+    let config = builder.config_snapshot();
+    let redirect_uri = config
+        .get_string("oauth.google.redirect_uri")
         .ok_or_else(|| anyhow::anyhow!("Missing oauth.google.redirect_uri"))?;
 
-    let provider = Arc::new(google_provider_with_redirect(auth.as_ref(), "google", &redirect_uri)?);
+    let provider = Arc::new(google_provider_with_redirect(
+        &config,
+        "google",
+        &redirect_uri,
+    )?);
     let authorize_url = provider.authorize_url();
 
     let redirect_service = if redirect_uri.ends_with("/oauth/google/callback") {
@@ -112,19 +120,21 @@ pub fn register_google_oauth(
         ));
     };
     let provider_service = Arc::new(google_provider_with_redirect(
-        auth.as_ref(),
+        &config,
         "google_service",
         &redirect_service,
     )?);
 
-    let mut opts: OAuthStrategyOptions<AuthDemoParams> = OAuthStrategyOptions::default();
-    opts.default_provider = Some("google".to_string());
+    let mut opts = OAuthStrategyOptions {
+        default_provider: Some("google".to_string()),
+        ..Default::default()
+    };
     opts.providers.insert("google".to_string(), provider);
     opts.providers
         .insert("google_service".to_string(), provider_service);
     opts.entity_resolver = Some(Arc::new(GoogleEntityResolver));
 
-    let strategy = OAuthStrategy::new(&auth.base).with_options(opts);
-    auth.register_strategy("oauth", Arc::new(strategy));
+    let strategy = OAuthStrategy::new().with_options(opts);
+    auth.register("oauth", Arc::new(strategy));
     Ok(authorize_url)
 }
