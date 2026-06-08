@@ -8,6 +8,9 @@ pub mod tracing;
 pub use analytics::{ObservabilityLayer, PerformanceAnalytics};
 pub use metrics::{LiveMetrics, MetricsCollector, PerformanceMetrics};
 
+#[cfg(feature = "metrics")]
+pub use metrics::PrometheusExporter;
+
 #[cfg(feature = "tracing-opentelemetry")]
 pub use tracing::{DistributedTracing, SpanCollector};
 

@@ -532,3 +532,149 @@ mod tests {
         assert_eq!(global.jobs_in_progress(), 5);
     }
 }
+
+// ---------------------------------------------------------------------------
+// PrometheusExporter — Prometheus text exposition format export
+// ---------------------------------------------------------------------------
+
+/// Exports [`LiveMetrics`] in [Prometheus text exposition format][fmt].
+///
+/// Wraps a shared [`LiveMetrics`] instance and renders all per-job-type
+/// counters on each [`gather`](Self::gather) call.  The output is suitable
+/// for a `/metrics` HTTP endpoint consumed by Prometheus, Grafana Mimir, or
+/// VictoriaMetrics.
+///
+/// All counters carry a `job_type` label for per-type breakdown.  Label
+/// values are escaped per the Prometheus specification (backslash and
+/// double-quote are the only characters that require escaping).
+///
+/// Available when the `metrics` feature is enabled.
+///
+/// [fmt]: https://prometheus.io/docs/instrumenting/exposition_formats/
+#[cfg(feature = "metrics")]
+pub struct PrometheusExporter {
+    live_metrics: Arc<LiveMetrics>,
+}
+
+#[cfg(feature = "metrics")]
+impl PrometheusExporter {
+    /// Create a new exporter from a shared [`LiveMetrics`] instance.
+    pub fn new(live_metrics: Arc<LiveMetrics>) -> Self {
+        Self { live_metrics }
+    }
+
+    /// Render all current metrics in Prometheus text exposition format.
+    ///
+    /// Uses [`LiveMetrics::snapshot_all`] to traverse the per-type DashMap
+    /// exactly once — both the global totals and per-type labels are drawn
+    /// from the same coherent snapshot.
+    ///
+    /// # Format
+    ///
+    /// Each metric family is rendered as:
+    /// ```text
+    /// # HELP <name> <help_text>
+    /// # TYPE <name> counter
+    /// <name>{job_type="<type>"} <value>
+    /// ```
+    pub fn gather(&self) -> String {
+        use std::fmt::Write as _;
+
+        let (_global, per_type) = self.live_metrics.snapshot_all();
+
+        // Pre-allocate: ~120 bytes per line × 5 families × n job types
+        let capacity = per_type.len().max(1) * 5 * 120;
+        let mut out = String::with_capacity(capacity);
+
+        /// Descriptor for a single Prometheus counter metric.
+        struct Family {
+            name: &'static str,
+            help: &'static str,
+            get: fn(&JobTypeMetrics) -> u64,
+        }
+
+        let families: &[Family] = &[
+            Family {
+                name: "dog_queue_jobs_enqueued_total",
+                help: "Total jobs enqueued, partitioned by job type.",
+                get: |m| m.enqueued,
+            },
+            Family {
+                name: "dog_queue_jobs_completed_total",
+                help: "Total jobs completed, partitioned by job type.",
+                get: |m| m.completed,
+            },
+            Family {
+                name: "dog_queue_jobs_failed_total",
+                help: "Total jobs failed, partitioned by job type.",
+                get: |m| m.failed,
+            },
+            Family {
+                name: "dog_queue_jobs_retried_total",
+                help: "Total retry events, partitioned by job type.",
+                get: |m| m.retried,
+            },
+            Family {
+                name: "dog_queue_jobs_canceled_total",
+                help: "Total jobs canceled, partitioned by job type.",
+                get: |m| m.canceled,
+            },
+        ];
+
+        for family in families {
+            let _ = writeln!(out, "# HELP {} {}", family.name, family.help);
+            let _ = writeln!(out, "# TYPE {} counter", family.name);
+            for (job_type, metrics) in &per_type {
+                // Escape per Prometheus text format spec:
+                // backslash → \\, double-quote → \"
+                let escaped = job_type
+                    .replace('\\', r"\\")
+                    .replace('"', "\\\"");
+                let _ = writeln!(
+                    out,
+                    "{}{{job_type=\"{}\"}} {}",
+                    family.name,
+                    escaped,
+                    (family.get)(metrics),
+                );
+            }
+        }
+
+        out
+    }
+}
+
+#[cfg(all(test, feature = "metrics"))]
+mod prometheus_tests {
+    use super::*;
+
+    #[test]
+    fn test_prometheus_exporter_renders_valid_text() {
+        let metrics = Arc::new(LiveMetrics::new());
+        metrics.increment_jobs_enqueued("send_email");
+        metrics.increment_jobs_enqueued("send_email");
+        metrics.increment_jobs_completed("send_email");
+        metrics.increment_jobs_failed("resize_image");
+
+        let exporter = PrometheusExporter::new(metrics);
+        let output = exporter.gather();
+
+        assert!(output.contains("# HELP dog_queue_jobs_enqueued_total"));
+        assert!(output.contains("# TYPE dog_queue_jobs_enqueued_total counter"));
+        assert!(output.contains(r#"dog_queue_jobs_enqueued_total{job_type="send_email"} 2"#));
+        assert!(output.contains(r#"dog_queue_jobs_failed_total{job_type="resize_image"} 1"#));
+    }
+
+    #[test]
+    fn test_prometheus_exporter_escapes_label_values() {
+        let metrics = Arc::new(LiveMetrics::new());
+        // job_type with special characters that need escaping
+        metrics.increment_jobs_enqueued(r#"my\"tricky\type"#);
+
+        let exporter = PrometheusExporter::new(metrics);
+        let output = exporter.gather();
+
+        // Backslash should be doubled, double-quote should be escaped
+        assert!(output.contains(r#"job_type="my\\\"tricky\\type""#));
+    }
+}

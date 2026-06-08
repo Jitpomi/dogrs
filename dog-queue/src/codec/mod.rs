@@ -2,7 +2,6 @@ pub mod json;
 
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -160,7 +159,7 @@ impl CodecRegistry {
     ///   priority lanes (e.g. `"email-high"` vs `"email-low"`).
     /// - `opts.run_at`: if `None`, defaults to `Utc::now()` (run immediately).
     ///   Set this to schedule delayed jobs without constructing `JobMessage` manually.
-    pub fn encode_job<J: Job + Serialize>(
+    pub fn encode_job<J: Job>(
         &self,
         job: &J,
         _ctx: &QueueCtx,

@@ -3,23 +3,16 @@ use serde::{Deserialize, Serialize};
 
 use super::{JobId, JobMessage, LeaseToken};
 
-/// Job status lifecycle
+/// Job status lifecycle.
+///
+/// `#[non_exhaustive]` allows new variants to be added in minor releases without
+/// breaking downstream `match` expressions.  Downstream crates should always
+/// include a `_ =>` catch-all arm.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum JobStatus {
     /// Job is queued and waiting to be processed
     Enqueued,
-
-    /// Delayed jobs use `Enqueued` status with a future `run_at` in the queue
-    /// entry tuple — the dequeue scan gates on `run_at <= now`. This variant
-    /// was removed from the state machine to fix a data-loss bug where dequeue
-    /// phase 2 only leased `Enqueued | Retrying` entries.
-    #[deprecated(
-        note = "This variant is never constructed by the state machine. \
-                Delayed jobs use JobStatus::Enqueued with run_at scheduling. \
-                Match arms for Scheduled will never execute."
-    )]
-    #[allow(deprecated)]
-    Scheduled,
 
     /// Job is currently being processed by a worker
     Processing { lease_until: DateTime<Utc> },
@@ -59,10 +52,6 @@ impl JobStatus {
         match self {
             Self::Enqueued => true,
             Self::Retrying { retry_at } => *retry_at <= now,
-            // Scheduled is a deprecated dead variant — it is never constructed,
-            // but we must handle it in match arms to silence exhaustiveness warnings.
-            #[allow(deprecated)]
-            Self::Scheduled => false,
             _ => false,
         }
     }
@@ -71,13 +60,12 @@ impl JobStatus {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Enqueued => "enqueued",
-            #[allow(deprecated)]
-            Self::Scheduled => "scheduled",
             Self::Processing { .. } => "processing",
             Self::Retrying { .. } => "retrying",
             Self::Completed { .. } => "completed",
             Self::Failed { .. } => "failed",
             Self::Canceled { .. } => "canceled",
+            _ => "unknown", // catch-all for future non_exhaustive variants
         }
     }
 }
@@ -247,7 +235,19 @@ pub struct LeasedJob {
     /// Lease token for acknowledgment
     pub lease_token: LeaseToken,
 
-    /// When the lease expires
+    /// Lease expiry captured at dequeue time.
+    ///
+    /// # Warning — stale after heartbeat extensions
+    ///
+    /// `LeasedJob` is a point-in-time clone produced by `dequeue`.  Each
+    /// successful `heartbeat_extend` call updates the lease deadline in the
+    /// backend, but this field is **never refreshed**.  After a heartbeat
+    /// extension, `lease_until` reflects the original dequeue-time expiry,
+    /// not the current backend deadline.
+    ///
+    /// To check whether a lease is still alive after heartbeating, compare
+    /// the current time against the deadline returned by the most recent
+    /// `heartbeat_extend` call — not this field.
     pub lease_until: DateTime<Utc>,
 }
 
@@ -271,15 +271,38 @@ impl LeasedJob {
         &self.record.message
     }
 
-    /// Check if the lease is still valid
+    /// Check if the lease is still valid.
+    ///
+    /// # Warning — stale after heartbeat extensions
+    ///
+    /// This method compares `now` against the [`lease_until`](Self::lease_until)
+    /// field captured at dequeue time.  After any successful
+    /// `heartbeat_extend` call the backend deadline is extended, but
+    /// `lease_until` is not refreshed.  Calling this method after a heartbeat
+    /// will silently return `false` for a lease that is actually alive.
+    ///
+    /// Prefer tracking the `new_lease_until` value from the most recent
+    /// `heartbeat_extend` result for post-heartbeat validity checks.
+    #[deprecated(
+        since = "0.1.0",
+        note = "lease_until is a dequeue-time snapshot and is stale after \
+                heartbeat_extend. Compare against the most recent heartbeat \
+                result instead."
+    )]
     pub fn lease_valid(&self, now: DateTime<Utc>) -> bool {
         self.lease_until > now
     }
 
-    /// Time remaining on the lease, or `None` if the lease has already expired.
+    /// Time remaining on the lease, or `None` if expired.
     ///
-    /// Returns `None` rather than a negative duration so callers can use this
-    /// safely as a sleep/timeout value without a separate expiry check.
+    /// # Warning — stale after heartbeat extensions
+    ///
+    /// Same stale-snapshot caveat as [`lease_valid`](Self::lease_valid).
+    #[deprecated(
+        since = "0.1.0",
+        note = "lease_until is a dequeue-time snapshot and is stale after \
+                heartbeat_extend. Track the most recent heartbeat deadline instead."
+    )]
     pub fn lease_remaining(&self, now: DateTime<Utc>) -> Option<chrono::Duration> {
         let remaining = self.lease_until - now;
         if remaining > chrono::Duration::zero() {
