@@ -2,7 +2,7 @@
 
 A modular Rust framework with multi-tenant services, hooks, and pluggable storage. Built to keep your core logic independent from your transport layer.
 
-DogRS is inspired by the simplicity of FeathersJS, but designed for Rust. It provides a clean foundation for building flexible applications where you can easily swap storage backends, web servers, and execution environments without rewriting your business logic.
+DogRS is inspired by the simplicity of FeathersJS, but designed for Rust. It provides a clean foundation for building flexible applications where you can simultaneously expose services across multiple transports, swap storage backends on the fly, and scale without rewriting your business logic.
 
 ## Features
 
