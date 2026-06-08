@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use parking_lot::RwLock;
+use tokio::sync::RwLock;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -107,7 +107,7 @@ impl QueueBackend for MemoryBackend {
         //
         // Lock ordering (always observed): idempotency → jobs → queues.
         // No other method in this backend acquires idempotency, so no deadlock risk.
-        let mut idempotency_guard = self.idempotency.write();
+        let mut idempotency_guard = self.idempotency.write().await;
 
         if let Some(ref scope) = idempotency_scope {
             if let Some(existing_id) = idempotency_guard.get(scope).cloned() {
@@ -115,7 +115,7 @@ impl QueueBackend for MemoryBackend {
                 // Holding idempotency.write() while acquiring jobs.read() is safe
                 // because no other code path holds jobs.write() and then tries to
                 // acquire idempotency (only enqueue does, and it's now serialised).
-                let jobs = self.jobs.read();
+                let jobs = self.jobs.read().await;
                 if let Some(record) = jobs.get(&existing_id) {
                     if !record.status.is_terminal() {
                         // Non-terminal — deduplicate and return the existing id.
@@ -133,10 +133,10 @@ impl QueueBackend for MemoryBackend {
 
         // Create and store the job record.
         let record = JobRecord::new(job_id.clone(), ctx.tenant_id.clone(), message.clone());
-        self.jobs.write().insert(job_id.clone(), record);
+        self.jobs.write().await.insert(job_id.clone(), record);
 
         // Insert into the priority-ordered queue.
-        let mut queues = self.queues.write();
+        let mut queues = self.queues.write().await;
         let tenant_queues = queues.entry(ctx.tenant_id.clone()).or_default();
         let queue = tenant_queues.entry(message.queue.clone()).or_default();
         priority_insert(queue, (message.priority, message.run_at, job_id.clone()));
@@ -177,7 +177,7 @@ impl QueueBackend for MemoryBackend {
             // For in-memory use at small scale this is acceptable; a split
             // ready-queue / future-heap structure would make this O(1).
             let candidate = {
-                let mut queues_lock = self.queues.write();
+                let mut queues_lock = self.queues.write().await;
                 queues_lock
                     .get_mut(&ctx.tenant_id)
                     .and_then(|tq| tq.get_mut(*queue_name))
@@ -194,7 +194,7 @@ impl QueueBackend for MemoryBackend {
 
             // ── Phase 2: lease the job — single jobs.write() ──────────────────────────
             if let Some(job_id) = candidate {
-                let mut jobs = self.jobs.write();
+                let mut jobs = self.jobs.write().await;
                 if let Some(record) = jobs.get_mut(&job_id) {
                     match &record.status {
                         JobStatus::Enqueued | JobStatus::Retrying { .. } => {
@@ -239,7 +239,7 @@ impl QueueBackend for MemoryBackend {
         _result_ref: Option<String>,
     ) -> QueueResult<()> {
         let now = Utc::now();
-        let mut jobs = self.jobs.write();
+        let mut jobs = self.jobs.write().await;
 
         let record = jobs
             .get_mut(&job_id)
@@ -298,7 +298,7 @@ impl QueueBackend for MemoryBackend {
         retry_at: Option<DateTime<Utc>>,
     ) -> QueueResult<()> {
         let now = Utc::now();
-        let mut jobs = self.jobs.write();
+        let mut jobs = self.jobs.write().await;
 
         let record = jobs
             .get_mut(&job_id)
@@ -345,7 +345,7 @@ impl QueueBackend for MemoryBackend {
             record.schedule_retry(retry_time);
             record.set_error(error.clone());
 
-            let mut queues = self.queues.write();
+            let mut queues = self.queues.write().await;
             let priority = record.message.priority;
             let queue_name = record.message.queue.clone();
             let tenant_queues = queues.entry(ctx.tenant_id.clone()).or_default();
@@ -384,7 +384,7 @@ impl QueueBackend for MemoryBackend {
         extra_time: std::time::Duration,
     ) -> QueueResult<()> {
         let now = Utc::now();
-        let mut jobs = self.jobs.write();
+        let mut jobs = self.jobs.write().await;
 
         let record = jobs
             .get_mut(&job_id)
@@ -429,7 +429,7 @@ impl QueueBackend for MemoryBackend {
 
     async fn cancel(&self, ctx: QueueCtx, job_id: JobId) -> QueueResult<bool> {
         let now = Utc::now();
-        let mut jobs = self.jobs.write();
+        let mut jobs = self.jobs.write().await;
 
         let record = jobs
             .get_mut(&job_id)
@@ -466,7 +466,7 @@ impl QueueBackend for MemoryBackend {
     }
 
     async fn get_status(&self, ctx: QueueCtx, job_id: JobId) -> QueueResult<JobStatus> {
-        let jobs = self.jobs.read();
+        let jobs = self.jobs.read().await;
         let record = jobs
             .get(&job_id)
             .ok_or_else(|| QueueError::JobNotFound(job_id.to_string()))?;
@@ -480,7 +480,7 @@ impl QueueBackend for MemoryBackend {
     }
 
     async fn get_record(&self, ctx: QueueCtx, job_id: JobId) -> QueueResult<JobRecord> {
-        let jobs = self.jobs.read();
+        let jobs = self.jobs.read().await;
         let record = jobs
             .get(&job_id)
             .ok_or_else(|| QueueError::JobNotFound(job_id.to_string()))?;

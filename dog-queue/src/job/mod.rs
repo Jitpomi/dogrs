@@ -13,7 +13,7 @@ pub trait Job: Send + Sync + Serialize + DeserializeOwned + 'static {
     type Context: Send + Sync + Clone + 'static;
 
     /// Result type returned by job execution
-    type Result: Send + Sync + Serialize + 'static;
+    type Result: Send + Serialize + 'static;
 
     /// Job type identifier for dispatch
     const JOB_TYPE: &'static str;

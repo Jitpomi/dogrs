@@ -81,7 +81,7 @@ impl LeaseReaper {
         // Only the job IDs are collected, not full records. The authoritative
         // record is read again inside jobs.write() in phase 2 to close the TOCTOU.
         let expired_ids: Vec<crate::JobId> = {
-            let jobs = self.backend.jobs.read();
+            let jobs = self.backend.jobs.read().await;
             jobs.iter()
                 .filter_map(|(job_id, record)| match &record.status {
                     JobStatus::Processing { lease_until } if *lease_until < now => {
@@ -105,7 +105,7 @@ impl LeaseReaper {
         let mut reclaimed_count = 0usize;
 
         {
-            let mut jobs = self.backend.jobs.write();
+            let mut jobs = self.backend.jobs.write().await;
 
             for job_id in &expired_ids {
                 let record = match jobs.get_mut(job_id) {
@@ -172,7 +172,7 @@ impl LeaseReaper {
         // Uses priority_insert (not push_back) so reclaimed Critical jobs are
         // placed before Normal/Low entries, not appended to the tail.
         if !to_requeue.is_empty() {
-            let mut queues = self.backend.queues.write();
+            let mut queues = self.backend.queues.write().await;
             for (tenant_id, queue_name, priority, job_id) in to_requeue {
                 let tenant_queues = queues.entry(tenant_id).or_default();
                 let queue = tenant_queues.entry(queue_name).or_default();
@@ -193,7 +193,7 @@ impl LeaseReaper {
 impl MemoryBackend {
     /// Force a lease to expire (test helper)
     pub async fn force_lease_expiry(&self, job_id: crate::JobId) -> QueueResult<()> {
-        let mut jobs = self.jobs.write();
+        let mut jobs = self.jobs.write().await;
         if let Some(record) = jobs.get_mut(&job_id) {
             if let JobStatus::Processing {
                 ref mut lease_until,
@@ -306,7 +306,7 @@ mod tests {
 
         // Set attempt past max_retries (attempt=2 > max_retries=1) to exercise the fail path.
         {
-            let mut jobs = backend.jobs.write();
+            let mut jobs = backend.jobs.write().await;
             if let Some(record) = jobs.get_mut(&job_id) {
                 record.attempt = 2;
             }
@@ -348,7 +348,7 @@ mod tests {
         // (In production this race is closed by checking status inside jobs.write().)
         // We directly set the status to Completed here to simulate the race.
         {
-            let mut jobs = backend.jobs.write();
+            let mut jobs = backend.jobs.write().await;
             if let Some(record) = jobs.get_mut(&job_id) {
                 // Manually mark as completed (as ack_complete would do).
                 record.status = crate::JobStatus::Completed {

@@ -47,6 +47,14 @@ pub enum QueueError {
     #[error("Worker shutdown")]
     WorkerShutdown,
 
+    /// A caller-supplied configuration value violates a required invariant.
+    ///
+    /// Distinct from [`QueueError::Internal`] (unexpected runtime failure) so
+    /// that error routing, alerting rules, and middleware can correctly classify
+    /// configuration mistakes as programmer errors rather than transient faults.
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

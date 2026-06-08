@@ -108,14 +108,14 @@ impl QueueConfig {
     /// - `base_retry_backoff` > `max_retry_backoff` (cap is below base; every retry uses max)
     pub fn validate(&self) -> QueueResult<()> {
         if self.max_workers == 0 {
-            return Err(QueueError::Internal(
-                "QueueConfig: max_workers must be >= 1 (0 workers would never process jobs)"
+            return Err(QueueError::InvalidConfig(
+                "max_workers must be >= 1 (0 workers would never process jobs)"
                     .to_string(),
             ));
         }
         if self.base_retry_backoff > self.max_retry_backoff {
-            return Err(QueueError::Internal(format!(
-                "QueueConfig: base_retry_backoff ({:?}) must be <= max_retry_backoff ({:?})",
+            return Err(QueueError::InvalidConfig(format!(
+                "base_retry_backoff ({:?}) must be <= max_retry_backoff ({:?})",
                 self.base_retry_backoff, self.max_retry_backoff,
             )));
         }
@@ -631,15 +631,34 @@ impl<C: Send + Sync + 'static> Worker<C> {
         Ok(true)
     }
 
-    /// Calculate retry time with exponential backoff
+    /// Calculate retry time using full-jitter exponential backoff.
+    ///
+    /// "Full jitter" (AWS recommendation): instead of `sleep = clamp(2^attempt * base, cap)`,
+    /// pick uniformly from `[0, clamp(2^attempt * base, cap)]`. This desynchronises
+    /// concurrent retriers that all failed at the same instant — preventing the thundering
+    /// herd that pure exponential backoff causes on mass failures.
     fn calculate_retry_time(&self, attempt: u32) -> chrono::DateTime<chrono::Utc> {
-        let backoff_seconds = std::cmp::min(
-            self.adapter.config.base_retry_backoff.as_secs()
-                * (2_u64.pow(attempt.saturating_sub(1))),
-            self.adapter.config.max_retry_backoff.as_secs(),
-        );
+        use rand::Rng;
 
-        chrono::Utc::now() + chrono::Duration::seconds(backoff_seconds as i64)
+        let cap = self.adapter.config.max_retry_backoff.as_secs();
+        let base = self
+            .adapter
+            .config
+            .base_retry_backoff
+            .as_secs()
+            .saturating_mul(2_u64.pow(attempt.saturating_sub(1)));
+        let ceiling = base.min(cap);
+
+        // Uniform sample in [0, ceiling) — each retrier picks a different slot.
+        // rand::random::<u64>() is a free function available in all rand versions;
+        // ceiling is always ≪ u64::MAX (defaults to 3600 s) so modulo bias is negligible.
+        let jitter_secs = if ceiling > 0 {
+            rand::random::<u64>() % ceiling
+        } else {
+            0
+        };
+
+        chrono::Utc::now() + chrono::Duration::seconds(jitter_secs as i64)
     }
 }
 
