@@ -207,10 +207,14 @@ impl JobTypeMetrics {
     }
 
     /// Success rate as a percentage (0.0 – 100.0).
+    ///
+    /// Returns `0.0` when no jobs have completed or failed — "no data" must
+    /// not be reported as a perfect record. Callers that want to distinguish
+    /// "no data" from "0% success" should check `completed + failed == 0` first.
     pub fn success_rate(&self) -> f64 {
         let total = self.completed + self.failed;
         if total == 0 {
-            100.0
+            0.0 // no data — not 100%
         } else {
             (self.completed as f64 / total as f64) * 100.0
         }
@@ -273,14 +277,36 @@ impl PerformanceMetrics {
 
     /// Percentile execution time for a job type (e.g. 50.0 for p50).
     pub fn percentile_execution_time(&self, job_type: &str, percentile: f64) -> Option<Duration> {
-        let times = self.execution_times.get(job_type)?;
-        if times.is_empty() {
-            return None;
-        }
+        self.percentiles(job_type, &[percentile])
+            .into_iter()
+            .next()
+            .flatten()
+    }
+
+    /// Compute multiple percentiles in a single sort pass.
+    ///
+    /// More efficient than calling [`percentile_execution_time`] repeatedly when
+    /// several quantiles are needed at once (e.g. p50 + p95 + p99 for dashboards).
+    ///
+    /// Returns one `Option<Duration>` per input percentile, in the same order.
+    /// Returns `None` for a given percentile if there is no timing data for the
+    /// job type.
+    pub fn percentiles(&self, job_type: &str, percentiles: &[f64]) -> Vec<Option<Duration>> {
+        let times = match self.execution_times.get(job_type) {
+            Some(t) if !t.is_empty() => t,
+            _ => return vec![None; percentiles.len()],
+        };
+        // Sort once for all requested percentiles.
         let mut sorted: Vec<Duration> = times.iter().cloned().collect();
         sorted.sort_by_key(|d| d.num_milliseconds());
-        let index = ((percentile / 100.0) * (sorted.len() - 1) as f64).round() as usize;
-        sorted.get(index).cloned()
+        let n = sorted.len();
+        percentiles
+            .iter()
+            .map(|&p| {
+                let index = ((p / 100.0) * (n - 1) as f64).round() as usize;
+                sorted.get(index).cloned()
+            })
+            .collect()
     }
 
     /// All job types that have timing data.
@@ -353,10 +379,13 @@ pub struct GlobalMetrics {
 }
 
 impl GlobalMetrics {
+    /// Success rate as a percentage (0.0 – 100.0).
+    ///
+    /// Returns `0.0` when no jobs have completed or failed.
     pub fn success_rate(&self) -> f64 {
         let total = self.jobs_completed + self.jobs_failed;
         if total == 0 {
-            100.0
+            0.0 // no data — not 100%
         } else {
             (self.jobs_completed as f64 / total as f64) * 100.0
         }

@@ -1,6 +1,6 @@
 pub mod json;
 
-pub use async_trait::async_trait;
+
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -139,16 +139,23 @@ impl CodecRegistry {
         opts: EnqueueOptions,
     ) -> QueueResult<JobMessage> {
         let codec = self.default_codec()?;
-        let payload =
+
+        // Serialize the job to raw JSON bytes.
+        let raw =
             serde_json::to_vec(job).map_err(|e| QueueError::SerializationError(e.to_string()))?;
+
+        // Pass through the codec's encode_bytes so that custom codecs (compression,
+        // encryption, alternate wire formats) are actually applied.
+        // Previously this called serde_json::to_vec and discarded the codec object,
+        // meaning any registered non-JSON codec was silently bypassed at encode time
+        // while still being called at decode time — producing corrupt payloads.
+        let payload = codec.encode_bytes(&raw)?;
 
         Ok(JobMessage {
             job_type: J::JOB_TYPE.to_string(),
             payload_bytes: payload,
             codec: codec.codec_id().to_string(),
-            queue: opts
-                .queue
-                .unwrap_or_else(|| J::JOB_TYPE.to_string()),
+            queue: opts.queue.unwrap_or_else(|| J::JOB_TYPE.to_string()),
             priority: J::PRIORITY,
             max_retries: J::MAX_RETRIES,
             run_at: opts.run_at.unwrap_or_else(Utc::now),

@@ -27,6 +27,12 @@ pub struct QueueConfig {
     pub max_retry_backoff: Duration,
     /// Base retry backoff duration
     pub base_retry_backoff: Duration,
+    /// How long a worker sleeps between dequeue polls when the queue is empty.
+    /// Lower values reduce job latency at the cost of more backend round-trips.
+    pub poll_interval: Duration,
+    /// How long a worker backs off after an infrastructure error (e.g. backend
+    /// unavailable) before retrying the dequeue loop.
+    pub error_backoff: Duration,
 }
 
 impl Default for QueueConfig {
@@ -38,6 +44,8 @@ impl Default for QueueConfig {
             heartbeat_interval: Duration::from_secs(30),
             max_retry_backoff: Duration::from_secs(3600), // 1 hour
             base_retry_backoff: Duration::from_secs(1),
+            poll_interval: Duration::from_millis(100),
+            error_backoff: Duration::from_secs(1),
         }
     }
 }
@@ -339,13 +347,16 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     match result {
                         Ok(processed) => {
                             if !processed {
-                                // No jobs available, wait a bit
-                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                // No jobs available — sleep for the configured poll interval
+                                // before trying again. Tunable via QueueConfig::poll_interval.
+                                tokio::time::sleep(self.adapter.config.poll_interval).await;
                             }
                         }
                         Err(e) => {
                             error!("Error processing job: {}", e);
-                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            // Infrastructure error — back off before retrying to avoid
+                            // hammering a degraded backend. Tunable via QueueConfig::error_backoff.
+                            tokio::time::sleep(self.adapter.config.error_backoff).await;
                         }
                     }
                 }
@@ -384,9 +395,53 @@ impl<C: Send + Sync + 'static> Worker<C> {
             })?
         }; // read lock released here
 
+        // Spawn a heartbeat task that extends the lease every `heartbeat_interval`
+        // while execute() runs.  Without this, any job that takes longer than
+        // `lease_duration` (default 5 min) is reclaimed by the reaper and re-executed
+        // by another worker while the original is still running — silent double-execution
+        // for non-idempotent jobs.
+        //
+        // The heartbeat is aborted as soon as execute() returns so it cannot fire
+        // between execute() completing and ack_complete/ack_fail being called.
+        // If the job is canceled or the lease token is invalidated, heartbeat_extend
+        // returns an error; the heartbeat loop exits and the main worker's
+        // ack_complete will surface the JobCanceled / InvalidLeaseToken error.
+        let hb_backend = self.adapter.backend.clone();
+        let hb_ctx = self.ctx.clone();
+        let hb_job_id = job_id.clone();
+        let hb_token = leased_job.lease_token.clone();
+        let hb_interval = self.adapter.config.heartbeat_interval;
+
+        let heartbeat_handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(hb_interval).await;
+                match hb_backend
+                    .heartbeat_extend(
+                        hb_ctx.clone(),
+                        hb_job_id.clone(),
+                        hb_token.clone(),
+                        hb_interval,
+                    )
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        warn!(
+                            "Heartbeat extension failed for job {} (stopping heartbeat): {}",
+                            hb_job_id, e
+                        );
+                        break;
+                    }
+                }
+            }
+        });
+
         let result = handler
             .execute(&leased_job.record.message, self.context.clone())
             .await;
+
+        // Job finished — stop the heartbeat unconditionally.
+        heartbeat_handle.abort();
 
         match result {
             Ok(result_ref) => {
