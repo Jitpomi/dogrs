@@ -1,31 +1,10 @@
-#[cfg(feature = "tracing-opentelemetry")]
-use opentelemetry::trace::{SpanId, TraceId};
+// #[cfg(feature = "tracing-opentelemetry")]
+// use opentelemetry::trace::{SpanId, TraceId};
 use std::sync::Arc;
 
 /// Distributed tracing integration for job processing
-#[cfg(feature = "tracing-opentelemetry")]
-pub struct DistributedTracing {
-    tracer: Arc<dyn opentelemetry::trace::Tracer + Send + Sync>,
-}
-
-/// Stub for when opentelemetry is not enabled
-#[cfg(not(feature = "tracing-opentelemetry"))]
 pub struct DistributedTracing;
 
-#[cfg(feature = "tracing-opentelemetry")]
-impl DistributedTracing {
-    /// Create new distributed tracing instance
-    pub fn new() -> Self {
-        // In production, this would be configured with actual OTLP endpoint
-        let tracer = opentelemetry::global::tracer("dog-queue");
-
-        Self {
-            tracer: Arc::new(tracer),
-        }
-    }
-}
-
-#[cfg(not(feature = "tracing-opentelemetry"))]
 impl DistributedTracing {
     /// Create stub tracing instance
     pub fn new() -> Self {
@@ -33,55 +12,9 @@ impl DistributedTracing {
     }
 }
 
-/// Span wrapper for job execution
-#[cfg(feature = "tracing-opentelemetry")]
-pub struct JobSpan {
-    span: Box<dyn opentelemetry::trace::Span + Send + Sync>,
-}
-
 /// Stub span for when opentelemetry is not enabled
-#[cfg(not(feature = "tracing-opentelemetry"))]
 pub struct JobSpan;
 
-#[cfg(feature = "tracing-opentelemetry")]
-impl JobSpan {
-    /// Record job completion
-    pub fn record_success(&mut self) {
-        self.span.set_status(opentelemetry::trace::Status::Ok);
-        self.span
-            .set_attribute(opentelemetry::KeyValue::new("job.status", "completed"));
-    }
-
-    /// Record job failure
-    pub fn record_failure(&mut self, error: &str) {
-        self.span
-            .set_status(opentelemetry::trace::Status::error(error.to_string()));
-        self.span
-            .set_attribute(opentelemetry::KeyValue::new("job.status", "failed"));
-        self.span
-            .set_attribute(opentelemetry::KeyValue::new("job.error", error.to_string()));
-    }
-
-    /// Record job retry
-    pub fn record_retry(&mut self, attempt: u32, error: &str) {
-        self.span
-            .set_attribute(opentelemetry::KeyValue::new("job.status", "retrying"));
-        self.span
-            .set_attribute(opentelemetry::KeyValue::new("job.attempt", attempt as i64));
-        self.span.set_attribute(opentelemetry::KeyValue::new(
-            "job.retry_reason",
-            error.to_string(),
-        ));
-    }
-
-    /// Add custom attribute
-    pub fn set_attribute(&mut self, key: &str, value: &str) {
-        self.span
-            .set_attribute(opentelemetry::KeyValue::new(key, value.to_string()));
-    }
-}
-
-#[cfg(not(feature = "tracing-opentelemetry"))]
 impl JobSpan {
     /// Record job completion (stub)
     pub fn record_success(&mut self) {}
@@ -94,13 +27,6 @@ impl JobSpan {
 
     /// Add custom attribute (stub)
     pub fn set_attribute(&mut self, _key: &str, _value: &str) {}
-}
-
-#[cfg(feature = "tracing-opentelemetry")]
-impl Drop for JobSpan {
-    fn drop(&mut self) {
-        self.span.end();
-    }
 }
 
 /// Span collector for aggregating trace data

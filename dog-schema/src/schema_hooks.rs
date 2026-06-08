@@ -665,7 +665,7 @@ mod tests {
             hooks
                 .before_by_method
                 .get(&ServiceMethodKind::Patch)
-                .map_or(true, |v| v.is_empty()),
+                .is_none_or(|v| v.is_empty()),
             "hook must not appear in before_patch bucket"
         );
     }

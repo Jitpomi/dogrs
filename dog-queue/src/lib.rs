@@ -108,27 +108,27 @@ pub use observability::{LiveMetrics, ObservabilityLayer, PerformanceAnalytics};
 
 // Optional feature exports
 #[cfg(feature = "cron-scheduling")]
-pub use scheduling::{Schedule, Scheduler};
+// pub use scheduling::{Schedule, Scheduler};
 
 // Backend implementations
 #[cfg(feature = "redis")]
-pub use backend::redis::RedisBackend;
+// pub use backend::redis::RedisBackend;
 
 #[cfg(feature = "postgres")]
-pub use backend::postgres::PostgresBackend;
+// pub use backend::postgres::PostgresBackend;
 
 #[cfg(feature = "sqlite")]
-pub use backend::sqlite::SqliteBackend;
+// pub use backend::sqlite::SqliteBackend;
 
 // Observability features
 #[cfg(feature = "metrics")]
 pub use observability::metrics::{MetricsCollector, PrometheusExporter};
 
 #[cfg(feature = "tracing-opentelemetry")]
-pub use observability::tracing::{DistributedTracing, SpanCollector};
+// pub use observability::tracing::{DistributedTracing, SpanCollector};
 
 #[cfg(feature = "ui")]
-pub use observability::ui::WebUI;
+// pub use observability::ui::WebUI;
 
 /// Production-ready prelude for multi-tenant job processing
 pub mod prelude {
