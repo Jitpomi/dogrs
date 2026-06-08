@@ -106,6 +106,8 @@ impl QueueConfig {
     /// Returns an error if:
     /// - `max_workers` is 0 (no workers would ever start)
     /// - `base_retry_backoff` > `max_retry_backoff` (cap is below base; every retry uses max)
+    /// - `heartbeat_interval` >= `lease_duration` (first heartbeat arrives after lease has already
+    ///   expired; the reaper reclaims the job mid-execution, causing silent double-execution)
     pub fn validate(&self) -> QueueResult<()> {
         if self.max_workers == 0 {
             return Err(QueueError::InvalidConfig(
@@ -117,6 +119,14 @@ impl QueueConfig {
             return Err(QueueError::InvalidConfig(format!(
                 "base_retry_backoff ({:?}) must be <= max_retry_backoff ({:?})",
                 self.base_retry_backoff, self.max_retry_backoff,
+            )));
+        }
+        if self.heartbeat_interval >= self.lease_duration {
+            return Err(QueueError::InvalidConfig(format!(
+                "heartbeat_interval ({:?}) must be < lease_duration ({:?}) — \
+                 otherwise the lease expires before the first heartbeat fires and \
+                 the reaper reclaims the job mid-execution, causing double-execution",
+                self.heartbeat_interval, self.lease_duration,
             )));
         }
     Ok(())

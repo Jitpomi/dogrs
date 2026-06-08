@@ -19,7 +19,13 @@ pub struct QueueCtx {
 
 impl QueueCtx {
     /// Create a new queue context with the given tenant ID
-    pub fn new(tenant_id: String) -> Self {
+    pub fn new(tenant_id: impl Into<String>) -> Self {
+        let tenant_id = tenant_id.into();
+        debug_assert!(
+            !tenant_id.is_empty(),
+            "QueueCtx tenant_id cannot be empty — an empty tenant_id matches all records \
+             whose tenant_id is also empty, bypassing multi-tenant isolation"
+        );
         Self {
             tenant_id,
             trace_id: None,
@@ -62,8 +68,17 @@ impl QueueCtx {
         self.tags.contains_key(key)
     }
 
-    /// Create a scoped idempotency key for this tenant/queue/job_type combination
+    /// Create a scoped idempotency key for this tenant/queue/job_type combination.
+    ///
+    /// Uses `\x1f` (ASCII Unit Separator, U+001F) as the component delimiter.
+    /// This character cannot appear in well-formed tenant IDs, queue names, job
+    /// type names, or user-supplied keys, so components with any printable content
+    /// (including `:`, `/`, `_`, etc.) produce unambiguous, collision-free keys.
+    ///
+    /// Using `:` as the delimiter caused key collisions when component values
+    /// contained colons (e.g. `tenant="a:b"`, `queue="c"` produced the same key
+    /// as `tenant="a"`, `queue="b:c"`).
     pub fn scoped_idempotency_key(&self, queue: &str, job_type: &str, key: &str) -> String {
-        format!("{}:{}:{}:{}", self.tenant_id, queue, job_type, key)
+        format!("{}\x1f{}\x1f{}\x1f{}", self.tenant_id, queue, job_type, key)
     }
 }

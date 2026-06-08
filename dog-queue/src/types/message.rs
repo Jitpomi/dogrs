@@ -70,9 +70,13 @@ impl JobMessage {
         self
     }
 
-    /// Check if the job is eligible to run now
-    pub fn is_eligible(&self) -> bool {
-        self.run_at <= Utc::now()
+    /// Check if the job is eligible to run at the given reference time.
+    ///
+    /// Takes an explicit `now` rather than calling `Utc::now()` internally so
+    /// that callers control the reference timestamp. This makes eligibility checks
+    /// deterministic in tests and consistent with [`JobRecord::is_eligible`].
+    pub fn is_eligible(&self, now: DateTime<Utc>) -> bool {
+        self.run_at <= now
     }
 
     /// Get the payload size in bytes
