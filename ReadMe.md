@@ -16,7 +16,7 @@ DogRS is inspired by the simplicity of FeathersJS, but designed for Rust. It pro
   Bring your own database or mix multiple databases per tenant (SQL, TypeDB, Memory, etc.).
 
 - **Adapter-based architecture**  
-  Expose your services using Axum today, and add WebSockets or gRPC tomorrow.
+  Expose the exact same service over Axum (REST), WebSockets, and gRPC simultaneously.
 
 - **No stack lock-in**  
   DogRS keeps your core logic portable.
