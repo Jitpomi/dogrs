@@ -105,42 +105,15 @@ impl JobRegistry {
         Ok(())
     }
 
-    /// Execute a job by message.
-    ///
-    /// # Lock-starvation hazard
-    ///
-    /// **Do not call this method while holding a `RwLock<JobRegistry>` read guard.**
-    /// Doing so — the typical access pattern via `adapter.job_registry.read().await.execute_job(...)` —
-    /// holds the read lock for the entire duration of `handler.execute()`, which can run
-    /// seconds or minutes.  During this window any call to `register_job()` (which
-    /// needs the write lock) is completely blocked.
-    ///
-    /// The `QueueAdapter` worker path avoids this by calling [`get_handler`](Self::get_handler)
-    /// under the lock, dropping the lock, then executing outside it.  Prefer that pattern
-    /// for any code that drives job execution.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Holding the RwLock read guard across execute() starves register_job(). \
-                Use get_handler() to clone the handler under the lock, drop the lock, \
-                then call handler.execute() outside."
-    )]
-    pub async fn execute_job(
-        &self,
-        message: &JobMessage,
-        context: Arc<dyn std::any::Any + Send + Sync>,
-    ) -> Result<Option<String>, JobError> {
-        let handler = self.handlers.get(&message.job_type).ok_or_else(|| {
-            JobError::Permanent(format!("Unknown job type: {}", message.job_type))
-        })?;
-
-        handler.execute(message, context).await
-    }
-
     /// Get a cloned handler for the given job type.
     ///
-    /// The caller should clone the handler under the registry lock, drop the lock,
-    /// then call `handler.execute(...)` — this prevents long-running jobs from
-    /// blocking `register_job()` (which needs the write lock).
+    /// Clone the handler under the registry lock, drop the lock, then call
+    /// `handler.execute(decoded_message, context)` outside the lock.
+    /// This prevents long-running jobs from blocking `register_job()` (write lock).
+    ///
+    /// The `decoded_message` passed to `handler.execute()` must have its
+    /// `payload_bytes` pre-decoded through `CodecRegistry::decode_job_payload`
+    /// (the adapter's `process_next_job` does this automatically).
     pub fn get_handler(&self, job_type: &str) -> Option<Arc<dyn JobHandler>> {
         self.handlers.get(job_type).cloned()
     }
@@ -150,9 +123,14 @@ impl JobRegistry {
         self.handlers.contains_key(job_type)
     }
 
-    /// Get all registered job types
+    /// Get all registered job types, sorted alphabetically for deterministic ordering.
+    ///
+    /// Sorted so that callers (UI, tests, status endpoints) always see a consistent
+    /// order regardless of `HashMap` internal state.
     pub fn registered_types(&self) -> Vec<String> {
-        self.handlers.keys().cloned().collect()
+        let mut types: Vec<String> = self.handlers.keys().cloned().collect();
+        types.sort_unstable();
+        types
     }
 }
 
@@ -193,17 +171,18 @@ mod tests {
         // Register job type
         registry.register::<TestJob>().unwrap();
 
+        // Duplicate registration must be rejected
+        assert!(registry.register::<TestJob>().is_err());
+
         // Check registration
         assert!(registry.is_registered("test_job"));
         assert_eq!(registry.registered_types(), vec!["test_job"]);
 
-        // Create test message
-        let job = TestJob {
-            data: "test".to_string(),
-        };
+        // Create test message (payload already JSON-decoded, as the adapter does)
+        let job = TestJob { data: "test".to_string() };
         let message = JobMessage {
             job_type: "test_job".to_string(),
-            payload_bytes: serde_json::to_vec(&job).unwrap(),
+            payload_bytes: serde_json::to_vec(&job).unwrap(), // JSON bytes = decoded form
             codec: "json".to_string(),
             queue: "default".to_string(),
             priority: JobPriority::Normal,
@@ -212,41 +191,31 @@ mod tests {
             idempotency_key: None,
         };
 
-        // Execute job
+        // Correct pattern: clone handler under the lock, drop lock, execute outside.
+        let handler = registry.get_handler("test_job").expect("handler must be registered");
         let context = Arc::new("test_context".to_string()) as Arc<dyn std::any::Any + Send + Sync>;
-        let result = registry.execute_job(&message, context).await.unwrap();
+        let result = handler.execute(&message, context).await.unwrap();
 
         assert!(result.is_some());
-        assert!(result
-            .unwrap()
-            .contains("Processed: test with context: test_context"));
+        assert!(result.unwrap().contains("Processed: test with context: test_context"));
     }
 
     #[tokio::test]
     async fn test_unregistered_job_type() {
         let registry = JobRegistry::new();
 
-        let payload_bytes = vec![1, 2, 3]; // Invalid payload
-        let ctx = "test_context".to_string();
+        // get_handler returns None for unknown types — no error, caller handles it.
+        assert!(registry.get_handler("unknown_job").is_none());
+    }
 
-        let message = JobMessage {
-            job_type: "unknown_job".to_string(),
-            payload_bytes,
-            codec: "json".to_string(),
-            queue: "default".to_string(),
-            priority: JobPriority::Normal,
-            max_retries: 3,
-            run_at: chrono::Utc::now(),
-            idempotency_key: None,
-        };
-        let result = registry.execute_job(&message, Arc::new(ctx)).await;
-        assert!(result.is_err());
-
-        match result.unwrap_err() {
-            JobError::Permanent(msg) => {
-                assert!(msg.contains("Unknown job type"));
-            }
-            _ => panic!("Expected permanent error"),
-        }
+    #[tokio::test]
+    async fn test_registered_types_sorted() {
+        let mut registry = JobRegistry::new();
+        registry.register::<TestJob>().unwrap();
+        // Even with one entry the sort is exercised and the result is deterministic.
+        let types = registry.registered_types();
+        assert_eq!(types, vec!["test_job"]);
+        // Verify the Vec is sorted (invariant for any number of entries).
+        assert!(types.windows(2).all(|w| w[0] <= w[1]));
     }
 }

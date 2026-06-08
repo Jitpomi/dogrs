@@ -171,9 +171,14 @@ impl CodecRegistry {
         }
     }
 
-    /// List available codecs
+    /// List available codecs, sorted alphabetically for deterministic ordering.
+    ///
+    /// `HashMap` iteration order is randomized; sorting ensures that UI display
+    /// and test assertions produce consistent results across invocations.
     pub fn available_codecs(&self) -> Vec<String> {
-        self.codecs.keys().cloned().collect()
+        let mut codecs: Vec<String> = self.codecs.keys().cloned().collect();
+        codecs.sort_unstable();
+        codecs
     }
 
     /// Encode a job into a `JobMessage`, respecting caller-supplied options.
@@ -214,7 +219,7 @@ impl CodecRegistry {
             priority: J::PRIORITY,
             max_retries: J::MAX_RETRIES,
             run_at: opts.run_at.unwrap_or_else(Utc::now),
-            idempotency_key: job.idempotency_key(),
+            idempotency_key: job.idempotency_key().map(|k| k.into_owned()),
         })
     }
 

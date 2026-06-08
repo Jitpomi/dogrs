@@ -40,8 +40,15 @@ pub trait Job: Send + Sync + Serialize + DeserializeOwned + 'static {
     /// Execute the job with the given context
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError>;
 
-    /// Get idempotency key (optional)
-    fn idempotency_key(&self) -> Option<String> {
+    /// Get idempotency key (optional).
+    ///
+    /// Return `Some(Cow::Borrowed("static-key"))` for compile-time-known keys
+    /// (zero allocation) or `Some(Cow::Owned(format!(...)))` for runtime-computed
+    /// keys. Returns `None` by default (no idempotency enforcement).
+    ///
+    /// The key is converted to `String` exactly once inside [`CodecRegistry::encode_job`]
+    /// via `.map(|k| k.into_owned())` and stored in [`JobMessage::idempotency_key`].
+    fn idempotency_key(&self) -> Option<std::borrow::Cow<'_, str>> {
         None
     }
 }

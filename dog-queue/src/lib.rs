@@ -138,6 +138,9 @@ pub mod prelude {
     // Essential types
     pub use crate::{JobError, JobId, JobPriority, JobStatus, LeaseToken, QueueCtx, QueueResult};
 
+    // Adapter configuration and lifecycle
+    pub use crate::{EnqueueOptions, QueueConfig, WorkerHandle};
+
     // Codec system
     pub use crate::{CodecRegistry, JobCodec, JsonCodec};
 
