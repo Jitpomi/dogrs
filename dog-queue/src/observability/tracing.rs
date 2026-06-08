@@ -105,35 +105,36 @@ impl Drop for JobSpan {
 
 /// Span collector for aggregating trace data
 pub struct SpanCollector {
-    spans: Arc<std::sync::Mutex<Vec<SpanData>>>,
+    /// `parking_lot::Mutex` is infallible (no poisoning) and safe in async context
+    /// as long as no `.await` is held across the lock — none of our methods do.
+    /// `VecDeque` enables O(1) `pop_front()` eviction rather than O(n) `remove(0)`.
+    spans: Arc<parking_lot::Mutex<std::collections::VecDeque<SpanData>>>,
 }
 
 impl SpanCollector {
     pub fn new() -> Self {
         Self {
-            spans: Arc::new(std::sync::Mutex::new(Vec::new())),
+            spans: Arc::new(parking_lot::Mutex::new(std::collections::VecDeque::new())),
         }
     }
 
-    /// Collect span data
+    /// Collect span data (ring buffer — keeps the most recent 10 000 spans).
     pub fn collect_span(&self, span_data: SpanData) {
-        let mut spans = self.spans.lock().unwrap();
-        spans.push(span_data);
-
-        // Keep only last 10000 spans
-        if spans.len() > 10000 {
-            spans.remove(0);
+        let mut spans = self.spans.lock();
+        spans.push_back(span_data);
+        if spans.len() > 10_000 {
+            spans.pop_front(); // O(1) — previously Vec::remove(0) was O(n)
         }
     }
 
     /// Get collected spans
     pub fn get_spans(&self) -> Vec<SpanData> {
-        self.spans.lock().unwrap().clone()
+        self.spans.lock().iter().cloned().collect()
     }
 
     /// Clear collected spans
     pub fn clear(&self) {
-        self.spans.lock().unwrap().clear();
+        self.spans.lock().clear();
     }
 }
 

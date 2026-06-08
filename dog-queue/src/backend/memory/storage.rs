@@ -37,7 +37,7 @@ type IdempotencyMap = HashMap<(String, String, String, String), JobId>;
 /// **Performance note**: this is O(n) scan + O(n) shift — acceptable for the
 /// in-memory development backend. A production backend should use a
 /// `BinaryHeap` or per-priority `VecDeque` tiers for O(log n) / O(1) ops.
-fn priority_insert(queue: &mut VecDeque<QueueEntry>, entry: QueueEntry) {
+pub(super) fn priority_insert(queue: &mut VecDeque<QueueEntry>, entry: QueueEntry) {
     let pos = queue
         .iter()
         .position(|(p, _, _)| entry.0 > *p)

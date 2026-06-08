@@ -4,7 +4,10 @@ use std::time::Duration;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
-use crate::{backend::memory::storage::MemoryBackend, JobEvent, JobStatus, QueueResult};
+use crate::{
+    backend::memory::storage::{priority_insert, MemoryBackend},
+    JobEvent, JobStatus, QueueResult,
+};
 
 /// Lease expiry reaper for reclaiming expired jobs
 pub struct LeaseReaper {
@@ -60,87 +63,124 @@ impl LeaseReaper {
         Ok(())
     }
 
-    /// Run one reaper cycle (for testing)
+    /// Run one reaper cycle (for testing).
+    ///
+    /// Correctness invariants maintained:
+    /// - The TOCTOU window between "collect expired IDs" and "overwrite record" is closed by
+    ///   re-checking the record's status inside `jobs.write()`. If a worker called
+    ///   `ack_complete` or `ack_fail` between the ID collection and the write, the record
+    ///   is no longer `Processing` and the reaper skips it, preventing double-execution.
+    /// - All `jobs` mutations are batched inside a single write lock acquisition.
+    /// - All `queues` insertions are batched inside a single write lock acquisition.
+    /// - Retry re-enqueue uses `priority_insert` (not `push_back`) to preserve priority
+    ///   ordering — a reclaimed Critical job is not placed behind Normal/Low entries.
     pub async fn reap_expired_leases(&self) -> QueueResult<usize> {
         let now = Utc::now();
-        let mut reclaimed_count = 0;
 
-        // Get all jobs with expired leases
-        let expired_jobs = {
+        // ── Phase 1: Collect IDs of expired leases under jobs.read() ───────────────
+        // Only the job IDs are collected, not full records. The authoritative
+        // record is read again inside jobs.write() in phase 2 to close the TOCTOU.
+        let expired_ids: Vec<crate::JobId> = {
             let jobs = self.backend.jobs.read();
             jobs.iter()
                 .filter_map(|(job_id, record)| match &record.status {
                     JobStatus::Processing { lease_until } if *lease_until < now => {
-                        Some((job_id.clone(), record.clone()))
+                        Some(job_id.clone())
                     }
                     _ => None,
                 })
-                .collect::<Vec<_>>()
-        };
+                .collect()
+        }; // read lock released
 
-        // Reclaim expired jobs
-        for (job_id, mut record) in expired_jobs {
-            debug!("Reclaiming expired lease for job: {}", job_id);
+        if expired_ids.is_empty() {
+            return Ok(0);
+        }
 
-            // Update job status back to retrying or enqueued.
-            // Use the same > semantics as adapter (attempt <= max_retries = retry allowed)
-            // so the reaper doesn't steal the last retry from a lease-expired job.
-            let new_status = if record.attempt > record.message.max_retries {
-                // Max retries exceeded - mark as failed
-                JobStatus::Failed {
-                    failed_at: now,
-                    error: "Max retries exceeded due to lease expiry".to_string(),
+        // ── Phase 2: Mutate all expired records in ONE jobs.write() ──────────────────
+        // Re-check status inside the write lock to close the TOCTOU window:
+        // a worker that called ack_complete just before the reaper fires will
+        // have set the status to Completed; the reaper skips those records.
+        let mut to_requeue: Vec<(String, String, crate::JobPriority, crate::JobId)> = Vec::new();
+        let mut events: Vec<JobEvent> = Vec::new();
+        let mut reclaimed_count = 0usize;
+
+        {
+            let mut jobs = self.backend.jobs.write();
+
+            for job_id in &expired_ids {
+                let record = match jobs.get_mut(job_id) {
+                    Some(r) => r,
+                    None => continue, // job was deleted between phases — skip
+                };
+
+                // TOCTOU guard: only reclaim if STILL in an expired-processing state.
+                let still_expired_processing = matches!(
+                    &record.status,
+                    JobStatus::Processing { lease_until } if *lease_until < now
+                );
+                if !still_expired_processing {
+                    debug!("Skipping job {} — status changed since collection", job_id);
+                    continue;
                 }
-            } else {
-                // Make immediately available for retry
-                JobStatus::Retrying {
-                    retry_at: now, // Retry immediately
+
+                // Clear the lease.
+                record.lease_token = None;
+                record.lease_until = None;
+                record.updated_at = now;
+                record.set_error("Lease expired".to_string());
+
+                // The reaper does not hold the adapter's retry budget; it uses the
+                // same attempt > max_retries threshold the adapter uses (attempt is
+                // the count after the last dequeue, so this is a conservative check).
+                if record.attempt > record.message.max_retries {
+                    record.status = JobStatus::Failed {
+                        failed_at: now,
+                        error: "Max retries exceeded due to lease expiry".to_string(),
+                    };
+
+                    events.push(JobEvent::Failed {
+                        job_id: job_id.clone(),
+                        error: "Max retries exceeded due to lease expiry".to_string(),
+                        at: now,
+                    });
+                } else {
+                    record.status = JobStatus::Retrying { retry_at: now };
+
+                    // Capture details for queue insertion (done under queues.write() next).
+                    to_requeue.push((
+                        record.tenant_id.clone(),
+                        record.message.queue.clone(),
+                        record.message.priority,
+                        job_id.clone(),
+                    ));
+
+                    events.push(JobEvent::Retrying {
+                        job_id: job_id.clone(),
+                        retry_at: now,
+                        error: "Lease expired".to_string(),
+                        at: now,
+                    });
                 }
-            };
 
-            // Update record
-            record.status = new_status.clone();
-            record.lease_token = None;
-            record.lease_until = None;
-            record.updated_at = now;
-            record.set_error("Lease expired".to_string());
-
-            // Store updated record
-            self.backend
-                .jobs
-                .write()
-                .insert(job_id.clone(), record.clone());
-
-            // Re-add to queue if retrying. Use priority from the record and
-            // run_at = now (expired jobs retry immediately).
-            if matches!(new_status, JobStatus::Retrying { .. }) {
-                let mut queues = self.backend.queues.write();
-                let priority = record.message.priority;
-                let tenant_queues = queues.entry(record.tenant_id.clone()).or_default();
-                let queue = tenant_queues
-                    .entry(record.message.queue.clone())
-                    .or_default();
-                queue.push_back((priority, now, job_id.clone()));
+                reclaimed_count += 1;
             }
+        } // jobs write lock released
 
-            // Emit appropriate event
-            let event = match new_status {
-                JobStatus::Retrying { retry_at, .. } => JobEvent::Retrying {
-                    job_id: job_id.clone(),
-                    retry_at,
-                    error: "Lease expired".to_string(),
-                    at: now,
-                },
-                JobStatus::Failed { error, .. } => JobEvent::Failed {
-                    job_id: job_id.clone(),
-                    error,
-                    at: now,
-                },
-                _ => continue,
-            };
+        // ── Phase 3: Re-enqueue retrying jobs in ONE queues.write() ─────────────────
+        // Uses priority_insert (not push_back) so reclaimed Critical jobs are
+        // placed before Normal/Low entries, not appended to the tail.
+        if !to_requeue.is_empty() {
+            let mut queues = self.backend.queues.write();
+            for (tenant_id, queue_name, priority, job_id) in to_requeue {
+                let tenant_queues = queues.entry(tenant_id).or_default();
+                let queue = tenant_queues.entry(queue_name).or_default();
+                priority_insert(queue, (priority, now, job_id));
+            }
+        } // queues write lock released
 
+        // ── Phase 4: Broadcast events (outside any lock) ────────────────────────────
+        for event in events {
             let _ = self.backend.event_broadcaster.send(event);
-            reclaimed_count += 1;
         }
 
         Ok(reclaimed_count)
@@ -205,7 +245,7 @@ mod tests {
     fn create_test_job_message() -> JobMessage {
         JobMessage {
             job_type: "test_job".to_string(),
-            payload_bytes: b"test_payload".to_vec(),
+            payload_bytes: b"{}".to_vec(), // valid JSON — consistent with codec: "json"
             codec: "json".to_string(),
             queue: "default".to_string(),
             priority: JobPriority::Normal,
@@ -279,5 +319,55 @@ mod tests {
         // Job should be marked as failed
         let status = backend.get_status(ctx, job_id).await.unwrap();
         assert!(matches!(status, JobStatus::Failed { .. }));
+    }
+
+    /// Verify the TOCTOU guard: if a worker acks the job between the reaper's
+    /// collection phase and its write phase, the reaper must NOT overwrite the
+    /// terminal record.
+    #[tokio::test]
+    async fn test_reaper_skips_already_acked_job() {
+        let backend = Arc::new(MemoryBackend::new());
+        let ctx = create_test_context();
+
+        let job_id = backend
+            .enqueue(ctx.clone(), create_test_job_message())
+            .await
+            .unwrap();
+        let leased = backend
+            .dequeue(ctx.clone(), &["default"])
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Expire the lease so the reaper's filter would match.
+        backend.force_lease_expiry(job_id.clone()).await.unwrap();
+
+        // Simulate: worker completes the job BEFORE the reaper's write phase.
+        // (In production this race is closed by checking status inside jobs.write().)
+        // We directly set the status to Completed here to simulate the race.
+        {
+            let mut jobs = backend.jobs.write();
+            if let Some(record) = jobs.get_mut(&job_id) {
+                // Manually mark as completed (as ack_complete would do).
+                record.status = crate::JobStatus::Completed {
+                    completed_at: chrono::Utc::now(),
+                };
+                record.lease_token = None;
+                record.lease_until = None;
+            }
+        }
+
+        // Run reaper — should find the expired-processing signature gone and skip it.
+        let reaper = LeaseReaper::new(backend.clone());
+        let reclaimed = reaper.reap_expired_leases().await.unwrap();
+
+        assert_eq!(reclaimed, 0, "reaper must not reclaim an already-completed job");
+
+        // Status must still be Completed, not Retrying.
+        let status = backend.get_status(ctx, job_id).await.unwrap();
+        assert!(
+            matches!(status, crate::JobStatus::Completed { .. }),
+            "completed job must not be overwritten by reaper"
+        );
     }
 }

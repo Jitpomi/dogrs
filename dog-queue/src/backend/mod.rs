@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::{
     types::LeaseToken, JobEvent, JobId, JobMessage, JobRecord, JobStatus, LeasedJob,
-    QueueCapabilities, QueueCtx, QueueResult,
+    QueueCapabilities, QueueCtx, QueueError, QueueResult,
 };
 
 /// Type alias for boxed streams (stable Rust compatible)
@@ -44,14 +44,23 @@ pub trait QueueBackend: Send + Sync {
         retry_at: Option<DateTime<Utc>>,
     ) -> QueueResult<()>;
 
-    /// Extend lease duration (optional capability)
+    /// Extend lease duration.
+    ///
+    /// Only required for backends that advertise `QueueCapabilities::lease_extend = true`.
+    /// The default implementation returns [`QueueError::BackendUnsupported`] so backends
+    /// that do not implement heartbeating get a graceful, diagnosable error rather than a
+    /// compile error or `unimplemented!()` panic.
     async fn heartbeat_extend(
         &self,
-        ctx: QueueCtx,
-        job_id: JobId,
-        lease_token: LeaseToken,
-        extra_time: Duration,
-    ) -> QueueResult<()>;
+        _ctx: QueueCtx,
+        _job_id: JobId,
+        _lease_token: LeaseToken,
+        _extra_time: Duration,
+    ) -> QueueResult<()> {
+        Err(QueueError::BackendUnsupported(
+            "heartbeat_extend: this backend does not support lease extension".to_string(),
+        ))
+    }
 
     /// Cancel a job (cancel-wins semantics)
     async fn cancel(&self, ctx: QueueCtx, job_id: JobId) -> QueueResult<bool>;
