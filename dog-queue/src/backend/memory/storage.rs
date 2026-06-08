@@ -269,7 +269,8 @@ impl QueueBackend for MemoryBackend {
         }
 
         // Check lease expiry
-        if let Some(lease_until) = record.lease_until {
+        // Check lease expiry — read from the status enum (single source of truth).
+        if let Some(lease_until) = record.lease_until() {
             if now > lease_until {
                 return Err(QueueError::LeaseExpired);
             }
@@ -326,7 +327,8 @@ impl QueueBackend for MemoryBackend {
         }
 
         // Check lease expiry
-        if let Some(lease_until) = record.lease_until {
+        // Check lease expiry — read from the status enum (single source of truth).
+        if let Some(lease_until) = record.lease_until() {
             if now > lease_until {
                 return Err(QueueError::LeaseExpired);
             }
@@ -416,7 +418,11 @@ impl QueueBackend for MemoryBackend {
             )));
         }
 
-        if let Some(ref mut lease_until) = record.lease_until {
+        // Update the lease deadline inside JobStatus::Processing — the single
+        // authoritative source. Updating only a separate field while leaving
+        // the status enum stale caused the reaper to prematurely reclaim
+        // heartbeat-extended jobs (the reaper reads from the status enum).
+        if let JobStatus::Processing { ref mut lease_until } = record.status {
             let extra = chrono::Duration::from_std(extra_time).map_err(|e| {
                 QueueError::Internal(format!("Invalid heartbeat duration: {e}"))
             })?;
@@ -451,7 +457,6 @@ impl QueueBackend for MemoryBackend {
         // Cancel the job
         record.status = JobStatus::Canceled { canceled_at: now };
         record.lease_token = None; // Invalidate lease
-        record.lease_until = None;
         record.updated_at = now;
 
         // Emit event

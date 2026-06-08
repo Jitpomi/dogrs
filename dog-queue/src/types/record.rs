@@ -9,7 +9,16 @@ pub enum JobStatus {
     /// Job is queued and waiting to be processed
     Enqueued,
 
-    /// Job is scheduled for future execution
+    /// Delayed jobs use `Enqueued` status with a future `run_at` in the queue
+    /// entry tuple — the dequeue scan gates on `run_at <= now`. This variant
+    /// was removed from the state machine to fix a data-loss bug where dequeue
+    /// phase 2 only leased `Enqueued | Retrying` entries.
+    #[deprecated(
+        note = "This variant is never constructed by the state machine. \
+                Delayed jobs use JobStatus::Enqueued with run_at scheduling. \
+                Match arms for Scheduled will never execute."
+    )]
+    #[allow(deprecated)]
     Scheduled,
 
     /// Job is currently being processed by a worker
@@ -50,6 +59,10 @@ impl JobStatus {
         match self {
             Self::Enqueued => true,
             Self::Retrying { retry_at } => *retry_at <= now,
+            // Scheduled is a deprecated dead variant — it is never constructed,
+            // but we must handle it in match arms to silence exhaustiveness warnings.
+            #[allow(deprecated)]
+            Self::Scheduled => false,
             _ => false,
         }
     }
@@ -58,6 +71,7 @@ impl JobStatus {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Enqueued => "enqueued",
+            #[allow(deprecated)]
             Self::Scheduled => "scheduled",
             Self::Processing { .. } => "processing",
             Self::Retrying { .. } => "retrying",
@@ -80,10 +94,15 @@ pub struct JobRecord {
     /// Immutable job message data
     pub message: JobMessage,
 
-    /// Current job status
+    /// Current job status.
+    ///
+    /// When the status is [`JobStatus::Processing`], the `lease_until` timestamp
+    /// lives inside the enum payload — it is the single authoritative source.
+    /// Use [`Self::lease_until()`] to read it; mutate it via `start_processing`
+    /// or `heartbeat_extend` in the backend to keep it consistent.
     pub status: JobStatus,
 
-    /// Current attempt number (starts at 0)
+    /// Current attempt number (starts at 0, incremented by `dequeue`)
     pub attempt: u32,
 
     /// When the job was created
@@ -95,11 +114,14 @@ pub struct JobRecord {
     /// Last error message (if any)
     pub last_error: Option<String>,
 
-    /// Current lease token (if processing)
+    /// Current lease token (if processing).
+    ///
+    /// Skipped during serialization to prevent the raw proof-of-ownership token
+    /// from appearing in API responses, debug dumps, or webhook payloads.
+    /// Lease tokens are session-scoped — persistent backends store them in a
+    /// separate lease table, not embedded in the job record.
+    #[serde(skip)]
     pub lease_token: Option<LeaseToken>,
-
-    /// When the current lease expires (if processing)
-    pub lease_until: Option<DateTime<Utc>>,
 }
 
 impl JobRecord {
@@ -122,14 +144,26 @@ impl JobRecord {
             updated_at: now,
             last_error: None,
             lease_token: None,
-            lease_until: None,
+        }
+    }
+
+    /// The lease deadline when this job is currently being processed, or `None`.
+    ///
+    /// This is the single authoritative source for the lease deadline.
+    /// It lives inside [`JobStatus::Processing`] so that mutations via
+    /// `heartbeat_extend` update both the eligibility check and the expiry
+    /// check in a single write.
+    pub fn lease_until(&self) -> Option<DateTime<Utc>> {
+        match &self.status {
+            JobStatus::Processing { lease_until } => Some(*lease_until),
+            _ => None,
         }
     }
 
     /// Check if the lease has expired
     pub fn lease_expired(&self, now: DateTime<Utc>) -> bool {
-        match (&self.status, &self.lease_until) {
-            (JobStatus::Processing { .. }, Some(lease_until)) => *lease_until < now,
+        match &self.status {
+            JobStatus::Processing { lease_until } => *lease_until < now,
             _ => false,
         }
     }
@@ -146,11 +180,13 @@ impl JobRecord {
         self.updated_at = Utc::now();
     }
 
-    /// Start processing with a lease
+    /// Start processing with a lease.
+    ///
+    /// The `lease_until` timestamp is stored exclusively inside
+    /// [`JobStatus::Processing`] — it is the single source of truth.
     pub fn start_processing(&mut self, lease_token: LeaseToken, lease_until: DateTime<Utc>) {
         self.status = JobStatus::Processing { lease_until };
         self.lease_token = Some(lease_token);
-        self.lease_until = Some(lease_until);
         self.updated_at = Utc::now();
     }
 
@@ -159,7 +195,6 @@ impl JobRecord {
         let now = Utc::now();
         self.status = JobStatus::Completed { completed_at: now };
         self.lease_token = None;
-        self.lease_until = None;
         self.updated_at = now;
     }
 
@@ -169,7 +204,6 @@ impl JobRecord {
         self.status = JobStatus::Failed { failed_at: now, error: error.clone() };
         self.last_error = Some(error);
         self.lease_token = None;
-        self.lease_until = None;
         self.updated_at = now;
     }
 
@@ -181,7 +215,6 @@ impl JobRecord {
     pub fn schedule_retry(&mut self, retry_at: DateTime<Utc>) {
         self.status = JobStatus::Retrying { retry_at };
         self.lease_token = None;
-        self.lease_until = None;
         self.updated_at = Utc::now();
     }
 
@@ -190,7 +223,6 @@ impl JobRecord {
         let now = Utc::now();
         self.status = JobStatus::Canceled { canceled_at: now };
         self.lease_token = None;
-        self.lease_until = None;
         self.updated_at = now;
     }
 }
@@ -233,8 +265,16 @@ impl LeasedJob {
         self.lease_until > now
     }
 
-    /// Get time remaining on lease
-    pub fn lease_remaining(&self, now: DateTime<Utc>) -> chrono::Duration {
-        self.lease_until - now
+    /// Time remaining on the lease, or `None` if the lease has already expired.
+    ///
+    /// Returns `None` rather than a negative duration so callers can use this
+    /// safely as a sleep/timeout value without a separate expiry check.
+    pub fn lease_remaining(&self, now: DateTime<Utc>) -> Option<chrono::Duration> {
+        let remaining = self.lease_until - now;
+        if remaining > chrono::Duration::zero() {
+            Some(remaining)
+        } else {
+            None
+        }
     }
 }

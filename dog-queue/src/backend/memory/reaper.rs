@@ -125,7 +125,6 @@ impl LeaseReaper {
 
                 // Clear the lease.
                 record.lease_token = None;
-                record.lease_until = None;
                 record.updated_at = now;
                 record.set_error("Lease expired".to_string());
 
@@ -355,7 +354,6 @@ mod tests {
                     completed_at: chrono::Utc::now(),
                 };
                 record.lease_token = None;
-                record.lease_until = None;
             }
         }
 
