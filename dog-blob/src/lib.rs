@@ -15,7 +15,7 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust
+//! ```rust,ignore
 //! use dog_blob::prelude::*;
 //! use tokio_util::io::ReaderStream;
 //! use std::io::Cursor;

@@ -475,6 +475,9 @@ where
                             "Failed to parse JSON: {}",
                             e
                         ))
+                        .with_errors(serde_json::json!({
+                            "_schema": [e.to_string()]
+                        }))
                         .into_anyhow()
                     })?;
 

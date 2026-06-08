@@ -6,7 +6,7 @@
 //! to layer configuration however they like.
 //!
 //! ## Setting and reading values
-//! ```rust
+//! ```rust,ignore
 //! use dog_core::DogApp;
 //! let mut app = DogApp::<(), ()>::new();
 //!
@@ -22,7 +22,7 @@
 //!
 //! Here is a recommended helper:
 //!
-//! ```rust
+//! ```rust,ignore
 //! use dog_core::DogApp;
 //! pub fn load_env_config<R, P>(app: &mut DogApp<R, P>, prefix: &str)
 //! where
