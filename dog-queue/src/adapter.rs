@@ -633,8 +633,6 @@ impl<C: Send + Sync + 'static> Worker<C> {
     /// concurrent retriers that all failed at the same instant — preventing the thundering
     /// herd that pure exponential backoff causes on mass failures.
     fn calculate_retry_time(&self, attempt: u32) -> chrono::DateTime<chrono::Utc> {
-        use rand::Rng;
-
         let cap = self.adapter.config.max_retry_backoff.as_secs();
         let base = self
             .adapter
