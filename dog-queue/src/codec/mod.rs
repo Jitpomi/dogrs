@@ -1,11 +1,16 @@
 pub mod json;
 
 pub use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{Job, JobMessage, QueueCtx, QueueError, QueueResult};
+
+// ---------------------------------------------------------------------------
+// JobCodec trait
+// ---------------------------------------------------------------------------
 
 /// Trait for job payload codecs
 pub trait JobCodec: Send + Sync {
@@ -18,6 +23,54 @@ pub trait JobCodec: Send + Sync {
     /// Get codec identifier
     fn codec_id(&self) -> &'static str;
 }
+
+// ---------------------------------------------------------------------------
+// EnqueueOptions — caller-supplied overrides for encode_job
+// ---------------------------------------------------------------------------
+
+/// Optional per-enqueue overrides.
+///
+/// Both fields are `None` by default:
+/// - `queue` defaults to `J::JOB_TYPE` (each job type routes to its own queue).
+/// - `run_at` defaults to `Utc::now()` (immediate execution).
+///
+/// Use `QueueAdapter::enqueue_opts` to pass non-default values.
+#[derive(Debug, Clone, Default)]
+pub struct EnqueueOptions {
+    /// Target queue name. `None` means "use the job-type name as the queue".
+    pub queue: Option<String>,
+
+    /// Earliest time the job is eligible for processing. `None` means "run
+    /// immediately". Useful for delayed or scheduled jobs.
+    pub run_at: Option<DateTime<Utc>>,
+}
+
+impl EnqueueOptions {
+    /// Immediate execution in the job-type's default queue (the common case).
+    pub fn immediate() -> Self {
+        Self::default()
+    }
+
+    /// Schedule the job to run no earlier than `run_at`.
+    pub fn scheduled(run_at: DateTime<Utc>) -> Self {
+        Self {
+            run_at: Some(run_at),
+            ..Default::default()
+        }
+    }
+
+    /// Route the job to a specific named queue.
+    pub fn with_queue(queue: impl Into<String>) -> Self {
+        Self {
+            queue: Some(queue.into()),
+            ..Default::default()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CodecRegistry
+// ---------------------------------------------------------------------------
 
 /// Registry for managing different codecs
 pub struct CodecRegistry {
@@ -72,11 +125,18 @@ impl CodecRegistry {
         self.codecs.keys().cloned().collect()
     }
 
-    /// Encode a job into a JobMessage
+    /// Encode a job into a `JobMessage`, respecting caller-supplied options.
+    ///
+    /// - `opts.queue`: if `None`, defaults to `J::JOB_TYPE` (each job type gets
+    ///   its own queue). Pass a name explicitly to support multi-queue routing or
+    ///   priority lanes (e.g. `"email-high"` vs `"email-low"`).
+    /// - `opts.run_at`: if `None`, defaults to `Utc::now()` (run immediately).
+    ///   Set this to schedule delayed jobs without constructing `JobMessage` manually.
     pub fn encode_job<J: Job + Serialize>(
         &self,
         job: &J,
         _ctx: &QueueCtx,
+        opts: EnqueueOptions,
     ) -> QueueResult<JobMessage> {
         let codec = self.default_codec()?;
         let payload =
@@ -86,10 +146,12 @@ impl CodecRegistry {
             job_type: J::JOB_TYPE.to_string(),
             payload_bytes: payload,
             codec: codec.codec_id().to_string(),
-            queue: J::JOB_TYPE.to_string(), // Use job type as queue name
+            queue: opts
+                .queue
+                .unwrap_or_else(|| J::JOB_TYPE.to_string()),
             priority: J::PRIORITY,
             max_retries: J::MAX_RETRIES,
-            run_at: chrono::Utc::now(), // Default to immediate execution
+            run_at: opts.run_at.unwrap_or_else(Utc::now),
             idempotency_key: job.idempotency_key(),
         })
     }

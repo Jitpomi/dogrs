@@ -5,8 +5,11 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    backend::QueueBackend, codec::CodecRegistry, job::JobRegistry,
-    observability::ObservabilityLayer, Job, JobId, QueueCtx, QueueError, QueueResult,
+    backend::QueueBackend,
+    codec::{CodecRegistry, EnqueueOptions},
+    job::JobRegistry,
+    observability::ObservabilityLayer,
+    Job, JobId, QueueCtx, QueueError, QueueResult,
 };
 
 /// Configuration for queue adapter
@@ -109,16 +112,34 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
 
     /// Enqueue a job for processing
     #[instrument(skip(self, job), fields(job_type = J::JOB_TYPE, tenant_id = %ctx.tenant_id))]
+    /// Enqueue a job for immediate processing (runs now, in the job's default queue).
+    ///
+    /// For delayed scheduling or custom queue routing use [`enqueue_opts`].
+    #[instrument(skip(self, job), fields(job_type = J::JOB_TYPE, tenant_id = %ctx.tenant_id))]
     pub async fn enqueue<J: Job>(&self, ctx: QueueCtx, job: J) -> QueueResult<JobId> {
+        self.enqueue_opts(ctx, job, EnqueueOptions::default()).await
+    }
+
+    /// Enqueue a job with caller-supplied options (queue name, delayed run_at).
+    #[instrument(skip(self, job), fields(job_type = J::JOB_TYPE, tenant_id = %ctx.tenant_id))]
+    pub async fn enqueue_opts<J: Job>(
+        &self,
+        ctx: QueueCtx,
+        job: J,
+        opts: EnqueueOptions,
+    ) -> QueueResult<JobId> {
         // Encode job using codec registry
-        let message = self.codec_registry.encode_job(&job, &ctx)?;
+        let message = self.codec_registry.encode_job(&job, &ctx, opts)?;
+
+        // Capture the real queue name before the message is moved into the backend.
+        let queue_name = message.queue.clone();
 
         // Enqueue to backend
         let job_id = self.backend.enqueue(ctx.clone(), message).await?;
 
-        // Record metrics
+        // Record metrics — pass the real queue name, not a hardcoded default.
         self.observability
-            .record_job_enqueued(&ctx, &job_id, J::JOB_TYPE)
+            .record_job_enqueued(&ctx, &job_id, J::JOB_TYPE, &queue_name)
             .await;
 
         info!("Enqueued job {} of type {}", job_id, J::JOB_TYPE);
@@ -333,29 +354,38 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     None
                 };
 
+                // Capture error string once; used by ack_fail AND observability.
+                let error_str = job_error.to_string();
+
                 self.adapter
                     .backend
                     .ack_fail(
                         self.ctx.clone(),
                         job_id.clone(),
                         leased_job.lease_token,
-                        job_error.to_string(),
+                        error_str.clone(),
                         retry_at,
                     )
                     .await?;
 
-                if retry_at.is_some() {
+                if let Some(retry_at_time) = retry_at {
                     self.adapter
                         .observability
-                        .record_job_retrying(&self.ctx, &job_id, job_type)
+                        .record_job_retrying(
+                            &self.ctx,
+                            &job_id,
+                            job_type,
+                            &error_str,
+                            retry_at_time,
+                        )
                         .await;
-                    warn!("Job {} failed, will retry: {}", job_id, job_error);
+                    warn!("Job {} failed, will retry: {}", job_id, error_str);
                 } else {
                     self.adapter
                         .observability
-                        .record_job_failed(&self.ctx, &job_id, job_type)
+                        .record_job_failed(&self.ctx, &job_id, job_type, &error_str)
                         .await;
-                    error!("Job {} failed permanently: {}", job_id, job_error);
+                    error!("Job {} failed permanently: {}", job_id, error_str);
                 }
             }
         }

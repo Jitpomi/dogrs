@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::debug;
@@ -23,19 +23,28 @@ impl ObservabilityLayer {
         }
     }
 
-    /// Record job enqueued event
-    pub async fn record_job_enqueued(&self, ctx: &QueueCtx, job_id: &JobId, job_type: &str) {
+    /// Record job enqueued event.
+    ///
+    /// `queue` is the real queue name from the encoded `JobMessage` (not a
+    /// hardcoded default); callers must pass `message.queue` or the equivalent.
+    pub async fn record_job_enqueued(
+        &self,
+        ctx: &QueueCtx,
+        job_id: &JobId,
+        job_type: &str,
+        queue: &str,
+    ) {
         let event = JobEvent::Enqueued {
             job_id: job_id.clone(),
             tenant_id: ctx.tenant_id.clone(),
-            queue: "default".to_string(), // TODO: Get from context
+            queue: queue.to_string(),
             job_type: job_type.to_string(),
             at: Utc::now(),
         };
 
         let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_enqueued(job_type);
-        debug!("Recorded job enqueued: {} ({})", job_id, job_type);
+        debug!("Recorded job enqueued: {} ({}) queue={}", job_id, job_type, queue);
     }
 
     /// Record job completed event
@@ -50,32 +59,53 @@ impl ObservabilityLayer {
         debug!("Recorded job completed: {} ({})", job_id, job_type);
     }
 
-    /// Record job failed event
-    pub async fn record_job_failed(&self, _ctx: &QueueCtx, job_id: &JobId, job_type: &str) {
+    /// Record job failed event.
+    ///
+    /// `error` must be the real job error string from `JobError::to_string()`
+    /// so that the event stream carries actionable failure information.
+    pub async fn record_job_failed(
+        &self,
+        _ctx: &QueueCtx,
+        job_id: &JobId,
+        job_type: &str,
+        error: &str,
+    ) {
         let event = JobEvent::Failed {
             job_id: job_id.clone(),
-            error: "Job execution failed".to_string(),
+            error: error.to_string(),
             at: Utc::now(),
         };
 
         let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_failed(job_type);
-        debug!("Recorded job failed: {} ({})", job_id, job_type);
+        debug!("Recorded job failed: {} ({}) error={}", job_id, job_type, error);
     }
 
-    /// Record job retrying event
-    pub async fn record_job_retrying(&self, _ctx: &QueueCtx, job_id: &JobId, job_type: &str) {
-        let retry_at = Utc::now() + chrono::Duration::seconds(60);
+    /// Record job retrying event.
+    ///
+    /// Both `retry_at` and `error` must come from the adapter's actual backoff
+    /// calculation and error value — not fabricated inside this method.
+    pub async fn record_job_retrying(
+        &self,
+        _ctx: &QueueCtx,
+        job_id: &JobId,
+        job_type: &str,
+        error: &str,
+        retry_at: DateTime<Utc>,
+    ) {
         let event = JobEvent::Retrying {
             job_id: job_id.clone(),
             retry_at,
-            error: "Job failed, retrying".to_string(),
+            error: error.to_string(),
             at: Utc::now(),
         };
 
         let _ = self.event_broadcaster.send(event);
         self.metrics.increment_jobs_retried(job_type);
-        debug!("Recorded job retrying: {} ({})", job_id, job_type);
+        debug!(
+            "Recorded job retrying: {} ({}) retry_at={} error={}",
+            job_id, job_type, retry_at, error
+        );
     }
 
     /// Get event stream

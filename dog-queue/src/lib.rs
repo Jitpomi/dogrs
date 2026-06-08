@@ -95,7 +95,7 @@ pub use adapter::QueueAdapter;
 pub use adapter::{QueueConfig, WorkerHandle};
 pub use backend::QueueBackend;
 pub use codec::json::JsonCodec;
-pub use codec::{CodecRegistry, JobCodec};
+pub use codec::{CodecRegistry, EnqueueOptions, JobCodec};
 pub use error::{JobError, QueueError, QueueResult};
 pub use job::{Job, JobRegistry};
 pub use types::{
