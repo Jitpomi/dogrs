@@ -218,5 +218,5 @@ Applications can subscribe to these events to trigger background jobs, sync cach
 
 ## Next Steps
 
-- Head over to the **[Quickstart Guide](../README.md)** to build your first transport-agnostic service.
+- Head over to the **[Quickstart Guide](../ReadMe.md#quick-start)** to build your first transport-agnostic service.
 - Explore the **`dog-examples/`** folder to see how Hooks, Services, and Adapters wire together in a real application.
