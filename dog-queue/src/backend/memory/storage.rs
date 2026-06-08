@@ -537,6 +537,17 @@ impl QueueBackend for MemoryBackend {
             dead_letter_queue: false,
         }
     }
+
+    /// Reclaim expired leases using the built-in `LeaseReaper`.
+    ///
+    /// `MemoryBackend::clone()` clones the `Arc<RwLock<>>` fields (not the underlying
+    /// maps), so the temporary reaper operates on the same shared data as this instance.
+    async fn reclaim_expired_leases(&self) -> QueueResult<usize> {
+        let reaper = crate::backend::memory::reaper::LeaseReaper::new(
+            std::sync::Arc::new(self.clone()),
+        );
+        reaper.reap_expired_leases().await
+    }
 }
 
 impl Default for MemoryBackend {

@@ -13,20 +13,38 @@ use crate::{
 pub struct LeaseReaper {
     backend: Arc<MemoryBackend>,
     interval: Duration,
+    /// Minimum delay applied to jobs re-queued after lease expiry.
+    ///
+    /// Prevents a tight retry loop when a job reliably crashes its worker
+    /// (OOM, panic in execute).  Defaults to 1 second — the same as
+    /// `QueueConfig::default().base_retry_backoff` — so reclaimed jobs
+    /// experience at least one backoff cycle before being re-dequeued.
+    base_retry_backoff: chrono::Duration,
 }
 
 impl LeaseReaper {
-    /// Create a new lease reaper
+    /// Create a new lease reaper with default 30s interval and 1s retry backoff
     pub fn new(backend: Arc<MemoryBackend>) -> Self {
         Self {
             backend,
             interval: Duration::from_secs(30), // Run every 30 seconds
+            base_retry_backoff: chrono::Duration::seconds(1),
         }
     }
 
     /// Create reaper with custom interval
     pub fn with_interval(backend: Arc<MemoryBackend>, interval: Duration) -> Self {
-        Self { backend, interval }
+        Self { backend, interval, base_retry_backoff: chrono::Duration::seconds(1) }
+    }
+
+    /// Set the minimum backoff applied to jobs re-queued after lease expiry.
+    ///
+    /// Call this after [`Self::new`] or [`Self::with_interval`] to override the
+    /// 1-second default, for example with the adapter's `base_retry_backoff`.
+    pub fn with_backoff(mut self, backoff: std::time::Duration) -> Self {
+        self.base_retry_backoff = chrono::Duration::from_std(backoff)
+            .unwrap_or(chrono::Duration::seconds(1));
+        self
     }
 
     /// Start the reaper background task.
@@ -100,7 +118,7 @@ impl LeaseReaper {
         // Re-check status inside the write lock to close the TOCTOU window:
         // a worker that called ack_complete just before the reaper fires will
         // have set the status to Completed; the reaper skips those records.
-        let mut to_requeue: Vec<(String, String, crate::JobPriority, crate::JobId)> = Vec::new();
+        let mut to_requeue: Vec<(String, String, crate::JobPriority, crate::JobId, chrono::DateTime<Utc>)> = Vec::new();
         let mut events: Vec<JobEvent> = Vec::new();
         let mut reclaimed_count = 0usize;
 
@@ -144,7 +162,10 @@ impl LeaseReaper {
                         at: now,
                     });
                 } else {
-                    record.status = JobStatus::Retrying { retry_at: now };
+                    // Apply a minimum backoff before re-enqueue to prevent a tight
+                    // retry loop when a job reliably crashes its worker (OOM, SIGKILL).
+                    let retry_at = now + self.base_retry_backoff;
+                    record.status = JobStatus::Retrying { retry_at };
 
                     // Capture details for queue insertion (done under queues.write() next).
                     to_requeue.push((
@@ -152,12 +173,13 @@ impl LeaseReaper {
                         record.message.queue.clone(),
                         record.message.priority,
                         job_id.clone(),
+                        retry_at,
                     ));
 
                     events.push(JobEvent::Retrying {
                         job_id: job_id.clone(),
                         tenant_id: record.tenant_id.clone(),
-                        retry_at: now,
+                        retry_at,
                         error: "Lease expired".to_string(),
                         at: now,
                     });
@@ -172,10 +194,10 @@ impl LeaseReaper {
         // placed before Normal/Low entries, not appended to the tail.
         if !to_requeue.is_empty() {
             let mut queues = self.backend.queues.write().await;
-            for (tenant_id, queue_name, priority, job_id) in to_requeue {
+            for (tenant_id, queue_name, priority, job_id, retry_at) in to_requeue {
                 let tenant_queues = queues.entry(tenant_id).or_default();
                 let queue = tenant_queues.entry(queue_name).or_default();
-                priority_insert(queue, (priority, now, job_id));
+                priority_insert(queue, (priority, retry_at, job_id));
             }
         } // queues write lock released
 
@@ -273,8 +295,9 @@ mod tests {
         // Force lease expiry
         backend.force_lease_expiry(job_id.clone()).await.unwrap();
 
-        // Run reaper
-        let reaper = LeaseReaper::new(backend.clone());
+        // Run reaper with zero backoff — test verifies structural re-enqueue
+        // correctness, not timing. The 1s default applies in production.
+        let reaper = LeaseReaper::new(backend.clone()).with_backoff(Duration::from_secs(0));
         let reclaimed = reaper.reap_expired_leases().await.unwrap();
 
         assert_eq!(reclaimed, 1);
@@ -311,8 +334,9 @@ mod tests {
             }
         }
 
-        // Run reaper
-        let reaper = LeaseReaper::new(backend.clone());
+        // Run the reaper — use zero backoff so the reclaimed job is immediately
+        // dequeue-eligible.  The 1s production default is not appropriate for tests.
+        let reaper = LeaseReaper::new(backend.clone()).with_backoff(Duration::ZERO);
         let reclaimed = reaper.reap_expired_leases().await.unwrap();
 
         assert_eq!(reclaimed, 1);
@@ -357,8 +381,8 @@ mod tests {
             }
         }
 
-        // Run reaper — should find the expired-processing signature gone and skip it.
-        let reaper = LeaseReaper::new(backend.clone());
+        // TOCTOU test: uses zero backoff, irrelevant to timing.
+        let reaper = LeaseReaper::new(backend.clone()).with_backoff(Duration::from_secs(0));
         let reclaimed = reaper.reap_expired_leases().await.unwrap();
 
         assert_eq!(reclaimed, 0, "reaper must not reclaim an already-completed job");

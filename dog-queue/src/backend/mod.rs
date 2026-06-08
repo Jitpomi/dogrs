@@ -83,6 +83,19 @@ pub trait QueueBackend: Send + Sync {
     /// Event stream for observability (boxed for stable Rust)
     fn event_stream(&self, ctx: QueueCtx) -> BoxStream<JobEvent>;
 
+    /// Reclaim expired leases by detecting timed-out jobs and re-queuing them for retry.
+    ///
+    /// Backends that manage lease expiry internally (e.g. [`MemoryBackend`]) should
+    /// override this.  The default is a no-op (`Ok(0)`) for backends that rely on an
+    /// external TTL mechanism (Redis `EXPIRE`, Postgres `pg_cron`) which handles
+    /// reclamation outside the Rust process.
+    ///
+    /// Called periodically by `QueueAdapter::start_workers` at `lease_duration / 2`
+    /// intervals.  Returns the number of leases reclaimed in this cycle.
+    async fn reclaim_expired_leases(&self) -> QueueResult<usize> {
+        Ok(0)
+    }
+
     /// Get backend capabilities
     fn capabilities(&self) -> QueueCapabilities;
 }

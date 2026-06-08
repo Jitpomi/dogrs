@@ -373,8 +373,9 @@ async fn test_lease_expiry_requeues_job() {
     // Artificially expire the lease
     backend.force_lease_expiry(job_id.clone()).await.unwrap();
 
-    // Run the reaper
-    let reaper = LeaseReaper::new(backend.clone());
+    // Run the reaper — use zero backoff so the reclaimed job is immediately
+    // dequeue-eligible.  The 1s production default is not appropriate for unit tests.
+    let reaper = LeaseReaper::new(backend.clone()).with_backoff(std::time::Duration::from_secs(0));
     let reclaimed = reaper.reap_expired_leases().await.unwrap();
     assert_eq!(reclaimed, 1, "reaper should reclaim 1 expired lease");
 

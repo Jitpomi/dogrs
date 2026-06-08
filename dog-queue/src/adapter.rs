@@ -66,22 +66,37 @@ impl Default for QueueConfig {
 pub struct WorkerHandle {
     shutdown_txs: Vec<oneshot::Sender<()>>,
     join_handles: Vec<JoinHandle<QueueResult<()>>>,
+    /// Shutdown signal for the integrated reaper task (if one was spawned).
+    reaper_shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Join handle for the integrated reaper task.
+    reaper_handle: Option<JoinHandle<QueueResult<()>>>,
 }
 
 impl WorkerHandle {
-    /// Gracefully signal all workers to stop and wait for them to finish.
+    /// Gracefully signal all workers and the integrated reaper to stop, then wait
+    /// for them all to finish.
     pub async fn shutdown(self) -> QueueResult<()> {
-        // Signal every worker first so they can all drain concurrently.
+        // Signal every worker and the reaper first so they can all drain concurrently.
         for tx in self.shutdown_txs {
             let _ = tx.send(());
         }
-        // Then await each one.  Collect all errors rather than stopping at the first.
+        if let Some(tx) = self.reaper_shutdown_tx {
+            let _ = tx.send(());
+        }
+        // Await each handle, collecting all errors rather than stopping at the first.
         let mut errors: Vec<String> = Vec::new();
         for handle in self.join_handles {
             match handle.await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => errors.push(e.to_string()),
                 Err(e) => errors.push(format!("Worker panicked: {e}")),
+            }
+        }
+        if let Some(handle) = self.reaper_handle {
+            match handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => errors.push(format!("Reaper: {e}")),
+                Err(e) => errors.push(format!("Reaper panicked: {e}")),
             }
         }
         if errors.is_empty() {
@@ -332,9 +347,48 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
             worker_count, ctx.tenant_id
         );
 
+        // Spawn the integrated reaper task at lease_duration / 2 intervals.
+        //
+        // Correlating the reaper interval with lease_duration satisfies the invariant:
+        //   reaper_interval < lease_duration
+        // so the reaper fires at least once within every lease window.  Backends that
+        // manage expiry externally (Redis EXPIRE, Postgres pg_cron) return Ok(0) from
+        // reclaim_expired_leases() and pay only a trivial polling cost.
+        let (reaper_shutdown_tx, mut reaper_shutdown_rx) = oneshot::channel::<()>();
+        let reaper_backend = dyn_adapter.backend.clone();
+        let reaper_interval = {
+            let half_secs = self.config.lease_duration.as_secs() / 2;
+            std::time::Duration::from_secs(half_secs.max(1))
+        };
+        let reaper_handle = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(reaper_interval);
+            // Delay mode: if the reaper cycle takes longer than the interval
+            // (e.g. under high load), skip ticks rather than queuing them up.
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut reaper_shutdown_rx => {
+                        info!("Integrated reaper shutting down");
+                        break;
+                    }
+                    _ = ticker.tick() => {
+                        match reaper_backend.reclaim_expired_leases().await {
+                            Ok(0) => {},
+                            Ok(n) => info!("Reaper: reclaimed {} expired lease(s)", n),
+                            Err(e) => warn!("Reaper error during reclaim: {e}"),
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+
         Ok(WorkerHandle {
             shutdown_txs,
             join_handles,
+            reaper_shutdown_tx: Some(reaper_shutdown_tx),
+            reaper_handle: Some(reaper_handle),
         })
     }
 
@@ -407,6 +461,21 @@ impl<B: QueueBackend> Clone for QueueAdapter<B> {
             observability: self.observability.clone(),
             config: self.config.clone(),
         }
+    }
+}
+
+/// RAII guard that aborts the wrapped task when dropped.
+///
+/// When `tokio::select!` cancels a future that owns a `JoinHandle`, Tokio
+/// **detaches** (does not abort) the spawned task.  Wrapping the heartbeat
+/// handle in `AbortOnDrop` ensures the task is always terminated when
+/// `process_next_job` is cancelled by a shutdown signal, preventing orphaned
+/// heartbeat tasks that extend leases indefinitely after the worker exits.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -519,7 +588,7 @@ impl<C: Send + Sync + 'static> Worker<C> {
         let hb_token = leased_job.lease_token.clone();
         let hb_interval = self.adapter.config.heartbeat_interval;
 
-        let heartbeat_handle = tokio::spawn(async move {
+        let heartbeat_handle = AbortOnDrop(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(hb_interval).await;
                 match hb_backend
@@ -541,7 +610,7 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     }
                 }
             }
-        });
+        }));
 
         // Decode the payload through the registered codec before handing it to the handler.
         // `encode_bytes` was called at enqueue time; `decode_bytes` must be called here to
@@ -566,8 +635,9 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     format!("Codec decode failed (permanent — payload is corrupt or codec mismatch): {e}");
                 error!("Job {} permanently failed: {}", job_id, error_str);
 
-                // Stop the heartbeat before touching the lease.
-                heartbeat_handle.abort();
+                // AbortOnDrop will abort the heartbeat task as it goes out of scope;
+                // drop explicitly here to abort BEFORE calling ack_fail.
+                drop(heartbeat_handle);
 
                 // Permanently fail the job so it leaves Processing immediately.
                 // Ignore ack_fail errors here — we cannot do anything useful with
@@ -601,13 +671,19 @@ impl<C: Send + Sync + 'static> Worker<C> {
             .execute(&decoded_message, self.context.clone())
             .await;
 
-        // Job finished — stop the heartbeat unconditionally.
-        heartbeat_handle.abort();
+        // Job finished — drop the AbortOnDrop guard, which aborts the heartbeat task.
+        drop(heartbeat_handle);
 
         match result {
             Ok(result_ref) => {
-                // Job completed successfully
-                self.adapter
+                // Job completed successfully — ack with the backend.
+                // Handle terminal-state races explicitly rather than propagating with `?`:
+                //   JobCanceled        — cancel arrived after execute() started; cancel-wins.
+                //   JobAlreadyTerminal — reaper reclaimed between execute() and ack_complete();
+                //                        the reaper has already re-queued the job, so we must
+                //                        NOT double-ack or the result could be applied twice.
+                match self
+                    .adapter
                     .backend
                     .ack_complete(
                         self.ctx.clone(),
@@ -615,12 +691,39 @@ impl<C: Send + Sync + 'static> Worker<C> {
                         leased_job.lease_token,
                         result_ref,
                     )
-                    .await?;
-
-                self.adapter
-                    .observability
-                    .record_job_completed(&self.ctx, &job_id, job_type);
-                info!("Job {} completed successfully", job_id);
+                    .await
+                {
+                    Ok(()) => {
+                        self.adapter
+                            .observability
+                            .record_job_completed(&self.ctx, &job_id, job_type);
+                        info!("Job {} completed successfully", job_id);
+                    }
+                    Err(QueueError::JobCanceled) => {
+                        // Cancel-wins: a cancel request arrived after execute() started.
+                        // The result is discarded; the backend already set status = Canceled.
+                        warn!(
+                            "Job {} completed execution but was canceled mid-flight — \
+                             result discarded (cancel-wins)",
+                            job_id
+                        );
+                        self.adapter.observability.record_job_failed(
+                            &self.ctx, &job_id, job_type,
+                            "Canceled mid-flight (cancel-wins)",
+                        );
+                    }
+                    Err(QueueError::JobAlreadyTerminal) => {
+                        // The reaper reclaimed the job between execute() completing and
+                        // ack_complete() being called.  The reaper has already re-queued it;
+                        // logging only — do NOT re-execute or alter state.
+                        warn!(
+                            "Job {} ack_complete: already terminal (reaper race?) — \
+                             result discarded, job may be re-executed",
+                            job_id
+                        );
+                    }
+                    Err(e) => return Err(e), // Genuine infrastructure error — propagate.
+                }
             }
 
             Err(job_error) => {
