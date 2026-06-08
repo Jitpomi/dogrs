@@ -38,10 +38,7 @@ type IdempotencyMap = HashMap<(String, String, String, String), JobId>;
 /// in-memory development backend. A production backend should use a
 /// `BinaryHeap` or per-priority `VecDeque` tiers for O(log n) / O(1) ops.
 pub(super) fn priority_insert(queue: &mut VecDeque<QueueEntry>, entry: QueueEntry) {
-    let pos = queue
-        .iter()
-        .position(|(p, _, _)| entry.0 > *p)
-        .unwrap_or(queue.len());
+    let pos = queue.partition_point(|(p, _, _)| *p >= entry.0);
     queue.insert(pos, entry);
 }
 
@@ -164,6 +161,26 @@ impl QueueBackend for MemoryBackend {
     async fn dequeue(&self, ctx: QueueCtx, queues: &[&str]) -> QueueResult<Option<LeasedJob>> {
         let now = Utc::now();
 
+        // ── Fast-path: Advisory Read Lock ───────────────────────────────────────
+        // Prevent write-lock thundering herd by verifying if an eligible job
+        // might exist across ANY of the requested queues before upgrading to write.
+        let has_candidate = {
+            let queues_read = self.queues.read().await;
+            if let Some(tq) = queues_read.get(&ctx.tenant_id) {
+                queues.iter().any(|q| {
+                    tq.get(*q)
+                        .map(|queue| queue.iter().any(|(_, run_at, _)| *run_at <= now))
+                        .unwrap_or(false)
+                })
+            } else {
+                false
+            }
+        };
+
+        if !has_candidate {
+            return Ok(None);
+        }
+
         for queue_name in queues {
             // ── Phase 1: scan queue for eligible entry ────────────────────────────────
             // Hold queues.write() only. `run_at` is stored in the entry, so
@@ -178,18 +195,31 @@ impl QueueBackend for MemoryBackend {
             // ready-queue / future-heap structure would make this O(1).
             let candidate = {
                 let mut queues_lock = self.queues.write().await;
-                queues_lock
-                    .get_mut(&ctx.tenant_id)
-                    .and_then(|tq| tq.get_mut(*queue_name))
-                    .and_then(|queue| {
+                let mut candidate_id = None;
+                
+                if let Some(tq) = queues_lock.get_mut(&ctx.tenant_id) {
+                    if let Some(queue) = tq.get_mut(*queue_name) {
                         let pos = queue
                             .iter()
                             .position(|(_, run_at, _)| *run_at <= now);
-                        pos.map(|i| {
+                        if let Some(i) = pos {
                             let (_, _, job_id) = queue.remove(i).unwrap();
-                            job_id
-                        })
-                    })
+                            candidate_id = Some(job_id);
+                        }
+                        
+                        // Issue 3: Cleanup empty inner queues to prevent slow memory leaks
+                        if queue.is_empty() {
+                            tq.remove(*queue_name);
+                        }
+                    }
+                    
+                    // Issue 3: Cleanup empty tenant map
+                    if tq.is_empty() {
+                        queues_lock.remove(&ctx.tenant_id);
+                    }
+                }
+                
+                candidate_id
             }; // queues_lock RELEASED
 
             // ── Phase 2: lease the job — single jobs.write() ──────────────────────────

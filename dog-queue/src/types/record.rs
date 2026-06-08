@@ -171,29 +171,6 @@ impl JobRecord {
         }
     }
 
-    /// Update the job status and timestamp.
-    ///
-    /// # Deprecated
-    ///
-    /// Prefer the type-safe transition helpers: [`start_processing`](Self::start_processing),
-    /// [`complete`](Self::complete), [`fail`](Self::fail), [`cancel`](Self::cancel),
-    /// or [`schedule_retry`](Self::schedule_retry).
-    ///
-    /// `update_status` bypasses critical invariants that all transition helpers maintain:
-    /// - Does **not** clear `lease_token` on terminal transitions — a "completed" record
-    ///   can retain an active lease token, breaking the token-guard in `ack_complete`
-    ///   and `heartbeat_extend`.
-    /// - Does **not** set `last_error` for `Failed` transitions.
-    /// - Accepts any `JobStatus` from any state — no lifecycle validation.
-    #[deprecated(
-        note = "Use start_processing(), complete(), fail(), cancel(), or schedule_retry() instead. \
-                update_status() does not clear lease_token or update last_error, \
-                bypassing transition invariants."
-    )]
-    pub fn update_status(&mut self, status: JobStatus) {
-        self.status = status;
-        self.updated_at = Utc::now();
-    }
 
     /// Set an error and update timestamp
     pub fn set_error(&mut self, error: String) {
