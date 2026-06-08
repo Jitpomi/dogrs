@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::{Job, JobMessage, QueueCtx, QueueError, QueueResult};
+use crate::{Job, JobMessage, QueueError, QueueResult};
 
 // ---------------------------------------------------------------------------
 // JobCodec trait
@@ -64,6 +64,10 @@ impl EnqueueOptions {
     }
 
     /// Schedule the job to run no earlier than `run_at`.
+    ///
+    /// Shortcut for `EnqueueOptions::default().with_run_at(run_at)`. Combine
+    /// with [`Self::with_queue`] to set both fields:
+    /// `EnqueueOptions::scheduled(t).with_queue("priority-q")`.
     pub fn scheduled(run_at: DateTime<Utc>) -> Self {
         Self {
             run_at: Some(run_at),
@@ -72,11 +76,31 @@ impl EnqueueOptions {
     }
 
     /// Route the job to a specific named queue.
-    pub fn with_queue(queue: impl Into<String>) -> Self {
-        Self {
-            queue: Some(queue.into()),
-            ..Default::default()
-        }
+    ///
+    /// Can be chained:
+    /// ```
+    /// # use dog_queue::codec::EnqueueOptions;
+    /// # use chrono::Utc;
+    /// let opts = EnqueueOptions::default()
+    ///     .with_queue("email-high")
+    ///     .with_run_at(Utc::now());
+    /// ```
+    pub fn with_queue(mut self, queue: impl Into<String>) -> Self {
+        self.queue = Some(queue.into());
+        self
+    }
+
+    /// Set the earliest eligible processing time.
+    ///
+    /// Can be chained:
+    /// ```
+    /// # use dog_queue::codec::EnqueueOptions;
+    /// # use chrono::Utc;
+    /// let opts = EnqueueOptions::scheduled(Utc::now()).with_queue("priority-q");
+    /// ```
+    pub fn with_run_at(mut self, run_at: DateTime<Utc>) -> Self {
+        self.run_at = Some(run_at);
+        self
     }
 }
 
@@ -159,10 +183,13 @@ impl CodecRegistry {
     ///   priority lanes (e.g. `"email-high"` vs `"email-low"`).
     /// - `opts.run_at`: if `None`, defaults to `Utc::now()` (run immediately).
     ///   Set this to schedule delayed jobs without constructing `JobMessage` manually.
+    ///
+    /// Payload size enforcement (against `QueueConfig::max_payload_size`) is
+    /// performed by the adapter in `enqueue_opts()` after this method returns,
+    /// not here — this method does not have access to the adapter configuration.
     pub fn encode_job<J: Job>(
         &self,
         job: &J,
-        _ctx: &QueueCtx,
         opts: EnqueueOptions,
     ) -> QueueResult<JobMessage> {
         let codec = self.default_codec()?;

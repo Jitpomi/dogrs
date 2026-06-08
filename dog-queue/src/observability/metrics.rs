@@ -269,24 +269,58 @@ impl JobTypeMetrics {
 ///
 /// Stores `std::time::Duration` (always non-negative, no chrono dependency)
 /// rather than `chrono::Duration` (signed, allows negative values).
-#[derive(Debug, Clone)]
+///
+/// `execution_times` is wrapped in `Arc` so that `Clone` (called by
+/// `LiveMetrics::performance_metrics()` on every snapshot) is O(1) — it
+/// only increments the Arc refcount rather than deep-copying all ring buffers.
+/// Copy-on-write semantics are preserved: `Arc::make_mut` in
+/// `record_execution_time` detects when a snapshot holder still holds a
+/// reference and performs a deep clone only at that point, not on every
+/// snapshot.
 pub struct PerformanceMetrics {
-    execution_times: HashMap<String, VecDeque<Duration>>,
+    execution_times: Arc<HashMap<String, VecDeque<Duration>>>,
     last_updated: DateTime<Utc>,
+}
+
+impl Clone for PerformanceMetrics {
+    /// O(1) clone — shares the underlying `Arc<HashMap<...>>` with the original.
+    ///
+    /// A subsequent `record_execution_time` call will use `Arc::make_mut` to
+    /// transparently deep-clone the data only if the caller still holds this snapshot,
+    /// keeping the common case (no concurrent reader) allocation-free.
+    fn clone(&self) -> Self {
+        Self {
+            execution_times: Arc::clone(&self.execution_times),
+            last_updated: self.last_updated,
+        }
+    }
+}
+
+impl std::fmt::Debug for PerformanceMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PerformanceMetrics")
+            .field("job_types", &self.execution_times.keys().collect::<Vec<_>>())
+            .field("last_updated", &self.last_updated)
+            .finish()
+    }
 }
 
 impl PerformanceMetrics {
     pub fn new() -> Self {
         Self {
-            execution_times: HashMap::new(),
+            execution_times: Arc::new(HashMap::new()),
             last_updated: Utc::now(),
         }
     }
 
     /// Record execution time for a job type (ring-buffer: keeps the last 1000).
+    ///
+    /// Uses `Arc::make_mut` on `execution_times` for copy-on-write semantics:
+    /// if a snapshot caller is still holding a reference, only then is the
+    /// backing `HashMap` deep-cloned. The common case (no concurrent snapshot)
+    /// mutates in place without any allocation.
     pub fn record_execution_time(&mut self, job_type: &str, duration: Duration) {
-        let times = self
-            .execution_times
+        let times = Arc::make_mut(&mut self.execution_times)
             .entry(job_type.to_string())
             .or_default();
         times.push_back(duration);
@@ -445,7 +479,17 @@ impl GlobalMetrics {
         }
     }
 
-    pub fn jobs_in_progress(&self) -> u64 {
+    /// Jobs not yet in a terminal state (Enqueued + Processing + Retrying).
+    ///
+    /// **Note**: this includes jobs waiting in the queue (`Enqueued`) and jobs
+    /// waiting for their retry delay (`Retrying`), not just jobs that are
+    /// actively executing (`Processing`). An overloaded system with a large
+    /// backlog reports a high value here while the true "actively executing"
+    /// count equals `max_workers` at most.
+    ///
+    /// For a true active-worker count, query the backend for records in
+    /// `JobStatus::Processing` state.
+    pub fn jobs_not_yet_terminal(&self) -> u64 {
         self.jobs_enqueued
             .saturating_sub(self.jobs_completed + self.jobs_failed + self.jobs_canceled)
     }
@@ -529,7 +573,7 @@ mod tests {
             (global.retry_rate() - expected_retry_rate).abs() < 1e-10,
             "retry_rate expected ≈{:.4} but got {}", expected_retry_rate, global.retry_rate()
         );
-        assert_eq!(global.jobs_in_progress(), 5);
+        assert_eq!(global.jobs_not_yet_terminal(), 5);
     }
 }
 

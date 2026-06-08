@@ -41,6 +41,17 @@ pub struct QueueConfig {
     /// settings. Set to `Some(Duration)` when you need a safety cap on direct
     /// execution (e.g. in tests or one-off CLI invocations).
     pub execute_timeout: Option<Duration>,
+
+    /// Maximum encoded payload size in bytes.
+    ///
+    /// `None` (the default) applies no limit.
+    ///
+    /// When set, [`QueueAdapter::enqueue_opts`] returns
+    /// [`QueueError::PayloadTooLarge`] if the encoded payload exceeds this
+    /// threshold, before the job reaches the backend. Set this to protect
+    /// downstream systems (database column width, message-broker limits, etc.)
+    /// from oversized payloads at the enqueue boundary.
+    pub max_payload_size: Option<usize>,
 }
 
 impl Default for QueueConfig {
@@ -55,6 +66,7 @@ impl Default for QueueConfig {
             poll_interval: Duration::from_millis(100),
             error_backoff: Duration::from_secs(1),
             execute_timeout: None, // no timeout by default
+            max_payload_size: None, // no limit by default
         }
     }
 }
@@ -251,7 +263,17 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         opts: EnqueueOptions,
     ) -> QueueResult<JobId> {
         // Encode job using codec registry
-        let message = self.codec_registry.encode_job(&job, &ctx, opts)?;
+        let message = self.codec_registry.encode_job(&job, opts)?;
+
+        // Enforce the configured payload size limit.
+        // This check is at the adapter (not codec) layer because encode_job
+        // has no access to QueueConfig — the adapter is the single owner of config.
+        if let Some(max) = self.config.max_payload_size {
+            let size = message.payload_bytes.len();
+            if size > max {
+                return Err(QueueError::PayloadTooLarge { size, max });
+            }
+        }
 
         // Capture the real queue name before the message is moved into the backend.
         let queue_name = message.queue.clone();
