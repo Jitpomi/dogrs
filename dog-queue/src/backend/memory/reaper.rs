@@ -146,8 +146,8 @@ impl LeaseReaper {
 
                 // Clear the lease.
                 record.lease_token = None;
-                record.updated_at = now;
                 record.set_error("Lease expired".to_string());
+                record.updated_at = now;
 
                 // The reaper does not hold the adapter's retry budget; it uses the
                 // same attempt > max_retries threshold the adapter uses (attempt is
