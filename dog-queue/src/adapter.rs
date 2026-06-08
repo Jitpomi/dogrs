@@ -59,62 +59,6 @@ impl Default for QueueConfig {
     }
 }
 
-/// Handle for managing the lifecycle of a worker pool.
-///
-/// Dropping this handle without calling `shutdown()` leaves the workers
-/// running until the runtime shuts down.
-pub struct WorkerHandle {
-    shutdown_txs: Vec<oneshot::Sender<()>>,
-    join_handles: Vec<JoinHandle<QueueResult<()>>>,
-    /// Shutdown signal for the integrated reaper task (if one was spawned).
-    reaper_shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Join handle for the integrated reaper task.
-    reaper_handle: Option<JoinHandle<QueueResult<()>>>,
-}
-
-impl WorkerHandle {
-    /// Gracefully signal all workers and the integrated reaper to stop, then wait
-    /// for them all to finish.
-    pub async fn shutdown(self) -> QueueResult<()> {
-        // Signal every worker and the reaper first so they can all drain concurrently.
-        for tx in self.shutdown_txs {
-            let _ = tx.send(());
-        }
-        if let Some(tx) = self.reaper_shutdown_tx {
-            let _ = tx.send(());
-        }
-        // Await each handle, collecting all errors rather than stopping at the first.
-        let mut errors: Vec<String> = Vec::new();
-        for handle in self.join_handles {
-            match handle.await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => errors.push(e.to_string()),
-                Err(e) => errors.push(format!("Worker panicked: {e}")),
-            }
-        }
-        if let Some(handle) = self.reaper_handle {
-            match handle.await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => errors.push(format!("Reaper: {e}")),
-                Err(e) => errors.push(format!("Reaper panicked: {e}")),
-            }
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(QueueError::Internal(errors.join("; ")))
-        }
-    }
-}
-
-/// Production-grade queue adapter with multi-tenant semantics
-pub struct QueueAdapter<B: QueueBackend + ?Sized> {
-    backend: Arc<B>,
-    codec_registry: Arc<CodecRegistry>,
-    job_registry: Arc<RwLock<JobRegistry>>,
-    observability: Arc<ObservabilityLayer>,
-    config: QueueConfig,
-}
 impl QueueConfig {
     /// Validate that the configuration satisfies all required invariants.
     ///
@@ -144,8 +88,83 @@ impl QueueConfig {
                 self.heartbeat_interval, self.lease_duration,
             )));
         }
-    Ok(())
+        Ok(())
     }
+}
+
+/// Handle for managing the lifecycle of a worker pool.
+///
+/// Dropping this handle without calling `shutdown()` leaves the workers
+/// running until the runtime shuts down.
+pub struct WorkerHandle {
+    shutdown_txs: Vec<oneshot::Sender<()>>,
+    join_handles: Vec<JoinHandle<QueueResult<()>>>,
+    /// Shutdown signal for the integrated reaper task (if one was spawned).
+    reaper_shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Join handle for the integrated reaper task.
+    reaper_handle: Option<JoinHandle<QueueResult<()>>>,
+}
+
+impl WorkerHandle {
+    /// Gracefully signal all workers and the integrated reaper to stop, then wait
+    /// for them all to finish.
+    pub async fn shutdown(self) -> QueueResult<()> {
+        // Signal every worker and the reaper first so they can all drain concurrently.
+        for tx in self.shutdown_txs {
+            let _ = tx.send(());
+        }
+        if let Some(tx) = self.reaper_shutdown_tx {
+            let _ = tx.send(());
+        }
+        // Await each handle, collecting all errors rather than stopping at the first.
+        // Log each error individually so operators have structured granularity
+        // (worker panic vs. reaper error) before the errors are merged.
+        let mut errors: Vec<String> = Vec::new();
+        for handle in self.join_handles {
+            match handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    error!("Worker shutdown error: {e}");
+                    errors.push(e.to_string());
+                }
+                Err(e) => {
+                    error!("Worker panicked during shutdown: {e}");
+                    errors.push(format!("Worker panicked: {e}"));
+                }
+            }
+        }
+        if let Some(handle) = self.reaper_handle {
+            match handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    error!("Reaper shutdown error: {e}");
+                    errors.push(format!("Reaper: {e}"));
+                }
+                Err(e) => {
+                    error!("Reaper panicked during shutdown: {e}");
+                    errors.push(format!("Reaper panicked: {e}"));
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(QueueError::Internal(format!(
+                "{} shutdown error(s): {}",
+                errors.len(),
+                errors.join("; ")
+            )))
+        }
+    }
+}
+
+/// Production-grade queue adapter with multi-tenant semantics
+pub struct QueueAdapter<B: QueueBackend + ?Sized> {
+    backend: Arc<B>,
+    codec_registry: Arc<CodecRegistry>,
+    job_registry: Arc<RwLock<JobRegistry>>,
+    observability: Arc<ObservabilityLayer>,
+    config: QueueConfig,
 }
 
 impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {

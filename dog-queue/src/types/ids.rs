@@ -26,16 +26,29 @@ impl fmt::Display for JobId {
     }
 }
 
+/// Convert a `String` into a `JobId`.
+///
+/// # Panics
+///
+/// Panics if `id` is empty.  An empty `JobId` would never match any stored
+/// job, producing a confusing `JobNotFound` error far from the construction
+/// site.  Prefer [`JobId::new`] for fresh IDs or validate the source string
+/// before calling this.
 impl From<String> for JobId {
     fn from(id: String) -> Self {
-        debug_assert!(!id.is_empty(), "JobId::from called with an empty string — this will never match any stored job");
+        assert!(!id.is_empty(), "JobId::from called with an empty string — this will never match any stored job");
         Self(id)
     }
 }
 
+/// Convert a `&str` into a `JobId`.
+///
+/// # Panics
+///
+/// Panics if `id` is empty.  See [`From<String>`](JobId#impl-From<String>) for details.
 impl From<&str> for JobId {
     fn from(id: &str) -> Self {
-        debug_assert!(!id.is_empty(), "JobId::from called with an empty string — this will never match any stored job");
+        assert!(!id.is_empty(), "JobId::from called with an empty string — this will never match any stored job");
         Self(id.to_string())
     }
 }
@@ -79,16 +92,28 @@ impl fmt::Display for LeaseToken {
     }
 }
 
+/// Convert a `String` into a `LeaseToken`.
+///
+/// # Panics
+///
+/// Panics if `token` is empty.  An empty `LeaseToken` would never match any
+/// active lease, producing a confusing `InvalidLeaseToken` error far from the
+/// construction site.  Prefer [`LeaseToken::new`] for fresh tokens.
 impl From<String> for LeaseToken {
     fn from(token: String) -> Self {
-        debug_assert!(!token.is_empty(), "LeaseToken::from called with an empty string — this will never match any active lease");
+        assert!(!token.is_empty(), "LeaseToken::from called with an empty string — this will never match any active lease");
         Self(token)
     }
 }
 
+/// Convert a `&str` into a `LeaseToken`.
+///
+/// # Panics
+///
+/// Panics if `token` is empty.  See [`From<String>`](LeaseToken#impl-From<String>) for details.
 impl From<&str> for LeaseToken {
     fn from(token: &str) -> Self {
-        debug_assert!(!token.is_empty(), "LeaseToken::from called with an empty string — this will never match any active lease");
+        assert!(!token.is_empty(), "LeaseToken::from called with an empty string — this will never match any active lease");
         Self(token.to_string())
     }
 }

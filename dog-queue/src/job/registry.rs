@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -33,7 +32,7 @@ impl<J: Job> ConcreteJobHandler<J> {
 }
 
 #[async_trait]
-impl<J: Job + for<'de> Deserialize<'de>> JobHandler for ConcreteJobHandler<J> {
+impl<J: Job> JobHandler for ConcreteJobHandler<J> {
     async fn execute(
         &self,
         message: &JobMessage,
@@ -94,7 +93,7 @@ impl JobRegistry {
     }
 
     /// Register a job type
-    pub fn register<J: Job + for<'de> Deserialize<'de> + 'static>(&mut self) -> QueueResult<()> {
+    pub fn register<J: Job>(&mut self) -> QueueResult<()> {
         let handler = Arc::new(ConcreteJobHandler::<J>::new());
         let job_type = handler.job_type().to_string();
 
@@ -106,7 +105,25 @@ impl JobRegistry {
         Ok(())
     }
 
-    /// Execute a job by message
+    /// Execute a job by message.
+    ///
+    /// # Lock-starvation hazard
+    ///
+    /// **Do not call this method while holding a `RwLock<JobRegistry>` read guard.**
+    /// Doing so — the typical access pattern via `adapter.job_registry.read().await.execute_job(...)` —
+    /// holds the read lock for the entire duration of `handler.execute()`, which can run
+    /// seconds or minutes.  During this window any call to `register_job()` (which
+    /// needs the write lock) is completely blocked.
+    ///
+    /// The `QueueAdapter` worker path avoids this by calling [`get_handler`](Self::get_handler)
+    /// under the lock, dropping the lock, then executing outside it.  Prefer that pattern
+    /// for any code that drives job execution.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Holding the RwLock read guard across execute() starves register_job(). \
+                Use get_handler() to clone the handler under the lock, drop the lock, \
+                then call handler.execute() outside."
+    )]
     pub async fn execute_job(
         &self,
         message: &JobMessage,
