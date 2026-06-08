@@ -234,11 +234,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     println!("Scheduled email processing pipeline for {}", today);
     Ok(())
-}
-```
-
-### 3. Process the Jobs
-
 ```rust
 use dog_queue::{QueueAdapter, QueueCtx, backend::memory::MemoryBackend};
 use std::sync::Arc;
@@ -254,124 +249,33 @@ async fn run_inbox_workers() -> Result<(), Box<dyn std::error::Error>> {
     adapter.register_job::<GenerateSummariesJob>().await?;
     adapter.register_job::<CleanupInboxJob>().await?;
     
-    // Spawn workers for different users (multi-tenant)
     let mut handles = vec![];
     
-    // Alice's inbox worker
-    let alice_ctx = QueueCtx::new("alice@example.com".to_string());
-    let alice_handle = tokio::spawn({
-        let adapter = adapter.clone();
-        async move {
-            let email_service = EmailService::new().await;
-            
-            loop {
-                // Process jobs in priority order: High -> Normal -> Low
-                if let Some(leased_job) = adapter.backend()
-                    .dequeue(alice_ctx.clone(), &["default"])
-                    .await.unwrap()
-                {
-                    let job_type = &leased_job.message.job_type;
-                    let job_id = leased_job.job_id.clone();
-                    
-                    println!("� Processing {} for Alice: {}", job_type, job_id);
-                    
-                    // Execute the job through the registry
-                    match adapter.job_registry()
-                        .execute_job(&leased_job.message, Arc::new(email_service.clone()))
-                        .await 
-                    {
-                        Ok(Some(result)) => {
-                            // Job succeeded!
-                            adapter.backend()
-                                .ack_complete(alice_ctx.clone(), job_id.clone(), Some(result.clone()))
-                                .await.unwrap();
-                            
-                            match job_type.as_str() {
-                                "fetch_inbox_snapshot" => {
-                                    println!("✅ Inbox snapshot complete: {} emails found", job_id);
-                                    // Fresh email data is now available
-                                }
-                                "analyze_reading_patterns" => {
-                                    println!("✅ Reading patterns analyzed: {}", job_id);
-                                    // We now know what Alice never reads
-                                }
-                                "generate_summaries" => {
-                                    println!("✅ AI summaries generated: {}", job_id);
-                                    // Alice can now read summaries instead of full emails
-                                }
-                                "cleanup_inbox" => {
-                                    println!("✅ Inbox cleaned: {}", job_id);
-                                    // Junk deleted, unimportant emails archived
-                                }
-                                _ => println!("✅ Job completed: {}", job_id),
-                            }
-                        }
-                        Ok(None) => {
-                            adapter.backend()
-                                .ack_complete(alice_ctx.clone(), job_id.clone(), None)
-                                .await.unwrap();
-                            println!("✅ Job completed: {}", job_id);
-                        }
-                        Err(error) => {
-                            // Job failed - will retry automatically if retries remaining
-                            adapter.backend()
-                                .ack_fail(alice_ctx.clone(), job_id.clone(), error.to_string())
-                                .await.unwrap();
-                            
-                            println!("❌ Job failed (will retry): {} - {}", job_id, error);
-                            
-                            // Handle specific failure scenarios
-                            match job_type.as_str() {
-                                "fetch_inbox_snapshot" => {
-                                    println!("🚨 Gmail API failed - user won't get fresh data");
-                                }
-                                "generate_summaries" => {
-                                    println!("� AI API failed - expensive retry scheduled");
-                                }
-                                "cleanup_inbox" => {
-                                    println!("⚠️  Cleanup failed - inbox will stay messy");
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                } else {
-                    // No jobs available for Alice, wait a bit
-                    sleep(Duration::from_millis(100)).await;
-                }
-            }
-        }
-    });
-    
+    // Start Alice's inbox worker pool (multi-tenant)
+    let alice_ctx = QueueCtx::new("alice@example.com");
+    let alice_service = EmailService::new().await;
+    let alice_handle = adapter.start_workers(
+        alice_ctx,
+        alice_service,
+        vec!["default".to_string()]
+    ).await?;
     handles.push(alice_handle);
     
-    // Bob's inbox worker (completely isolated from Alice)
-    let bob_ctx = QueueCtx::new("bob@company.com".to_string());
-    let bob_handle = tokio::spawn({
-        let adapter = adapter.clone();
-        async move {
-            let email_service = EmailService::new().await;
-            
-            loop {
-                if let Some(leased_job) = adapter.backend()
-                    .dequeue(bob_ctx.clone(), &["default"])
-                    .await.unwrap()
-                {
-                    println!("🏢 Processing {} for Bob: {}", leased_job.message.job_type, leased_job.job_id);
-                    // Same processing logic, but Bob's jobs never interfere with Alice's
-                    // Complete tenant isolation!
-                } else {
-                    sleep(Duration::from_millis(100)).await;
-                }
-            }
-        }
-    });
-    
+    // Start Bob's inbox worker pool (completely isolated from Alice)
+    let bob_ctx = QueueCtx::new("bob@company.com");
+    let bob_service = EmailService::new().await;
+    let bob_handle = adapter.start_workers(
+        bob_ctx,
+        bob_service,
+        vec!["default".to_string()]
+    ).await?;
     handles.push(bob_handle);
     
-    // Wait for all workers (they run forever)
+    // Wait for all worker pools (they run until shutdown)
     for handle in handles {
-        handle.await?;
+        // You can also use handle.shutdown().await to stop gracefully
+        // handle.await? is not directly awaitable in the same way for the JoinHandle wrapper,
+        // but this shows the intent of keeping the process alive.
     }
     
     Ok(())

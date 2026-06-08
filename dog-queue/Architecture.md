@@ -141,18 +141,18 @@ pub trait QueueBackend: Send + Sync {
 }
 ```
 
-### Revolutionary Queue Engine
+### Revolutionary Queue Adapter
 
 ```rust
 // Production-grade queue engine with multi-tenant semantics
-pub struct QueueEngine<B: QueueBackend> {
+pub struct QueueAdapter<B: QueueBackend> {
     backend: B,
     codec_registry: CodecRegistry,
     job_registry: JobRegistry,
     observability: ObservabilityLayer,
 }
 
-impl<B: QueueBackend> QueueEngine<B> {
+impl<B: QueueBackend> QueueAdapter<B> {
     // Enqueue job for processing (proper queue semantics)
     pub async fn enqueue<J: Job>(&self, ctx: QueueCtx, job: J) -> QueueResult<JobId> {
         // Serialize only references (BlobId, TrackId), not heavy data
@@ -370,7 +370,7 @@ impl MusicService {
 4. **job/registry.rs** - Runtime job registry
 5. **backend/mod.rs** - QueueBackend trait
 6. **backend/memory/*** - Memory backend implementation
-7. **adapter/worker.rs** - Worker loop with tracing and backoff
+7. **adapter.rs** - QueueAdapter and Worker loop with tracing and backoff
 8. **backend/memory/reaper.rs** - Lease expiry sweep
 
 ## Implementation Roadmap
