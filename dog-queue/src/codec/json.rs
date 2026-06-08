@@ -12,10 +12,15 @@ pub struct JsonCodec;
 
 impl JobCodec for JsonCodec {
     fn encode_bytes(&self, bytes: &[u8]) -> QueueResult<Vec<u8>> {
-        // Validate well-formedness before storing.
-        // `IgnoredAny` validates the JSON structure without allocating a `serde_json::Value`
-        // AST — it short-circuits after confirming the structure is valid, so no strings,
-        // arrays, or nested objects are heap-allocated just to be discarded immediately.
+        // Validates well-formedness before storing. This guard is meaningful for
+        // direct callers of `encode_bytes` (i.e. custom backend implementations).
+        //
+        // When called via `CodecRegistry::encode_job`, the input bytes are always
+        // from `serde_json::to_vec(job)` which already guarantees valid JSON, so
+        // this scan is redundant in that specific hot path. The trade-off is
+        // acceptable: encode_bytes is a public API and must defend against direct
+        // callers. `IgnoredAny` short-circuits after structure validation without
+        // allocating a Value AST, keeping the overhead minimal.
         serde_json::from_slice::<serde::de::IgnoredAny>(bytes).map_err(|e| {
             QueueError::SerializationError(format!("Payload is not valid JSON: {e}"))
         })?;

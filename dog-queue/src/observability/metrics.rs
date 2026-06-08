@@ -2,9 +2,8 @@ use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::RwLock;
 
 // ---------------------------------------------------------------------------
 // Per-type atomic counters (updated synchronously — no locks, no spawns)
@@ -65,16 +64,18 @@ pub struct LiveMetrics {
     /// Per-job-type counters. DashMap gives lock-free shard access.
     per_type: DashMap<String, PerTypeCounters>,
 
-    /// Performance timing data — kept behind an async RwLock because
-    /// callers that record execution times are already in async context.
-    performance: Arc<RwLock<PerformanceMetrics>>,
+    /// Performance timing data — kept behind a `std::sync::Mutex` because
+    /// `record_execution_time` is a synchronous write (VecDeque push + optional
+    /// pop_front — nanoseconds). Using a tokio async lock would add an unnecessary
+    /// yield point on every job completion.
+    performance: Arc<Mutex<PerformanceMetrics>>,
 }
 
 impl LiveMetrics {
     pub fn new() -> Self {
         Self {
             per_type: DashMap::new(),
-            performance: Arc::new(RwLock::new(PerformanceMetrics::new())),
+            performance: Arc::new(Mutex::new(PerformanceMetrics::new())),
         }
     }
 
@@ -164,14 +165,19 @@ impl LiveMetrics {
     // --- performance (async — timer data written from async context) -------
 
     /// Record job execution time
-    pub async fn record_execution_time(&self, job_type: &str, duration: Duration) {
-        let mut performance = self.performance.write().await;
-        performance.record_execution_time(job_type, duration);
+    pub fn record_execution_time(&self, job_type: &str, duration: Duration) {
+        self.performance
+            .lock()
+            .expect("performance metrics lock poisoned")
+            .record_execution_time(job_type, duration);
     }
 
-    /// Get performance metrics
-    pub async fn performance_metrics(&self) -> PerformanceMetrics {
-        self.performance.read().await.clone()
+    /// Get performance metrics snapshot (synchronous — Mutex, not async lock).
+    pub fn performance_metrics(&self) -> PerformanceMetrics {
+        self.performance
+            .lock()
+            .expect("performance metrics lock poisoned")
+            .clone()
     }
 }
 
@@ -214,12 +220,17 @@ impl JobTypeMetrics {
         }
     }
 
-    /// Retry rate as a percentage of enqueued jobs.
+    /// Retry event rate: retry events per terminal job (completed + failed).
+    ///
+    /// A job retried `n` times contributes `n` to `retried` but only 1 to `enqueued`,
+    /// so dividing by `enqueued` yields values above 100%. The correct denominator
+    /// is `completed + failed` (terminal jobs = total original job attempts).
     pub fn retry_rate(&self) -> f64 {
-        if self.enqueued == 0 {
+        let terminal = self.completed + self.failed;
+        if terminal == 0 {
             0.0
         } else {
-            (self.retried as f64 / self.enqueued as f64) * 100.0
+            (self.retried as f64 / terminal as f64) * 100.0
         }
     }
 }
@@ -343,8 +354,9 @@ impl MetricsCollector {
         Self { live_metrics }
     }
 
-    /// Collect a snapshot of all current metrics.
-    pub async fn collect_snapshot(&self) -> MetricsSnapshot {
+    /// Collect a snapshot of all current metrics (synchronous — all underlying
+    /// data structures now use `std::sync::Mutex` or `DashMap`, no async needed).
+    pub fn collect_snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
             timestamp: Utc::now(),
             global: GlobalMetrics {
@@ -354,9 +366,9 @@ impl MetricsCollector {
                 jobs_retried: self.live_metrics.jobs_retried(),
                 jobs_canceled: self.live_metrics.jobs_canceled(),
             },
-            // all_job_type_metrics is now synchronous — no .await needed
+            // all_job_type_metrics and performance_metrics are now synchronous
             job_types: self.live_metrics.all_job_type_metrics(),
-            performance: self.live_metrics.performance_metrics().await,
+            performance: self.live_metrics.performance_metrics(),
         }
     }
 
@@ -399,11 +411,17 @@ impl GlobalMetrics {
         }
     }
 
+    /// Retry event rate: retry events per terminal job (completed + failed).
+    ///
+    /// A job retried `n` times contributes `n` to `jobs_retried` but only 1 to
+    /// `jobs_enqueued`, so dividing by `jobs_enqueued` yields values above 100%.
+    /// The correct denominator is `jobs_completed + jobs_failed`.
     pub fn retry_rate(&self) -> f64 {
-        if self.jobs_enqueued == 0 {
+        let terminal = self.jobs_completed + self.jobs_failed;
+        if terminal == 0 {
             0.0
         } else {
-            (self.jobs_retried as f64 / self.jobs_enqueued as f64) * 100.0
+            (self.jobs_retried as f64 / terminal as f64) * 100.0
         }
     }
 
@@ -485,7 +503,12 @@ mod tests {
         };
 
         assert_eq!(global.success_rate(), 88.88888888888889);
-        assert_eq!(global.retry_rate(), 5.0);
+        // New formula: retried / (completed + failed) = 5 / (80 + 10) ≈ 5.556%
+        let expected_retry_rate = 100.0 * 5.0_f64 / 90.0_f64;
+        assert!(
+            (global.retry_rate() - expected_retry_rate).abs() < 1e-10,
+            "retry_rate expected ≈{:.4} but got {}", expected_retry_rate, global.retry_rate()
+        );
         assert_eq!(global.jobs_in_progress(), 5);
     }
 }
