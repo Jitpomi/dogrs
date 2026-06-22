@@ -1,0 +1,23 @@
+[package]
+name = "iot-devices"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dog-core = { path = "../../dog-core", features = ["json"] }
+dog-transport = { path = "../../dog-transport", features = ["http"] }
+axum = { version = "0.8.9", features = ["macros", "json", "ws"] }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "time"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+anyhow = "1"
+async-trait = "0.1"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
+uuid = { version = "1.23.2", features = ["v4", "serde"] }
+tower = "0.5.3"
+tower-http = { version = "0.6.11", features = ["fs", "cors"] }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DogRS IoT Device Controller</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glow-bg bg-1"></div>
+    <div class="glow-bg bg-2"></div>
+
+    <div class="app-container">
+        <!-- HEADER -->
+        <header class="glass-panel">
+            <div class="brand">
+                <span class="logo-dot"></span>
+                <h1>DogRS <span>IoT Control</span></h1>
+            </div>
+            
+            <div class="connection-status">
+                <div id="rest-status" class="status-badge rest">
+                    <span class="status-indicator"></span>
+                    REST API
+                </div>
+                <div id="ws-status" class="status-badge ws disconnected">
+                    <span class="status-indicator animate-pulse"></span>
+                    WebSocket
+                </div>
+            </div>
+
+            <button id="btn-add-device" class="btn primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                Register Device
+            </button>
+        </header>
+
+        <!-- STATS SECTION -->
+        <section class="stats-row">
+            <div class="stat-card glass-panel">
+                <div class="stat-icon total">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-label">Total Devices</span>
+                    <h3 id="stat-total" class="stat-value">-</h3>
+                </div>
+            </div>
+            <div class="stat-card glass-panel">
+                <div class="stat-icon online">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-label">Online Status</span>
+                    <h3 id="stat-online" class="stat-value">-</h3>
+                </div>
+            </div>
+            <div class="stat-card glass-panel">
+                <div class="stat-icon temperature">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/></svg>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-label">Average Temp</span>
+                    <h3 id="stat-temp" class="stat-value">-</h3>
+                </div>
+            </div>
+        </section>
+
+        <!-- MAIN DEVICE GRID -->
+        <main class="devices-section">
+            <div class="section-header">
+                <h2>Connected Devices</h2>
+                <span class="pulse-ring"></span>
+            </div>
+            <div id="devices-grid" class="devices-grid">
+                <!-- Dynamically populated -->
+                <div class="loading-state">
+                    <div class="spinner"></div>
+                    <p>Fetching devices list...</p>
+                </div>
+            </div>
+        </main>
+
+        <!-- LIVE EVENT CONSOLE -->
+        <footer class="console-section glass-panel">
+            <div class="console-header">
+                <div class="title-wrap">
+                    <span class="terminal-dot"></span>
+                    <h3>Transport Event Console</h3>
+                </div>
+                <button id="btn-clear-console" class="btn text">Clear logs</button>
+            </div>
+            <div id="console-logs" class="console-logs">
+                <div class="log-line system">Console initialized. Ready for transport packet monitoring...</div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- REGISTER MODAL -->
+    <div id="modal-container" class="modal-overlay">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h2>Register New Device</h2>
+                <button id="btn-close-modal" class="btn-close">&times;</button>
+            </div>
+            <form id="add-device-form">
+                <div class="form-group">
+                    <label for="device-name">Device Name</label>
+                    <input type="text" id="device-name" placeholder="e.g. Living Room TV" required autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="device-type">Device Type</label>
+                    <select id="device-type">
+                        <option value="light">Smart Bulb (Toggle)</option>
+                        <option value="lock">Smart Lock (Toggle)</option>
+                        <option value="thermostat">Thermostat (Range)</option>
+                    </select>
+                </div>
+                <div class="form-group val-input-group" id="initial-val-group">
+                    <label for="device-value">Initial Value</label>
+                    <!-- Toggled dynamically by JS -->
+                    <input type="text" id="device-value" placeholder="e.g. 22.0 or off" required autocomplete="off">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" id="btn-cancel" class="btn text">Cancel</button>
+                    <button type="submit" class="btn primary">Register</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

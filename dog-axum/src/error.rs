@@ -14,6 +14,12 @@ impl From<anyhow::Error> for DogAxumError {
     }
 }
 
+impl From<DogError> for DogAxumError {
+    fn from(e: DogError) -> Self {
+        Self(anyhow::Error::new(e))
+    }
+}
+
 impl IntoResponse for DogAxumError {
     fn into_response(self) -> Response {
         // If it’s a DogError (even if wrapped by anyhow contexts), preserve Feathers-ish fields

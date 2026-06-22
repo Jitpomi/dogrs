@@ -341,6 +341,102 @@ where
     }
 }
 
+#[cfg(feature = "json")]
+impl<R, P> DogApp<R, P>
+where
+    R: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+    P: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + Clone + 'static,
+{
+    pub async fn handle(&self, req: crate::DogRequest) -> Result<crate::DogResponse, crate::DogError> {
+        let svc = self.service(&req.service).map_err(|e| crate::DogError::not_found(e.to_string()))?;
+        let tenant = req.tenant;
+        let params: P = req.params.deserialize().map_err(|e| crate::DogError::bad_request(format!("Invalid params: {}", e)))?;
+
+        match req.method {
+            crate::DogMethod::Find => {
+                let records = svc.find(tenant, params).await.map_err(crate::DogError::normalize)?;
+                let payload = serde_json::to_value(records).map_err(|e| crate::DogError::general_error(e.to_string()))?;
+                Ok(crate::DogResponse {
+                    payload: Some(payload),
+                    metadata: HashMap::new(),
+                })
+            }
+            crate::DogMethod::Get => {
+                let id = req.id.ok_or_else(|| crate::DogError::bad_request("ID is required for get"))?;
+                let record = svc.get(tenant, &id, params).await.map_err(crate::DogError::normalize)?;
+                let payload = serde_json::to_value(record).map_err(|e| crate::DogError::general_error(e.to_string()))?;
+                Ok(crate::DogResponse {
+                    payload: Some(payload),
+                    metadata: HashMap::new(),
+                })
+            }
+            crate::DogMethod::Create => {
+                let payload_val = req.payload.ok_or_else(|| crate::DogError::bad_request("Payload is required for create"))?;
+                let data: R = serde_json::from_value(payload_val).map_err(|e| crate::DogError::bad_request(format!("Invalid payload: {}", e)))?;
+                let record = svc.create(tenant, data, params).await.map_err(crate::DogError::normalize)?;
+                let payload = serde_json::to_value(record).map_err(|e| crate::DogError::general_error(e.to_string()))?;
+                Ok(crate::DogResponse {
+                    payload: Some(payload),
+                    metadata: HashMap::new(),
+                })
+            }
+            crate::DogMethod::Update => {
+                let id = req.id.ok_or_else(|| crate::DogError::bad_request("ID is required for update"))?;
+                let payload_val = req.payload.ok_or_else(|| crate::DogError::bad_request("Payload is required for update"))?;
+                let data: R = serde_json::from_value(payload_val).map_err(|e| crate::DogError::bad_request(format!("Invalid payload: {}", e)))?;
+                let record = svc.update(tenant, &id, data, params).await.map_err(crate::DogError::normalize)?;
+                let payload = serde_json::to_value(record).map_err(|e| crate::DogError::general_error(e.to_string()))?;
+                Ok(crate::DogResponse {
+                    payload: Some(payload),
+                    metadata: HashMap::new(),
+                })
+            }
+            crate::DogMethod::Patch => {
+                let payload_val = req.payload.ok_or_else(|| crate::DogError::bad_request("Payload is required for patch"))?;
+                let data: R = serde_json::from_value(payload_val).map_err(|e| crate::DogError::bad_request(format!("Invalid payload: {}", e)))?;
+                let record = svc.patch(tenant, req.id.as_deref(), data, params).await.map_err(crate::DogError::normalize)?;
+                let payload = serde_json::to_value(record).map_err(|e| crate::DogError::general_error(e.to_string()))?;
+                Ok(crate::DogResponse {
+                    payload: Some(payload),
+                    metadata: HashMap::new(),
+                })
+            }
+            crate::DogMethod::Remove => {
+                let record = svc.remove(tenant, req.id.as_deref(), params).await.map_err(crate::DogError::normalize)?;
+                let payload = serde_json::to_value(record).map_err(|e| crate::DogError::general_error(e.to_string()))?;
+                Ok(crate::DogResponse {
+                    payload: Some(payload),
+                    metadata: HashMap::new(),
+                })
+            }
+            crate::DogMethod::Custom(method_name) => {
+                let capabilities = svc.inner().capabilities();
+                let static_name = capabilities.allowed_methods.iter().find_map(|m| match m {
+                    crate::ServiceMethodKind::Custom(name) if name.eq_ignore_ascii_case(&method_name) => Some(*name),
+                    _ => None,
+                }).ok_or_else(|| {
+                    crate::DogError::method_not_allowed(format!(
+                        "Service '{}' does not support custom method '{}'",
+                        req.service, method_name
+                    ))
+                })?;
+
+                let data = match req.payload {
+                    Some(val) => Some(serde_json::from_value(val).map_err(|e| crate::DogError::bad_request(format!("Invalid payload: {}", e)))?),
+                    None => None,
+                };
+
+                let record = svc.custom(tenant, static_name, data, params).await.map_err(crate::DogError::normalize)?;
+                let payload = serde_json::to_value(record).map_err(|e| crate::DogError::general_error(e.to_string()))?;
+                Ok(crate::DogResponse {
+                    payload: Some(payload),
+                    metadata: HashMap::new(),
+                })
+            }
+        }
+    }
+}
+
 impl<R, P> DogApp<R, P>
 where
     R: Send + 'static,

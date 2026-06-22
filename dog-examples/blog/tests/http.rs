@@ -1,21 +1,76 @@
-use axum::body::Body;
-use axum::http::Request;
-use blog_axum::build;
-use http_body_util::BodyExt;
+use poem::{Body, Endpoint, Response};
+use http::Request;
+use blog::build;
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
-async fn json_body(res: axum::response::Response) -> Value {
-    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+dog_transport::declare_adapter!(poem, to_endpoint, blog::BlogParams);
+
+#[poem::handler]
+fn health_handler() -> &'static str {
+    "ok"
+}
+
+async fn build_router() -> std::sync::Arc<poem::Route> {
+    let (_dog, http_service) = build().await.unwrap();
+    let router = poem::Route::new()
+        .at("/health", poem::get(health_handler))
+        .nest("/", to_endpoint(http_service));
+    std::sync::Arc::new(router)
+}
+
+trait RouteOneshot {
+    async fn oneshot(&self, req: Request<Body>) -> Result<Response, std::convert::Infallible>;
+}
+
+impl RouteOneshot for std::sync::Arc<poem::Route> {
+    async fn oneshot(&self, req: Request<Body>) -> Result<Response, std::convert::Infallible> {
+        let (parts, body) = req.into_parts();
+        let mut builder = poem::Request::builder()
+            .method(parts.method)
+            .uri(parts.uri)
+            .version(parts.version);
+        
+        for (k, v) in parts.headers {
+            if let Some(key) = k {
+                builder = builder.header(key, v);
+            }
+        }
+        
+        let req = builder.body(body);
+        let res = self.call(req).await.unwrap();
+        Ok(res)
+    }
+}
+
+pub trait CollectCompat {
+    async fn collect(self) -> Result<CollectedBytes, std::convert::Infallible>;
+}
+
+pub struct CollectedBytes(Vec<u8>);
+
+impl CollectedBytes {
+    pub fn to_bytes(self) -> bytes::Bytes {
+        bytes::Bytes::from(self.0)
+    }
+}
+
+impl CollectCompat for poem::Body {
+    async fn collect(self) -> Result<CollectedBytes, std::convert::Infallible> {
+        let bytes = self.into_vec().await.unwrap();
+        Ok(CollectedBytes(bytes))
+    }
+}
+
+async fn json_body(res: Response) -> Value {
+    let bytes = res.into_body().into_vec().await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 
 #[tokio::test]
 async fn health_ok() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -33,10 +88,9 @@ async fn health_ok() {
 
 #[tokio::test]
 async fn posts_create_missing_title_is_422() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -57,10 +111,9 @@ async fn posts_create_missing_title_is_422() {
 
 #[tokio::test]
 async fn posts_create_defaults_published_false_and_sets_request_id() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -83,11 +136,10 @@ async fn posts_create_defaults_published_false_and_sets_request_id() {
 
 #[tokio::test]
 async fn posts_find_respects_include_drafts_query_param() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
     // draft
-    let _ = ax
-        .router
+    let _ = router
         .clone()
         .oneshot(
             Request::builder()
@@ -101,8 +153,7 @@ async fn posts_find_respects_include_drafts_query_param() {
         .unwrap();
 
     // published
-    let _ = ax
-        .router
+    let _ = router
         .clone()
         .oneshot(
             Request::builder()
@@ -118,8 +169,7 @@ async fn posts_find_respects_include_drafts_query_param() {
         .unwrap();
 
     // Default: do not include drafts
-    let res = ax
-        .router
+    let res = router
         .clone()
         .oneshot(
             Request::builder()
@@ -135,8 +185,7 @@ async fn posts_find_respects_include_drafts_query_param() {
     assert_eq!(body.as_array().unwrap().len(), 1);
 
     // Explicitly include drafts
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -153,11 +202,10 @@ async fn posts_find_respects_include_drafts_query_param() {
 
 #[tokio::test]
 async fn posts_are_isolated_by_tenant() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
     // Create a published post in tenant A
-    let _ = ax
-        .router
+    let _ = router
         .clone()
         .oneshot(
             Request::builder()
@@ -174,8 +222,7 @@ async fn posts_are_isolated_by_tenant() {
         .unwrap();
 
     // Tenant A can see it
-    let res = ax
-        .router
+    let res = router
         .clone()
         .oneshot(
             Request::builder()
@@ -192,8 +239,7 @@ async fn posts_are_isolated_by_tenant() {
     assert_eq!(body.as_array().unwrap().len(), 1);
 
     // Tenant B cannot see tenant A's post
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -211,10 +257,9 @@ async fn posts_are_isolated_by_tenant() {
 
 #[tokio::test]
 async fn posts_create_with_invalid_author_id_is_422() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -236,11 +281,10 @@ async fn posts_create_with_invalid_author_id_is_422() {
 
 #[tokio::test]
 async fn posts_find_expand_author_embeds_author() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
     // Create author
-    let author_res = ax
-        .router
+    let author_res = router
         .clone()
         .oneshot(
             Request::builder()
@@ -259,8 +303,7 @@ async fn posts_find_expand_author_embeds_author() {
     let author_id = author["id"].as_str().unwrap().to_string();
 
     // Create post referencing author
-    let post_res = ax
-        .router
+    let post_res = router
         .clone()
         .oneshot(
             Request::builder()
@@ -278,8 +321,7 @@ async fn posts_find_expand_author_embeds_author() {
     assert_eq!(post_res.status().as_u16(), 200);
 
     // Find with expand
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -298,11 +340,10 @@ async fn posts_find_expand_author_embeds_author() {
 
 #[tokio::test]
 async fn authors_on_delete_restrict_blocks_when_posts_reference() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
     // Create author
-    let author_res = ax
-        .router
+    let author_res = router
         .clone()
         .oneshot(
             Request::builder()
@@ -320,8 +361,7 @@ async fn authors_on_delete_restrict_blocks_when_posts_reference() {
     let author_id = author["id"].as_str().unwrap().to_string();
 
     // Create published post referencing author
-    let _ = ax
-        .router
+    let _ = router
         .clone()
         .oneshot(
             Request::builder()
@@ -338,8 +378,7 @@ async fn authors_on_delete_restrict_blocks_when_posts_reference() {
         .unwrap();
 
     // Attempt delete with restrict
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("DELETE")
@@ -355,10 +394,9 @@ async fn authors_on_delete_restrict_blocks_when_posts_reference() {
 
 #[tokio::test]
 async fn authors_on_delete_cascade_removes_posts() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
-    let author_res = ax
-        .router
+    let author_res = router
         .clone()
         .oneshot(
             Request::builder()
@@ -375,8 +413,7 @@ async fn authors_on_delete_cascade_removes_posts() {
     let author = json_body(author_res).await;
     let author_id = author["id"].as_str().unwrap().to_string();
 
-    let _ = ax
-        .router
+    let _ = router
         .clone()
         .oneshot(
             Request::builder()
@@ -392,8 +429,7 @@ async fn authors_on_delete_cascade_removes_posts() {
         .await
         .unwrap();
 
-    let res = ax
-        .router
+    let res = router
         .clone()
         .oneshot(
             Request::builder()
@@ -406,8 +442,7 @@ async fn authors_on_delete_cascade_removes_posts() {
         .unwrap();
     assert_eq!(res.status().as_u16(), 200);
 
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -424,10 +459,9 @@ async fn authors_on_delete_cascade_removes_posts() {
 
 #[tokio::test]
 async fn authors_on_delete_nullify_clears_author_id_on_posts() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
-    let author_res = ax
-        .router
+    let author_res = router
         .clone()
         .oneshot(
             Request::builder()
@@ -444,8 +478,7 @@ async fn authors_on_delete_nullify_clears_author_id_on_posts() {
     let author = json_body(author_res).await;
     let author_id = author["id"].as_str().unwrap().to_string();
 
-    let _ = ax
-        .router
+    let _ = router
         .clone()
         .oneshot(
             Request::builder()
@@ -461,8 +494,7 @@ async fn authors_on_delete_nullify_clears_author_id_on_posts() {
         .await
         .unwrap();
 
-    let res = ax
-        .router
+    let res = router
         .clone()
         .oneshot(
             Request::builder()
@@ -475,8 +507,7 @@ async fn authors_on_delete_nullify_clears_author_id_on_posts() {
         .unwrap();
     assert_eq!(res.status().as_u16(), 200);
 
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("GET")
@@ -495,10 +526,9 @@ async fn authors_on_delete_nullify_clears_author_id_on_posts() {
 
 #[tokio::test]
 async fn authors_nested_validation_errors_have_world_class_paths() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -527,10 +557,9 @@ async fn authors_nested_validation_errors_have_world_class_paths() {
 
 #[tokio::test]
 async fn authors_create_missing_name_is_422() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -551,10 +580,9 @@ async fn authors_create_missing_name_is_422() {
 
 #[tokio::test]
 async fn authors_are_isolated_by_tenant() {
-    let ax = build().await.unwrap();
+    let router = build_router().await;
 
-    let _ = ax
-        .router
+    let _ = router
         .clone()
         .oneshot(
             Request::builder()
@@ -570,8 +598,7 @@ async fn authors_are_isolated_by_tenant() {
         .await
         .unwrap();
 
-    let res = ax
-        .router
+    let res = router
         .clone()
         .oneshot(
             Request::builder()
@@ -587,8 +614,7 @@ async fn authors_are_isolated_by_tenant() {
     let body = json_body(res).await;
     assert_eq!(body.as_array().unwrap().len(), 1);
 
-    let res = ax
-        .router
+    let res = router
         .oneshot(
             Request::builder()
                 .method("GET")

@@ -117,10 +117,12 @@ At the heart of `dog-core` is the `DogService` trait. It defines standard CRUD i
 ```mermaid
 graph TD
     %% Adapters
-    HTTP["dog-axum<br>(REST)"] --> |"GET /users"| DS
-    WS["dog-realtime<br>(WebSocket)"] --> |"emit('find', 'users')"| DS
-    GRPC["Custom gRPC"] --> |"FindUsers()"| DS
-    Internal["dog-queue<br>(Background)"] --> |"app.service.find()"| DS
+    Axum["Axum (nest_service)"] --> |"http::Request"| DHS["DogHttpService"]
+    Poem["Poem Route"] --> |"http::Request"| DHS
+    WS["WebSocket / SSE"] --> |"DogRequest"| DHS
+    Internal["dog-queue / CLI"] --> |"Direct Service Call"| DS
+    
+    DHS --> |"DogRequest"| DS
     
     %% Core Service
     subgraph "DogRS Core"
@@ -190,14 +192,14 @@ Applications can subscribe to these events to trigger background jobs, sync cach
 
 ## 6. The DogRS Ecosystem
 
-`dog-core` is the engine, but it is designed to be plugged into adapter crates to actually expose your services to the world.
+`dog-core` is the engine, exposing unified interfaces that web frameworks can plug into natively.
 
-### Core Engine
-- **`dog-core`**: The transport-agnostic engine, DI container, and Hooks pipeline (You are here).
-
-### Adapters (Networking)
-- **`dog-axum`**: The HTTP layer that automatically mounts your services as REST endpoints using the Axum web framework.
-- **`dog-realtime`** *(Upcoming)*: WebSocket and SSE streaming for realtime service events.
+### Core Engine & Transports
+- **`dog-core`**: The transport-agnostic engine, DI container, and Hooks pipeline. Exposes:
+  - `DogRequest` & `DogResponse`
+  - `feature = "tower"`: `impl tower::Service<DogRequest> for DogApp`
+  - `feature = "http"`: `DogHttpService` implementing `tower::Service<http::Request<B>>` for framework-agnostic HTTP routing.
+- **`dog-realtime`**: A protocol-agnostic event routing service. WebSockets, SSE, and gRPC channels plug in as delivery mechanisms to route and stream these events.
 
 ### Authentication & Identity
 - **`dog-auth`**: Core authentication hooks and JWT management.

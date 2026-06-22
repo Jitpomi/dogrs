@@ -1,7 +1,7 @@
 use crate::services::FleetParams;
 use async_trait::async_trait;
 use dog_core::tenant::TenantContext;
-use dog_queue::prelude::*;
+use dog_queue::{Job, JobError, JobPriority};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,9 +30,10 @@ impl Job for ComplianceMonitoringJob {
     const PRIORITY: JobPriority = JobPriority::High;
     const MAX_RETRIES: u32 = 3;
 
-    async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
+    async fn execute(&self, ctx: Self::Context) -> std::result::Result<Self::Result, JobError> {
         let tenant_ctx = TenantContext::new(ctx.tenant_id.clone());
-        let params = FleetParams::default();
+        let mut params = FleetParams::default();
+        params.path = "/operations".to_string();
 
         let operations_service = ctx
             .app

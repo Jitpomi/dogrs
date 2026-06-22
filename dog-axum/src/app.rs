@@ -158,8 +158,8 @@ where
 
     pub fn use_service(self, path: &'static str, service: Arc<dyn DogService<R, P>>) -> Self
     where
-        R: Serialize + DeserializeOwned,
-        P: FromRestParams,
+        R: Serialize + DeserializeOwned + Send + Sync + 'static,
+        P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
     {
         let name = path.trim_start_matches('/');
         self.use_service_as(path, name, service)
@@ -182,8 +182,8 @@ where
         service: Arc<dyn DogService<R, P>>,
     ) -> Self
     where
-        R: Serialize + DeserializeOwned,
-        P: FromRestParams,
+        R: Serialize + DeserializeOwned + Send + Sync + 'static,
+        P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
     {
         // Register the service so it can be resolved at request time.
         self.app.register_service(service_name, service);
@@ -207,8 +207,8 @@ where
         middleware: L,
     ) -> Self
     where
-        R: Serialize + DeserializeOwned,
-        P: FromRestParams,
+        R: Serialize + DeserializeOwned + Send + Sync + 'static,
+        P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
         L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
         L::Service:
             tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,
@@ -227,8 +227,8 @@ where
         middleware: L,
     ) -> Self
     where
-        R: Serialize + DeserializeOwned,
-        P: FromRestParams,
+        R: Serialize + DeserializeOwned + Send + Sync + 'static,
+        P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
         L: tower::layer::Layer<axum::routing::Route> + Clone + Send + Sync + 'static,
         L::Service:
             tower::Service<Request<Body>, Response = Response> + Clone + Send + Sync + 'static,

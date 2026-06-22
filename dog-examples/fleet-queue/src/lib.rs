@@ -6,12 +6,13 @@ pub mod hooks;
 pub mod services;
 pub mod typedb;
 
-use dog_axum::AxumApp;
 use serde_json::Value;
 pub use services::FleetParams;
 use std::sync::Arc;
+use dog_core::DogApp;
+use dog_transport::{HttpOptions, IntoDogService, http::DogHttpService};
 
-pub async fn build() -> anyhow::Result<AxumApp<Value, FleetParams>> {
+pub async fn build() -> anyhow::Result<(DogApp<Value, FleetParams>, DogHttpService<Value, FleetParams>)> {
     let mut builder = app::build_builder().await?;
 
     let state = builder
@@ -28,43 +29,30 @@ pub async fn build() -> anyhow::Result<AxumApp<Value, FleetParams>> {
         Arc::clone(&background_system),
     )?;
 
+    // Configure the channels pub/sub system
+    crate::channels::configure(&mut builder)?;
+
+    // Store background system in app state for access within background jobs
+    builder.set("background_system", Arc::clone(&background_system));
+
     // Build the app (moves the builder)
     let dog_app = builder.build();
-    let mut ax = dog_axum::axum(dog_app.clone())
-        .use_service("/vehicles", _svcs.vehicles)
-        .use_service("/deliveries", _svcs.deliveries)
-        .use_service("/operations", _svcs.operations)
-        .use_service("/employees", _svcs.employees)
-        .use_service("/tomtom", _svcs.tomtom)
-        .use_service("/jobs", _svcs.jobs)
-        .use_service("/rules", _svcs.rules)
-        .use_service("/certifications", _svcs.certifications)
-        .service("/health", || async { "ok" })
-        .service("/config", || async {
-            // TomTom map API keys are intentionally served to the browser.
-            // Map SDK clients (Leaflet/MapLibre + TomTom plugin) require the key
-            // client-side to render tiles. This is expected behaviour for map keys.
-            //
-            // PRODUCTION SECURITY: Restrict this key to known domains in the
-            // TomTom Developer Portal (API Key → Referrer restrictions) so that
-            // the key cannot be used from arbitrary origins even if intercepted.
-            let key = std::env::var("TOMTOM_API_KEY").unwrap_or_default();
-            format!("{{\"tomtomApiKey\":\"{}\"}}", key)
-        });
+
+    let http_service = dog_app.clone().into_service(
+        HttpOptions::default()
+            .tenant_header("x-tenant-id")
+            .route("/vehicles", "vehicles")
+            .route("/deliveries", "deliveries")
+            .route("/operations", "operations")
+            .route("/employees", "employees")
+            .route("/tomtom", "tomtom")
+            .route("/jobs", "jobs")
+            .route("/rules", "rules")
+            .route("/certifications", "certifications")
+    );
 
     // Start background system with built app
-    background_system.start(dog_app).await?;
+    background_system.start(dog_app.clone()).await?;
 
-    // Add CORS middleware to allow browser requests
-    ax.router = ax
-        .router
-        .layer(
-            tower_http::cors::CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any),
-        )
-        .fallback_service(tower_http::services::ServeDir::new("static"));
-
-    Ok(ax)
+    Ok((dog_app, http_service))
 }

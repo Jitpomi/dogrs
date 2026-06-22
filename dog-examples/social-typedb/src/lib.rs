@@ -1,43 +1,34 @@
-mod app;
-mod channels;
-mod hooks;
-mod services;
-mod typedb;
+pub mod app;
+pub mod channels;
+pub mod hooks;
+pub mod services;
+pub mod typedb;
 
-use dog_axum::AxumApp;
+use dog_core::DogApp;
+use dog_transport::{IntoDogService, http::DogHttpService};
 use serde_json::Value;
 pub use services::SocialParams;
 use std::sync::Arc;
 
-pub async fn build() -> anyhow::Result<AxumApp<Value, SocialParams>> {
+pub async fn build() -> anyhow::Result<(DogApp<Value, SocialParams>, DogHttpService<Value, SocialParams>)> {
     let mut builder = app::build_builder().await?;
 
     let state = builder
         .get::<Arc<typedb::TypeDBState>>("typedb")
         .ok_or(anyhow::anyhow!("TypeDBState not found"))?;
 
-    let svcs = services::configure(&mut builder, Arc::clone(&state))?;
+    services::configure(&mut builder, Arc::clone(&state))?;
 
-    let mut ax = dog_axum::axum(builder.build())
-        .use_service("/persons", svcs.persons)
-        .use_service("/organizations", svcs.organizations)
-        .use_service("/groups", svcs.groups)
-        .use_service("/posts", svcs.posts)
-        .use_service("/comments", svcs.comments)
-        .service("/health", || async { "ok" });
+    let dog = builder.build();
 
-    // Add CORS middleware to allow browser requests
-    ax.router = ax
-        .router
-        .layer(
-            tower_http::cors::CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any),
-        )
-        .fallback_service(tower_http::services::ServeDir::new(
-            "dog-examples/social-typedb/static",
-        ));
+    let http_service = dog.clone().into_service(
+        dog_transport::HttpOptions::default()
+            .route("/persons", "persons")
+            .route("/organizations", "organizations")
+            .route("/groups", "groups")
+            .route("/posts", "posts")
+            .route("/comments", "comments")
+    );
 
-    Ok(ax)
+    Ok((dog, http_service))
 }

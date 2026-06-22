@@ -12,6 +12,9 @@ pub mod tenant;
 #[cfg(feature = "adapters")]
 pub mod adapters;
 
+#[cfg(feature = "json")]
+pub mod transport;
+
 // Branch: DogAppBuilder, ServiceHandle, ServiceBuilderHandle (builder-pattern refactor)
 // Main: ErrorValue, DogValue re-exports (format-agnostic serde PR)
 pub use app::{DogApp, DogAppBuilder, ServiceBuilderHandle, ServiceCaller, ServiceHandle};
@@ -27,3 +30,8 @@ pub use hooks::{
 pub use registry::DogServiceRegistry;
 pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};
 pub use tenant::{TenantContext, TenantId};
+
+#[cfg(feature = "json")]
+pub use transport::{
+    DogMethod, DogParams, DogRequest, DogResponse, DogTransportKind,
+};

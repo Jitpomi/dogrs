@@ -86,14 +86,24 @@ mod tests;
 // Optional advanced features (placeholder for future implementation)
 // #[cfg(feature = "workflows")]
 // pub mod workflow;
-
 // #[cfg(feature = "scheduling")]
 // pub mod scheduling;
 
-// Core API exports - standardize on QueueAdapter for DogRS consistency
+#[cfg(feature = "cron-scheduling")]
+pub mod scheduling;
+
+#[cfg(feature = "cron-scheduling")]
+pub use scheduling::Schedule;
+#[cfg(feature = "cron-scheduling")]
+pub use scheduling::Scheduler;
+
 pub use adapter::QueueAdapter;
 pub use adapter::{QueueConfig, WorkerHandle};
 pub use backend::QueueBackend;
+#[cfg(feature = "redis")]
+pub use backend::redis::RedisBackend;
+#[cfg(feature = "postgres")]
+pub use backend::postgres::PostgresBackend;
 pub use codec::json::JsonCodec;
 pub use codec::{CodecRegistry, EnqueueOptions, JobCodec};
 pub use error::{JobError, QueueError, QueueResult};
@@ -106,16 +116,6 @@ pub use types::{
 // Observability exports
 pub use observability::{LiveMetrics, ObservabilityLayer, PerformanceAnalytics};
 
-// Optional feature exports
-#[cfg(feature = "cron-scheduling")]
-// pub use scheduling::{Schedule, Scheduler};
-
-// Backend implementations
-#[cfg(feature = "redis")]
-// pub use backend::redis::RedisBackend;
-
-#[cfg(feature = "postgres")]
-// pub use backend::postgres::PostgresBackend;
 
 #[cfg(feature = "sqlite")]
 // pub use backend::sqlite::SqliteBackend;
@@ -157,6 +157,6 @@ pub mod prelude {
     // #[cfg(feature = "workflows")]
     // pub use crate::{Workflow, WorkflowBuilder};
 
-    // #[cfg(feature = "scheduling")]
-    // pub use crate::{Schedule, Scheduler};
+    #[cfg(feature = "cron-scheduling")]
+    pub use crate::{Schedule, Scheduler};
 }

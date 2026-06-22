@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use axum::extract::{OriginalUri, Query};
 use axum::http::HeaderMap;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::params::FromRestParams;
@@ -75,7 +76,7 @@ pub fn mount_oauth_routes<P, Q, F>(
     cfg: OAuthRoutes<Q, F>,
 ) -> AxumApp<Value, P>
 where
-    P: FromRestParams + Send + Sync + Clone + 'static,
+    P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
     Q: DeserializeOwned + serde::Serialize + Clone + Send + Sync + 'static,
     F: Fn(&Q) -> Value + Clone + Send + Sync + 'static,
 {

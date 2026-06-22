@@ -30,6 +30,11 @@ pub struct BeforeWrite;
 impl DogBeforeHook<Value, FleetParams> for BeforeWrite {
     async fn run(&self, _ctx: &mut HookContext<Value, FleetParams>) -> Result<()> {
         // Validate delivery data before creation/update
+        if let Some(data) = &_ctx.data {
+            if data.get("query").is_some() {
+                return Ok(());
+            }
+        }
         if let Some(delivery_data) = _ctx.data.as_ref().and_then(|v| v.as_object()) {
             // Validate required fields
             if !delivery_data.contains_key("pickup-address") {

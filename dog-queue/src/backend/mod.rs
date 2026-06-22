@@ -1,5 +1,26 @@
 pub mod memory;
 
+#[cfg(feature = "redis")]
+pub mod redis;
+
+#[cfg(feature = "postgres")]
+pub mod postgres;
+
+#[cfg(feature = "rabbitmq")]
+pub mod rabbitmq;
+
+#[cfg(feature = "kafka")]
+pub mod kafka;
+
+#[cfg(feature = "aws-sqs")]
+pub mod aws_sqs;
+
+#[cfg(feature = "gcp-pubsub")]
+pub mod gcp_pubsub;
+
+#[cfg(feature = "nats")]
+pub mod nats;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures_core::Stream;

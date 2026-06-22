@@ -6,7 +6,8 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-dog-axum = { path = "../../dog-axum" }
+dog-transport = { path = "../../dog-transport", features = ["http"] }
+axum = { version = "0.8.9", features = ["macros", "json"] }
 dog-core = { path = "../../dog-core", features = ["json", "adapters"] }
 dog-schema = { path = "../../dog-schema" }
 dog-typedb = { path = "../../dog-typedb" }

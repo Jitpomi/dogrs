@@ -12,18 +12,10 @@ pub mod messages;
 pub mod oauth;
 pub mod users;
 
-pub struct AuthServices {
-    pub messages: Arc<dyn DogService<Value, AuthDemoParams>>,
-    pub users: Arc<dyn DogService<Value, AuthDemoParams>>,
-    pub auth_svc: Arc<dyn DogService<Value, AuthDemoParams>>,
-    pub oauth: Arc<dyn DogService<Value, AuthDemoParams>>,
-    pub oauth_raw: Arc<oauth::OauthService>,
-}
-
 pub fn configure(
     builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>,
     auth_adapter: Arc<dog_auth::AuthServiceAdapter<AuthDemoParams>>,
-) -> Result<AuthServices> {
+) -> Result<Arc<oauth::OauthService>> {
     let auth_core = auth_adapter.auth().clone();
     // Create and register message service
     let messages: Arc<dyn DogService<Value, AuthDemoParams>> =
@@ -36,7 +28,7 @@ pub fn configure(
     users::users_shared::register_hooks(builder, auth_core.clone())?;
 
     // Register authentication hooks
-    let auth_svc: Arc<dyn DogService<Value, AuthDemoParams>> = auth_adapter as _;
+    let _auth_svc: Arc<dyn DogService<Value, AuthDemoParams>> = auth_adapter as _;
     authentication::authentication_shared::register_hooks(builder)?;
 
     // Register oauth service
@@ -45,11 +37,5 @@ pub fn configure(
     builder.register_service("oauth", Arc::clone(&oauth));
     oauth::oauth_shared::register_hooks(builder)?;
 
-    Ok(AuthServices {
-        messages,
-        users,
-        auth_svc,
-        oauth,
-        oauth_raw,
-    })
+    Ok(oauth_raw)
 }

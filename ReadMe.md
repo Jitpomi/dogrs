@@ -25,7 +25,7 @@ DogRS is inspired by the simplicity of FeathersJS, but designed for Rust. It pro
 graph TD
     %% Adapters
     subgraph "Adapters (The Outside World)"
-        HTTP["dog-axum<br>(HTTP REST)"]
+        HTTP["dog-transport<br>(HTTP REST)"]
         WS["dog-realtime<br>(WebSockets)"]
         CLI["Custom CLI"]
     end
@@ -70,7 +70,7 @@ All DogRS crates are available on [crates.io](https://crates.io):
 - **[dog-core](https://crates.io/crates/dog-core)** → The framework-agnostic core (services, hooks, tenant contexts).
 
 ### Web & Realtime Adapters
-- **[dog-axum](https://crates.io/crates/dog-axum)** → Mount your services as HTTP REST endpoints using Axum.
+- **[dog-transport](https://crates.io/crates/dog-transport)** → Pluggable transport adapters for HTTP (Axum), gRPC (Tonic), and WebSockets.
 - **dog-realtime** *(Upcoming)* → WebSocket and SSE streaming for realtime service events.
 
 ### Data & Infrastructure
@@ -95,8 +95,8 @@ Add DogRS crates to your project:
 # Core framework
 cargo add dog-core
 
-# Web development with Axum
-cargo add dog-axum dog-core
+# Web development with Axum/gRPC/WebSockets
+cargo add dog-transport dog-core
 
 # Background jobs
 cargo add dog-queue
@@ -111,8 +111,11 @@ cargo add dog-queue
 
 Check the `dog-examples/` directory for full working applications:
 - `auth-demo` → End-to-end OAuth2 login flow.
+- `blog` → Multi-tenant REST API with request/response validation.
 - `fleet-queue` → TypeDB and Axum integration.
 - `music-blobs` → Realtime streaming and blob storage.
+- `social-typedb` → Social graph with TypeDB integration.
+- `iot-devices` → Smart Home IoT Hub exposing REST and WebSockets with a live glassmorphic dashboard.
 
 ## Status
 
