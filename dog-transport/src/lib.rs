@@ -111,8 +111,53 @@ impl CliOptions {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IrohOptions {
+    pub alpn: Vec<u8>,
+    pub secret_key: Option<String>,
+    pub relay_url: Option<String>,
+    #[serde(skip)]
+    pub endpoint: Option<iroh::Endpoint>,
+}
+
+impl IrohOptions {
+    pub fn new(alpn: impl Into<Vec<u8>>) -> Self {
+        Self {
+            alpn: alpn.into(),
+            secret_key: None,
+            relay_url: None,
+            endpoint: None,
+        }
+    }
+
+    pub fn secret_key(mut self, key: impl Into<String>) -> Self {
+        self.secret_key = Some(key.into());
+        self
+    }
+
+    pub fn relay_url(mut self, url: impl Into<String>) -> Self {
+        self.relay_url = Some(url.into());
+        self
+    }
+
+    pub fn endpoint(mut self, endpoint: iroh::Endpoint) -> Self {
+        self.endpoint = Some(endpoint);
+        self
+    }
+}
+
 #[cfg(feature = "http")]
 pub mod http;
+
+#[cfg(feature = "iroh")]
+pub mod iroh_transport;
+
+#[cfg(feature = "iroh")]
+pub mod blob_payload;
+
+#[cfg(feature = "iroh")]
+pub use blob_payload::{BlobPayloadAdapter, BlobRefPayload};
+
 
 #[cfg(feature = "http")]
 pub use dog_core;
