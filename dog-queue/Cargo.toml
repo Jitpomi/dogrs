@@ -102,6 +102,7 @@ rabbitmq-lapin = ["dep:lapin"]
 # Scheduling
 cron-scheduling = ["dep:cron"]
 
+
 # Observability
 tracing-basic = ["dep:tracing-subscriber"]
 tracing-opentelemetry = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
