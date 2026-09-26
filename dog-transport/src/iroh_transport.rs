@@ -96,7 +96,6 @@ where
                 continue;
             };
             let app = app.clone();
-            let peer_id = peer_id.clone();
 
             tasks.spawn(async move {
                 let _permit = permit;

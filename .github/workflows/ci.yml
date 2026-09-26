@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y cmake libsasl2-dev libssl-dev libcurl4-openssl-dev pkg-config
-      - run: cargo check -p dog-queue --all-features --locked
+      - run: cargo clippy --workspace --all-features --all-targets --locked -- -D warnings
       - run: |
           for features in postgres redis nats-async amqp rabbitmq-lapin kafka-rdkafka kafka-rskafka aws-sqs gcp-pubsub; do
             cargo check -p dog-queue --no-default-features --features "$features" --locked

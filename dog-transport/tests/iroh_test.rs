@@ -221,7 +221,7 @@ async fn test_iroh_transport_builder_composition() -> anyhow::Result<()> {
     let router_builder = app.into_service((router_builder, alpn.clone()));
 
     // 5. Register a completely independent custom protocol on the same router builder!
-    let router_builder = router_builder.accept(b"iroh-gossip/test/0".to_vec(), MockGossipHandler);
+    let router_builder = router_builder.accept(b"iroh-gossip/test/0", MockGossipHandler);
 
     // 6. Spawn the composed router
     let router = router_builder.spawn();
