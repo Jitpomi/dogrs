@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use serde_json::Value;
 use crate::tenant::TenantContext;
+use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DogTransportKind {
@@ -45,8 +45,8 @@ impl DogParams {
         match serde_json::from_value(val) {
             Ok(v) => Ok(v),
             Err(err) => {
-                if let Ok(v) = serde_json::from_value(Value::Null) {
-                    Ok(v)
+                if std::any::type_name::<P>() == "()" {
+                    serde_json::from_value(Value::Null)
                 } else {
                     Err(err)
                 }

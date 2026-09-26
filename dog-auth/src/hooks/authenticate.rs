@@ -31,7 +31,9 @@ pub struct AuthParams<P> {
     pub provider: Option<String>,
     pub headers: HashMap<String, String>,
     pub authentication: Option<AuthenticationRequest>,
+    #[serde(skip_deserializing, default)]
     pub authenticated: bool,
+    #[serde(skip_deserializing, default)]
     pub auth_result: Option<AuthenticationResult>,
     #[serde(skip)]
     pub connection: Option<Arc<dyn std::any::Any + Send + Sync>>,

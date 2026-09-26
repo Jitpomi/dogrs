@@ -22,9 +22,7 @@ async fn main() -> Result<()> {
         .get("http.host")
         .unwrap_or_else(|| "127.0.0.1".to_string());
 
-    let port = dog
-        .get("http.port")
-        .unwrap_or_else(|| "3030".to_string());
+    let port = dog.get("http.port").unwrap_or_else(|| "3030".to_string());
 
     let addr = format!("{host}:{port}");
 
@@ -36,16 +34,19 @@ async fn main() -> Result<()> {
     } else {
         "static"
     };
-    let static_service = tower_http::services::ServeDir::new(static_dir)
-        .fallback(http_fallback.clone());
+    let static_service =
+        tower_http::services::ServeDir::new(static_dir).fallback(http_fallback.clone());
 
     let router = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
-        .route("/config", axum::routing::get(|| async {
-            // TomTom map API keys are intentionally served to the browser.
-            let key = std::env::var("TOMTOM_API_KEY").unwrap_or_default();
-            format!("{{\"tomtomApiKey\":\"{}\"}}", key)
-        }))
+        .route(
+            "/config",
+            axum::routing::get(|| async {
+                // TomTom map API keys are intentionally served to the browser.
+                let key = std::env::var("TOMTOM_API_KEY").unwrap_or_default();
+                format!("{{\"tomtomApiKey\":\"{}\"}}", key)
+            }),
+        )
         .route("/events", axum::routing::get(to_sse))
         .layer(
             tower_http::cors::CorsLayer::new()
@@ -53,19 +54,23 @@ async fn main() -> Result<()> {
                 .allow_methods(tower_http::cors::Any)
                 .allow_headers(tower_http::cors::Any),
         )
-        .fallback_service(dog_transport::tower::service_fn(move |req: axum::http::Request<axum::body::Body>| {
-            let mut static_svc = static_service.clone();
-            let mut http_svc = http_fallback.clone();
-            async move {
-                use dog_transport::tower::Service;
-                use axum::response::IntoResponse;
-                if req.method() == axum::http::Method::GET || req.method() == axum::http::Method::HEAD {
-                    static_svc.call(req).await.map(|res| res.into_response())
-                } else {
-                    http_svc.call(req).await.map(|res| res.into_response())
+        .fallback_service(dog_transport::tower::service_fn(
+            move |req: axum::http::Request<axum::body::Body>| {
+                let mut static_svc = static_service.clone();
+                let mut http_svc = http_fallback.clone();
+                async move {
+                    use axum::response::IntoResponse;
+                    use dog_transport::tower::Service;
+                    if req.method() == axum::http::Method::GET
+                        || req.method() == axum::http::Method::HEAD
+                    {
+                        static_svc.call(req).await.map(|res| res.into_response())
+                    } else {
+                        http_svc.call(req).await.map(|res| res.into_response())
+                    }
                 }
-            }
-        }));
+            },
+        ));
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, router).await?;

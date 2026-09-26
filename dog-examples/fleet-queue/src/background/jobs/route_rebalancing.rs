@@ -50,8 +50,10 @@ impl Job for RouteRebalancingJob {
         );
 
         let tenant_ctx = TenantContext::new(ctx.tenant_id.clone());
-        let mut params = FleetParams::default();
-        params.path = "/operations".to_string();
+        let params = FleetParams {
+            path: "/operations".into(),
+            ..Default::default()
+        };
 
         let operations_service = ctx
             .app

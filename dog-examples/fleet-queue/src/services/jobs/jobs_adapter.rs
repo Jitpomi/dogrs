@@ -56,7 +56,12 @@ impl JobsAdapter {
                     .to_string();
 
                 self.background_system
-                    .enqueue_route_rebalancing_opts(vec!["ALL".to_string()], 0, trigger_reason, opts)
+                    .enqueue_route_rebalancing_opts(
+                        vec!["ALL".to_string()],
+                        0,
+                        trigger_reason,
+                        opts,
+                    )
                     .await?;
 
                 Ok(serde_json::json!({

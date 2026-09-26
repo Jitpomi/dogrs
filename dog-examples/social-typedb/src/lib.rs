@@ -5,12 +5,15 @@ pub mod services;
 pub mod typedb;
 
 use dog_core::DogApp;
-use dog_transport::{IntoDogService, http::DogHttpService};
+use dog_transport::{http::DogHttpService, IntoDogService};
 use serde_json::Value;
 pub use services::SocialParams;
 use std::sync::Arc;
 
-pub async fn build() -> anyhow::Result<(DogApp<Value, SocialParams>, DogHttpService<Value, SocialParams>)> {
+pub async fn build() -> anyhow::Result<(
+    DogApp<Value, SocialParams>,
+    DogHttpService<Value, SocialParams>,
+)> {
     let mut builder = app::build_builder().await?;
 
     let state = builder
@@ -27,7 +30,7 @@ pub async fn build() -> anyhow::Result<(DogApp<Value, SocialParams>, DogHttpServ
             .route("/organizations", "organizations")
             .route("/groups", "groups")
             .route("/posts", "posts")
-            .route("/comments", "comments")
+            .route("/comments", "comments"),
     );
 
     Ok((dog, http_service))

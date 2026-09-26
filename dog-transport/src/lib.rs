@@ -111,6 +111,7 @@ impl CliOptions {
     }
 }
 
+#[cfg(feature = "iroh")]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IrohOptions {
     pub alpn: Vec<u8>,
@@ -120,6 +121,7 @@ pub struct IrohOptions {
     pub endpoint: Option<iroh::Endpoint>,
 }
 
+#[cfg(feature = "iroh")]
 impl IrohOptions {
     pub fn new(alpn: impl Into<Vec<u8>>) -> Self {
         Self {
@@ -158,23 +160,22 @@ pub mod blob_payload;
 #[cfg(feature = "iroh")]
 pub use blob_payload::{BlobPayloadAdapter, BlobRefPayload};
 
-
-#[cfg(feature = "http")]
-pub use dog_core;
-#[cfg(feature = "http")]
-pub use tower;
 #[cfg(feature = "http")]
 pub use ::http as http_types;
 #[cfg(feature = "http")]
-pub use http_body_util;
+pub use ::tracing as tracing_lib;
 #[cfg(feature = "http")]
 pub use bytes;
 #[cfg(feature = "http")]
-pub use serde_json;
-#[cfg(feature = "http")]
-pub use ::tracing as tracing_lib;
+pub use dog_core;
 #[cfg(feature = "http")]
 pub use futures_util;
+#[cfg(feature = "http")]
+pub use http_body_util;
+#[cfg(feature = "http")]
+pub use serde_json;
+#[cfg(feature = "http")]
+pub use tower;
 
 #[cfg(feature = "http")]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -205,7 +206,7 @@ macro_rules! declare_adapter {
             req: actix_web::HttpRequest,
             body: actix_web::web::Bytes,
             service: actix_web::web::Data<
-                $crate::http::DogHttpService<$crate::serde_json::Value, $params>
+                $crate::http::DogHttpService<$crate::serde_json::Value, $params>,
             >,
         ) -> impl actix_web::Responder {
             use $crate::tower::Service;
@@ -218,24 +219,29 @@ macro_rules! declare_adapter {
                 builder = builder.header(k.as_str(), v.as_bytes());
             }
 
-            let http_req = builder.body($crate::http_body_util::Full::new(body)).unwrap();
+            let http_req = builder
+                .body($crate::http_body_util::Full::new(body))
+                .unwrap();
             let mut service = service.get_ref().clone();
             let http_res = service.call(http_req).await.unwrap();
 
             let mut actix_res = actix_web::HttpResponse::build(
-                actix_web::http::StatusCode::from_u16(http_res.status().as_u16()).unwrap()
+                actix_web::http::StatusCode::from_u16(http_res.status().as_u16()).unwrap(),
             );
             for (k, v) in http_res.headers() {
                 actix_res.insert_header((k.as_str(), v.as_bytes()));
             }
 
-            let bytes = $crate::http_body_util::BodyExt::collect(http_res.into_body()).await.unwrap().to_bytes();
+            let bytes = $crate::http_body_util::BodyExt::collect(http_res.into_body())
+                .await
+                .unwrap()
+                .to_bytes();
             actix_res.body(bytes)
         }
     };
     (poem, $fn_name:ident, $params:ty) => {
         pub fn $fn_name(
-            service: $crate::http::DogHttpService<$crate::serde_json::Value, $params>
+            service: $crate::http::DogHttpService<$crate::serde_json::Value, $params>,
         ) -> impl poem::Endpoint {
             use poem::endpoint::TowerCompatExt;
             service.compat()
@@ -243,7 +249,7 @@ macro_rules! declare_adapter {
     };
     (axum, $fn_name:ident, $params:ty) => {
         pub fn $fn_name(
-            service: $crate::http::DogHttpService<$crate::serde_json::Value, $params>
+            service: $crate::http::DogHttpService<$crate::serde_json::Value, $params>,
         ) -> $crate::http::DogHttpService<$crate::serde_json::Value, $params> {
             service
         }
@@ -272,8 +278,11 @@ macro_rules! declare_ws_adapter {
                 let (mut ws_sender, mut ws_receiver) = socket.split();
                 tracing_lib::info!("New WebSocket client connected");
 
-                let mut broadcast_rx = app.get::<Arc<broadcast::Sender<$crate::serde_json::Value>>>("event_channel")
-                    .map(|tx| tx.subscribe());
+                // Global broadcasts are public data and require an explicit opt-in.
+                // Private streams must use application-authorized, tenant-scoped channels.
+                let mut broadcast_rx = if app.get::<String>("ws.public_broadcasts").as_deref() == Some("true") {
+                    app.get::<Arc<broadcast::Sender<$crate::serde_json::Value>>>("event_channel").map(|tx| tx.subscribe())
+                } else { None };
 
                 loop {
                     let rx_fut = async {
@@ -316,7 +325,7 @@ macro_rules! declare_ws_adapter {
                                                         let resp = WsPayload::Response {
                                                             request_id,
                                                             payload: None,
-                                                            error: Some(err.message),
+                                                            error: Some(err.sanitize_for_client().message),
                                                         };
                                                         if let Ok(json) = $crate::serde_json::to_string(&resp) {
                                                             let _ = ws_sender.send(WsMessage::Text(json.into())).await;
@@ -364,20 +373,27 @@ macro_rules! declare_sse_adapter {
     (axum, $fn_name:ident, $channel_expr:expr) => {
         pub async fn $fn_name() -> axum::response::sse::Sse<
             impl tokio_stream::Stream<
-                Item = Result<axum::response::sse::Event, std::convert::Infallible>
-            > + Send + 'static
+                    Item = Result<axum::response::sse::Event, std::convert::Infallible>,
+                > + Send
+                + 'static,
         > {
             use tokio_stream::StreamExt;
             let rx = $channel_expr.subscribe();
             let stream = tokio_stream::wrappers::BroadcastStream::new(rx)
-                .map(|msg| {
-                    match msg {
-                        Ok(val) => Ok(axum::response::sse::Event::default().json_data(val).unwrap()),
-                        Err(e) => Err(e),
-                    }
+                .map(|msg| match msg {
+                    Ok(val) => Ok(axum::response::sse::Event::default()
+                        .json_data(val)
+                        .unwrap()),
+                    Err(e) => Err(e),
                 })
                 .filter_map(|r| r.ok().map(Ok::<_, std::convert::Infallible>));
-            axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+            axum::response::sse::Sse::new(stream)
+                .keep_alive(axum::response::sse::KeepAlive::default())
         }
     };
 }
+
+#[cfg(feature = "cli")]
+pub mod cli;
+#[cfg(feature = "grpc")]
+pub mod grpc;

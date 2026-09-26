@@ -377,6 +377,9 @@ impl DogError {
     /// - drop the inner `source` (stack/secret details)
     #[must_use = "sanitize_for_client returns a new DogError with source stripped — use that, not the original"]
     pub fn sanitize_for_client(&self) -> DogError {
+        if self.code() >= 500 {
+            return DogError::new(self.kind, "Internal server error");
+        }
         DogError {
             kind: self.kind,
             message: self.message.clone(),

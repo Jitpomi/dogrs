@@ -37,8 +37,7 @@ pub fn strategies(
         Arc::<LocalStrategy<AuthDemoParams>>::clone(&local_strategy),
     );
 
-    let google_authorize_url = oauth2::google::register_google_oauth(builder, &mut auth_builder)?;
-    builder.set("oauth.google.authorize_url", google_authorize_url);
+    oauth2::google::register_google_oauth(builder, &mut auth_builder)?;
 
     let auth = Arc::new(AuthenticationService::new(Arc::new(auth_builder.build())));
     let adapter = AuthenticationService::install(builder, auth.clone());

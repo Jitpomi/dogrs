@@ -1,6 +1,6 @@
-use dog_core::{ServiceCapabilities, ServiceMethodKind};
 use crate::services::DemoParams;
 use dog_core::DogAppBuilder;
+use dog_core::{ServiceCapabilities, ServiceMethodKind};
 use serde_json::Value;
 
 pub fn capabilities() -> ServiceCapabilities {

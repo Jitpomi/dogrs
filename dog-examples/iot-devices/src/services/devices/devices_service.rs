@@ -1,11 +1,11 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use super::devices_shared;
+use crate::services::DemoParams;
+use async_trait::async_trait;
 use dog_core::tenant::TenantContext;
 use dog_core::{DogService, ServiceCapabilities};
-use async_trait::async_trait;
 use serde_json::Value;
-use crate::services::DemoParams;
-use super::devices_shared;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub struct DevicesService {
     devices: Arc<Mutex<Vec<Value>>>,
@@ -35,7 +35,7 @@ impl DevicesService {
                     "type": "lock",
                     "value": "locked",
                     "status": "online"
-                })
+                }),
             ])),
         }
     }
@@ -52,7 +52,12 @@ impl DogService<Value, DemoParams> for DevicesService {
         Ok(devs.clone())
     }
 
-    async fn get(&self, _ctx: &TenantContext, id: &str, _params: DemoParams) -> anyhow::Result<Value> {
+    async fn get(
+        &self,
+        _ctx: &TenantContext,
+        id: &str,
+        _params: DemoParams,
+    ) -> anyhow::Result<Value> {
         let devs = self.devices.lock().await;
         devs.iter()
             .find(|d| d.get("id").and_then(|v| v.as_str()) == Some(id))
@@ -60,24 +65,32 @@ impl DogService<Value, DemoParams> for DevicesService {
             .ok_or_else(|| anyhow::anyhow!("Device not found: {}", id))
     }
 
-    async fn create(&self, _ctx: &TenantContext, data: Value, _params: DemoParams) -> anyhow::Result<Value> {
+    async fn create(
+        &self,
+        _ctx: &TenantContext,
+        data: Value,
+        _params: DemoParams,
+    ) -> anyhow::Result<Value> {
         let mut devs = self.devices.lock().await;
         let mut new_dev = data;
 
         let id_val = new_dev.get("id").and_then(|v| v.as_str());
-        let final_id = if id_val.is_none() || id_val.unwrap().is_empty() {
+        let final_id = if let Some(id) = id_val.filter(|id| !id.is_empty()) {
+            id.to_string()
+        } else {
             let id_str = uuid::Uuid::new_v4().to_string();
             if let Some(obj) = new_dev.as_object_mut() {
                 obj.insert("id".to_string(), serde_json::Value::String(id_str.clone()));
             }
             id_str
-        } else {
-            id_val.unwrap().to_string()
         };
 
         if let Some(obj) = new_dev.as_object_mut() {
             if obj.get("status").is_none() {
-                obj.insert("status".to_string(), serde_json::Value::String("online".to_string()));
+                obj.insert(
+                    "status".to_string(),
+                    serde_json::Value::String("online".to_string()),
+                );
             }
         }
 
@@ -106,7 +119,9 @@ impl DogService<Value, DemoParams> for DevicesService {
     ) -> anyhow::Result<Value> {
         let id = id.ok_or_else(|| anyhow::anyhow!("ID is required for patch"))?;
         let mut devs = self.devices.lock().await;
-        let idx = devs.iter().position(|d| d.get("id").and_then(|v| v.as_str()) == Some(id))
+        let idx = devs
+            .iter()
+            .position(|d| d.get("id").and_then(|v| v.as_str()) == Some(id))
             .ok_or_else(|| anyhow::anyhow!("Device not found: {}", id))?;
 
         let mut current = devs[idx].clone();
@@ -129,7 +144,9 @@ impl DogService<Value, DemoParams> for DevicesService {
     ) -> anyhow::Result<Value> {
         let id = id.ok_or_else(|| anyhow::anyhow!("ID is required for remove"))?;
         let mut devs = self.devices.lock().await;
-        let idx = devs.iter().position(|d| d.get("id").and_then(|v| v.as_str()) == Some(id))
+        let idx = devs
+            .iter()
+            .position(|d| d.get("id").and_then(|v| v.as_str()) == Some(id))
             .ok_or_else(|| anyhow::anyhow!("Device not found: {}", id))?;
 
         let removed = devs.remove(idx);
@@ -145,14 +162,20 @@ impl DogService<Value, DemoParams> for DevicesService {
     ) -> anyhow::Result<Value> {
         match method {
             "telemetry" => {
-                let payload = data.ok_or_else(|| anyhow::anyhow!("Telemetry requires a payload"))?;
-                let device_id = payload.get("id")
+                let payload =
+                    data.ok_or_else(|| anyhow::anyhow!("Telemetry requires a payload"))?;
+                let device_id = payload
+                    .get("id")
                     .or_else(|| payload.get("device_id"))
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("Missing 'id' or 'device_id' in telemetry payload"))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Missing 'id' or 'device_id' in telemetry payload")
+                    })?;
 
                 let mut devs = self.devices.lock().await;
-                let idx = devs.iter().position(|d| d.get("id").and_then(|v| v.as_str()) == Some(device_id))
+                let idx = devs
+                    .iter()
+                    .position(|d| d.get("id").and_then(|v| v.as_str()) == Some(device_id))
                     .ok_or_else(|| anyhow::anyhow!("Device not found: {}", device_id))?;
 
                 let mut current = devs[idx].clone();
@@ -169,29 +192,58 @@ impl DogService<Value, DemoParams> for DevicesService {
             }
             "toggle" => {
                 let payload = data.ok_or_else(|| anyhow::anyhow!("Toggle requires a payload"))?;
-                let device_id = payload.get("id")
+                let device_id = payload
+                    .get("id")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("Missing 'id' in toggle payload"))?;
 
                 let mut devs = self.devices.lock().await;
-                let idx = devs.iter().position(|d| d.get("id").and_then(|v| v.as_str()) == Some(device_id))
+                let idx = devs
+                    .iter()
+                    .position(|d| d.get("id").and_then(|v| v.as_str()) == Some(device_id))
                     .ok_or_else(|| anyhow::anyhow!("Device not found: {}", device_id))?;
 
                 let mut current = devs[idx].clone();
-                let dev_type = current.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let value = current.get("value").cloned().unwrap_or(serde_json::Value::Null);
+                let dev_type = current
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let value = current
+                    .get("value")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
 
                 if let Some(obj) = current.as_object_mut() {
                     match dev_type.as_str() {
                         "light" => {
-                            let new_val = if value.as_str() == Some("on") { "off" } else { "on" };
-                            obj.insert("value".to_string(), serde_json::Value::String(new_val.to_string()));
+                            let new_val = if value.as_str() == Some("on") {
+                                "off"
+                            } else {
+                                "on"
+                            };
+                            obj.insert(
+                                "value".to_string(),
+                                serde_json::Value::String(new_val.to_string()),
+                            );
                         }
                         "lock" => {
-                            let new_val = if value.as_str() == Some("locked") { "unlocked" } else { "locked" };
-                            obj.insert("value".to_string(), serde_json::Value::String(new_val.to_string()));
+                            let new_val = if value.as_str() == Some("locked") {
+                                "unlocked"
+                            } else {
+                                "locked"
+                            };
+                            obj.insert(
+                                "value".to_string(),
+                                serde_json::Value::String(new_val.to_string()),
+                            );
                         }
-                        _ => return Err(anyhow::anyhow!("Device type '{}' cannot be toggled", dev_type)),
+                        _ => {
+                            return Err(anyhow::anyhow!(
+                                "Device type '{}' cannot be toggled",
+                                dev_type
+                            ))
+                        }
                     }
                 }
                 devs[idx] = current.clone();
@@ -200,12 +252,14 @@ impl DogService<Value, DemoParams> for DevicesService {
             "stats" => {
                 let devs = self.devices.lock().await;
                 let total = devs.len();
-                let online = devs.iter()
+                let online = devs
+                    .iter()
                     .filter(|d| d.get("status").and_then(|v| v.as_str()) == Some("online"))
                     .count();
 
                 // Calculate average temperature
-                let temps: Vec<f64> = devs.iter()
+                let temps: Vec<f64> = devs
+                    .iter()
                     .filter(|d| d.get("type").and_then(|v| v.as_str()) == Some("thermostat"))
                     .filter_map(|d| d.get("value").and_then(|v| v.as_f64()))
                     .collect();
@@ -222,7 +276,7 @@ impl DogService<Value, DemoParams> for DevicesService {
                     "average_temperature": avg_temp
                 }))
             }
-            _ => Err(anyhow::anyhow!("Unknown custom method: {}", method))
+            _ => Err(anyhow::anyhow!("Unknown custom method: {}", method)),
         }
     }
 }

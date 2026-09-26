@@ -1,3 +1,6 @@
+pub mod broker;
+#[cfg(any(feature = "postgres", feature = "redis", feature = "nats-async"))]
+pub mod durable;
 pub mod memory;
 
 #[cfg(feature = "redis")]
@@ -6,10 +9,10 @@ pub mod redis;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 
-#[cfg(feature = "rabbitmq")]
+#[cfg(feature = "rabbitmq-lapin")]
 pub mod rabbitmq;
 
-#[cfg(feature = "kafka")]
+#[cfg(any(feature = "kafka-rdkafka", feature = "kafka-rskafka"))]
 pub mod kafka;
 
 #[cfg(feature = "aws-sqs")]
@@ -18,7 +21,7 @@ pub mod aws_sqs;
 #[cfg(feature = "gcp-pubsub")]
 pub mod gcp_pubsub;
 
-#[cfg(feature = "nats")]
+#[cfg(feature = "nats-async")]
 pub mod nats;
 
 use async_trait::async_trait;

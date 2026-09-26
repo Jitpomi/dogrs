@@ -21,9 +21,7 @@ async fn main() -> Result<()> {
         .get("http.host")
         .unwrap_or_else(|| "127.0.0.1".to_string());
 
-    let port = dog
-        .get("http.port")
-        .unwrap_or_else(|| "3030".to_string());
+    let port = dog.get("http.port").unwrap_or_else(|| "3030".to_string());
 
     let addr = format!("{host}:{port}");
 
@@ -34,7 +32,9 @@ async fn main() -> Result<()> {
         .nest("/", to_endpoint(http_service));
 
     let listener = poem::listener::TcpListener::bind(&addr);
-    poem::Server::new(listener).run(std::sync::Arc::new(router)).await?;
+    poem::Server::new(listener)
+        .run(std::sync::Arc::new(router))
+        .await?;
 
     Ok(())
 }

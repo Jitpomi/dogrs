@@ -39,8 +39,10 @@ impl Job for MaintenanceSchedulingJob {
 
     async fn execute(&self, ctx: Self::Context) -> std::result::Result<Self::Result, JobError> {
         let tenant_ctx = TenantContext::new(ctx.tenant_id.clone());
-        let mut params = FleetParams::default();
-        params.path = "/operations".to_string();
+        let params = FleetParams {
+            path: "/operations".into(),
+            ..Default::default()
+        };
 
         let operations_service = ctx
             .app

@@ -1,5 +1,5 @@
+use actix_web::{web, App, HttpResponse, HttpServer};
 use anyhow::Result;
-use actix_web::{web, App, HttpServer, HttpResponse};
 use std::sync::Arc;
 
 dog_transport::declare_adapter!(actix, to_endpoint, auth_demo::AuthDemoParams);
@@ -19,9 +19,7 @@ async fn main() -> Result<()> {
         .get("http.host")
         .unwrap_or_else(|| "127.0.0.1".to_string());
 
-    let port = dog
-        .get("http.port")
-        .unwrap_or_else(|| "3030".to_string());
+    let port = dog.get("http.port").unwrap_or_else(|| "3030".to_string());
 
     let addr = format!("{host}:{port}");
 
@@ -34,7 +32,10 @@ async fn main() -> Result<()> {
         let app_clone = Arc::clone(&shared_dog);
         App::new()
             .app_data(shared_http_service.clone())
-            .route("/health", web::get().to(|| async { HttpResponse::Ok().body("ok") }))
+            .route(
+                "/health",
+                web::get().to(|| async { HttpResponse::Ok().body("ok") }),
+            )
             .configure(|cfg| auth_demo::configure_oauth(cfg, app_clone))
             .default_service(web::to(to_endpoint))
     })

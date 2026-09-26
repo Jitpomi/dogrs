@@ -23,9 +23,7 @@ async fn main() -> Result<()> {
         .get("http.host")
         .unwrap_or_else(|| "127.0.0.1".to_string());
 
-    let port = dog
-        .get("http.port")
-        .unwrap_or_else(|| "3030".to_string());
+    let port = dog.get("http.port").unwrap_or_else(|| "3030".to_string());
 
     let addr = format!("{host}:{port}");
 
@@ -46,8 +44,7 @@ async fn main() -> Result<()> {
                 .allow_headers(tower_http::cors::Any),
         )
         .fallback_service(
-            tower_http::services::ServeDir::new(static_dir)
-                .fallback(to_endpoint(http_service))
+            tower_http::services::ServeDir::new(static_dir).fallback(to_endpoint(http_service)),
         );
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

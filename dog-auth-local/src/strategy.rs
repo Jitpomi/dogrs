@@ -129,7 +129,15 @@ where
     }
 
     pub async fn hash_password(&self, password: &str) -> Result<String> {
-        hash(password, self.options.hash_size).map_err(|e| anyhow::anyhow!(e.to_string()))
+        let password = password.to_owned();
+        let cost = self.options.hash_size;
+        let permit = password_workers().acquire_owned().await?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            hash(password, cost)
+        })
+        .await?
+        .map_err(|e| anyhow::anyhow!(e.to_string()))
     }
 
     fn get_required_str(
@@ -155,10 +163,22 @@ where
     }
 
     fn strip_password(mut entity: Value, password_field_path: &str) -> Value {
-        // Only supports direct object key stripping; dotted paths are left intact.
-        if !password_field_path.contains('.') {
-            if let Value::Object(ref mut map) = entity {
-                map.remove(password_field_path);
+        let mut parts = password_field_path
+            .split('.')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .peekable();
+        let mut current = &mut entity;
+        while let Some(part) = parts.next() {
+            if parts.peek().is_none() {
+                if let Some(map) = current.as_object_mut() {
+                    map.remove(part);
+                }
+                break;
+            }
+            match current.get_mut(part) {
+                Some(child) => current = child,
+                None => break,
             }
         }
         entity
@@ -209,8 +229,15 @@ where
             return Err(DogError::not_authenticated(&self.options.error_message).into_anyhow());
         };
 
-        let ok = verify(password, hash_val)
-            .map_err(|e| DogError::not_authenticated(e.to_string()).into_anyhow())?;
+        let hash_val = hash_val.to_owned();
+        let password = password.to_owned();
+        let permit = password_workers().acquire_owned().await?;
+        let ok = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            verify(password, &hash_val)
+        })
+        .await?
+        .map_err(|_| DogError::not_authenticated(&self.options.error_message).into_anyhow())?;
         if !ok {
             return Err(DogError::not_authenticated(&self.options.error_message).into_anyhow());
         }
@@ -266,4 +293,11 @@ where
             entity_key: entity
         }))
     }
+}
+
+fn password_workers() -> Arc<tokio::sync::Semaphore> {
+    static WORKERS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    WORKERS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(16)))
+        .clone()
 }

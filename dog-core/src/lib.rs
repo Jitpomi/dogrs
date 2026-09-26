@@ -32,6 +32,4 @@ pub use service::{DogService, ServiceCapabilities, ServiceMethodKind};
 pub use tenant::{TenantContext, TenantId};
 
 #[cfg(feature = "json")]
-pub use transport::{
-    DogMethod, DogParams, DogRequest, DogResponse, DogTransportKind,
-};
+pub use transport::{DogMethod, DogParams, DogRequest, DogResponse, DogTransportKind};

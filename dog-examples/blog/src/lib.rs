@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use dog_core::DogApp;
-use dog_transport::{HttpOptions, IntoDogService, http::DogHttpService};
+use dog_transport::{http::DogHttpService, HttpOptions, IntoDogService};
 use serde_json::Value;
 
 pub use crate::services::BlogParams;
@@ -23,7 +23,7 @@ pub async fn build() -> Result<(DogApp<Value, BlogParams>, DogHttpService<Value,
     let http_service = dog.clone().into_service(
         HttpOptions::default()
             .route("/posts", "posts")
-            .route("/authors", "authors")
+            .route("/authors", "authors"),
     );
 
     Ok((dog, http_service))

@@ -1,8 +1,8 @@
-pub mod multipart;
 mod app;
 mod channels;
 mod hooks;
 mod metadata;
+pub mod multipart;
 mod rustfs;
 mod rustfs_store;
 mod services;
@@ -10,7 +10,7 @@ mod services;
 use std::sync::Arc;
 
 use dog_core::DogApp;
-use dog_transport::{IntoDogService, http::DogHttpService};
+use dog_transport::{http::DogHttpService, IntoDogService};
 use serde_json::Value;
 
 pub use services::MusicParams;
@@ -26,7 +26,10 @@ impl MusicMultipartDefaults {
     const FILE_ENCODING: &'static str = "base64";
 }
 
-pub async fn build() -> anyhow::Result<(DogApp<Value, MusicParams>, DogHttpService<Value, MusicParams>)> {
+pub async fn build() -> anyhow::Result<(
+    DogApp<Value, MusicParams>,
+    DogHttpService<Value, MusicParams>,
+)> {
     let mut builder = app::build_builder().await?;
 
     let state = builder
@@ -36,9 +39,9 @@ pub async fn build() -> anyhow::Result<(DogApp<Value, MusicParams>, DogHttpServi
     services::configure(&mut builder, Arc::clone(&state))?;
 
     let dog = builder.build();
-    let http_service = dog.clone().into_service(
-        dog_transport::HttpOptions::default().route("/music", "music")
-    );
+    let http_service = dog
+        .clone()
+        .into_service(dog_transport::HttpOptions::default().route("/music", "music"));
 
     Ok((dog, http_service))
 }
@@ -53,7 +56,6 @@ where
         .parse()
         .unwrap_or(default)
 }
-
 
 pub fn multipart_config() -> multipart::MultipartConfig {
     let max_file_mb = env_var_or(

@@ -1,139 +1,115 @@
-use std::sync::Arc;
-use dog_core::{DogApp, DogRequest, DogTransportKind, DogMethod, DogParams, TenantContext};
-use serde_json::Value;
-use crate::services::AuthDemoParams;
 use super::providers;
+use crate::services::AuthDemoParams;
+use dog_core::{DogApp, DogMethod, DogParams, DogRequest, DogTransportKind, TenantContext};
+use serde_json::Value;
+use std::sync::Arc;
 
-#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, serde::Deserialize)]
 pub struct OAuthCallbackQuery {
     pub code: Option<String>,
     pub state: Option<String>,
 }
 
-fn service_redirect_uri(app: &DogApp<Value, AuthDemoParams>) -> anyhow::Result<String> {
-    let base = app
-        .get::<String>("oauth.google.redirect_uri")
-        .ok_or_else(|| anyhow::anyhow!("Missing oauth.google.redirect_uri"))?;
-
-    if base.ends_with("/oauth/google/callback") {
-        return Ok(format!("{base}/service"));
-    }
-
-    Err(anyhow::anyhow!(
-        "oauth.google.redirect_uri must end with /oauth/google/callback to derive /service variant"
-    ))
-}
-
-pub async fn google_login_service_handler(
-    app: &DogApp<Value, AuthDemoParams>,
-) -> anyhow::Result<String> {
+async fn login(app: &DogApp<Value, AuthDemoParams>, service: bool) -> actix_web::HttpResponse {
     let config = app.config_snapshot();
-    let redirect_uri = service_redirect_uri(app)?;
-    let location = providers::authorize_url_for_redirect(&config, &redirect_uri)?;
-
-    Ok(location)
+    let Some(mut redirect) = config.get_string("oauth.google.redirect_uri") else {
+        return actix_web::HttpResponse::InternalServerError().finish();
+    };
+    if service {
+        redirect.push_str("/service");
+    }
+    match providers::authorize_url_for_redirect(&config, &redirect) {
+        Ok(login) => actix_web::HttpResponse::TemporaryRedirect()
+            .insert_header((actix_web::http::header::LOCATION, login.location))
+            .cookie(
+                actix_web::cookie::Cookie::build("dogrs_oauth_state", login.state)
+                    .http_only(true)
+                    .secure(login.secure_cookie)
+                    .same_site(actix_web::cookie::SameSite::Lax)
+                    .path("/oauth/google")
+                    .max_age(actix_web::cookie::time::Duration::minutes(10))
+                    .finish(),
+            )
+            .finish(),
+        Err(err) => {
+            tracing::error!(%err, "OAuth login failed");
+            actix_web::HttpResponse::ServiceUnavailable().finish()
+        }
+    }
 }
-
-pub fn configure(cfg: &mut actix_web::web::ServiceConfig, app: Arc<DogApp<Value, AuthDemoParams>>) {
-    let app_clone = Arc::clone(&app);
-    let app_clone2 = Arc::clone(&app);
-    let app_clone3 = Arc::clone(&app);
-
-    cfg.service(
-        actix_web::web::resource("/oauth/google/login")
-            .route(actix_web::web::get().to(move || {
-                let app = Arc::clone(&app_clone);
-                async move {
-                    let req = DogRequest {
-                        request_id: Some(uuid::Uuid::new_v4().to_string()),
-                        transport: DogTransportKind::Http,
-                        service: "oauth".to_string(),
-                        method: DogMethod::Custom("google_login".to_string()),
-                        id: None,
-                        tenant: TenantContext::new("default"),
-                        params: DogParams::new(),
-                        payload: None,
-                        metadata: std::collections::HashMap::new(),
-                    };
-
-                    match app.handle(req).await {
-                        Ok(res) => {
-                            if let Some(loc) = res.payload.and_then(|p| p.get("location").and_then(|v| v.as_str().map(|s| s.to_string()))) {
-                                actix_web::HttpResponse::TemporaryRedirect()
-                                    .insert_header((actix_web::http::header::LOCATION, loc))
-                                    .finish()
-                            } else {
-                                actix_web::HttpResponse::InternalServerError().body("Missing redirect location in oauth response")
-                            }
-                        }
-                        Err(err) => {
-                            actix_web::HttpResponse::build(
-                                actix_web::http::StatusCode::from_u16(err.code())
-                                    .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
-                            ).body(err.message)
-                        }
-                    }
-                }
-            }))
-    )
-    .service(
-        actix_web::web::resource("/oauth/google/callback")
-            .route(actix_web::web::get().to(move |query: actix_web::web::Query<OAuthCallbackQuery>| {
-                let app = Arc::clone(&app_clone2);
-                async move {
-                    let payload = serde_json::json!({
-                        "code": query.code,
-                        "state": query.state,
-                    });
-
-                    let req = DogRequest {
-                        request_id: Some(uuid::Uuid::new_v4().to_string()),
-                        transport: DogTransportKind::Http,
-                        service: "oauth".to_string(),
-                        method: DogMethod::Custom("google_callback".to_string()),
-                        id: None,
-                        tenant: TenantContext::new("default"),
-                        params: DogParams::new(),
-                        payload: Some(payload),
-                        metadata: std::collections::HashMap::new(),
-                    };
-
-                    match app.handle(req).await {
-                        Ok(res) => {
-                            actix_web::HttpResponse::Ok().json(res.payload.unwrap_or(Value::Null))
-                        }
-                        Err(err) => {
-                            actix_web::HttpResponse::build(
-                                actix_web::http::StatusCode::from_u16(err.code())
-                                    .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR)
-                            ).body(err.message)
-                        }
-                    }
-                }
-            }))
-    )
-    .service(
-        actix_web::web::resource("/oauth/google/callback/service")
-            .route(actix_web::web::get().to(|query: actix_web::web::Query<OAuthCallbackQuery>| async move {
-                actix_web::HttpResponse::Ok().json(serde_json::json!({
-                    "provider": "google_service",
-                    "code": query.code,
-                    "state": query.state,
-                }))
-            }))
-    )
-    .service(
-        actix_web::web::resource("/oauth/google/login/service")
-            .route(actix_web::web::get().to(move || {
-                let app = Arc::clone(&app_clone3);
-                async move {
-                    match google_login_service_handler(&app).await {
-                        Ok(loc) => actix_web::HttpResponse::TemporaryRedirect()
-                            .insert_header((actix_web::http::header::LOCATION, loc))
-                            .finish(),
-                        Err(e) => actix_web::HttpResponse::InternalServerError().body(e.to_string()),
-                    }
-                }
-            }))
+async fn callback(
+    app: &DogApp<Value, AuthDemoParams>,
+    query: OAuthCallbackQuery,
+    http: actix_web::HttpRequest,
+    service: bool,
+) -> actix_web::HttpResponse {
+    let headers: std::collections::HashMap<String, String> = http
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.to_string(), v.to_string()))
+        })
+        .collect();
+    let mut params = DogParams::new();
+    params
+        .inner
+        .insert("headers".into(), serde_json::json!(headers));
+    params.inner.insert(
+        "inner".into(),
+        serde_json::to_value(crate::services::types::RestParams::default())
+            .expect("RestParams serialization"),
     );
+    let req = DogRequest {
+        request_id: None,
+        transport: DogTransportKind::Http,
+        service: "oauth".into(),
+        method: DogMethod::Custom("google_callback".into()),
+        id: None,
+        tenant: TenantContext::new("default"),
+        params,
+        payload: Some(
+            serde_json::json!({"provider": if service { "google_service" } else { "google" }, "code": query.code, "state": query.state}),
+        ),
+        metadata: Default::default(),
+    };
+    match app.handle(req).await {
+        Ok(res) => actix_web::HttpResponse::Ok().json(res.payload),
+        Err(err) => actix_web::HttpResponse::build(
+            actix_web::http::StatusCode::from_u16(err.code())
+                .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+        )
+        .body(err.sanitize_for_client().message),
+    }
+}
+pub fn configure(cfg: &mut actix_web::web::ServiceConfig, app: Arc<DogApp<Value, AuthDemoParams>>) {
+    for (path, service) in [
+        ("/oauth/google/login", false),
+        ("/oauth/google/login/service", true),
+    ] {
+        let app = app.clone();
+        cfg.service(
+            actix_web::web::resource(path).route(actix_web::web::get().to(move || {
+                let app = app.clone();
+                async move { login(&app, service).await }
+            })),
+        );
+    }
+    for (path, service) in [
+        ("/oauth/google/callback", false),
+        ("/oauth/google/callback/service", true),
+    ] {
+        let app = app.clone();
+        cfg.service(
+            actix_web::web::resource(path).route(actix_web::web::get().to(
+                move |query: actix_web::web::Query<OAuthCallbackQuery>,
+                      request: actix_web::HttpRequest| {
+                    let app = app.clone();
+                    async move { callback(&app, query.into_inner(), request, service).await }
+                },
+            )),
+        );
+    }
 }

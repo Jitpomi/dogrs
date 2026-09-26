@@ -1,11 +1,14 @@
 use anyhow::Result;
 use dog_core::DogApp;
-use dog_transport::{HttpOptions, IntoDogService, http::DogHttpService};
+use dog_transport::{http::DogHttpService, HttpOptions, IntoDogService};
 use serde_json::Value;
 
 use crate::services::AuthDemoParams;
 
-pub async fn auth_app() -> Result<(DogApp<Value, AuthDemoParams>, DogHttpService<Value, AuthDemoParams>)> {
+pub async fn auth_app() -> Result<(
+    DogApp<Value, AuthDemoParams>,
+    DogHttpService<Value, AuthDemoParams>,
+)> {
     dotenvy::from_filename("dog-examples/auth-demo/.env").ok();
     dotenvy::dotenv().ok();
 
@@ -17,7 +20,7 @@ pub async fn auth_app() -> Result<(DogApp<Value, AuthDemoParams>, DogHttpService
     let oauth_raw = crate::services::configure(&mut builder, auth_adapter.clone())?;
     crate::hooks::global_hooks(&mut builder);
     crate::channels::configure(&mut builder)?;
-    
+
     let dog_app = builder.build();
     auth_adapter.setup(dog_app.clone());
     oauth_raw.setup(dog_app.clone());
@@ -28,7 +31,7 @@ pub async fn auth_app() -> Result<(DogApp<Value, AuthDemoParams>, DogHttpService
             .enable_cors(true)
             .route("/messages", "messages")
             .route("/users", "users")
-            .route("/oauth", "oauth")
+            .route("/oauth", "oauth"),
     );
 
     Ok((dog_app, http_service))

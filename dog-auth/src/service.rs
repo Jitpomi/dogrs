@@ -47,6 +47,7 @@ where
     where
         P: AuthenticateHookParams,
     {
+        builder.set(AUTHENTICATION_KEY, auth.clone());
         let svc = Arc::new(crate::service_adapter::AuthServiceAdapter::new(
             auth.clone(),
         ));
@@ -57,8 +58,8 @@ where
         svc
     }
 
-    pub fn from_app(_app: &DogApp<Value, P>) -> Option<Arc<Self>> {
-        None
+    pub fn from_app(app: &DogApp<Value, P>) -> Option<Arc<Self>> {
+        app.get(AUTHENTICATION_KEY)
     }
 
     pub fn configuration(&self) -> AuthOptions {

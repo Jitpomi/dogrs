@@ -34,7 +34,12 @@ where
 {
     fn name(&self) -> &str;
 
-    async fn exchange_code(&self, code: &str, ctx: &mut HookContext<Value, P>) -> Result<String>;
+    async fn exchange_code(
+        &self,
+        code: &str,
+        state: Option<&str>,
+        ctx: &mut HookContext<Value, P>,
+    ) -> Result<String>;
 
     async fn fetch_profile(
         &self,
@@ -50,7 +55,7 @@ pub struct OAuthAuthenticateData {
     pub provider: String,
     pub access_token: Option<String>,
     pub code: Option<String>,
-    pub profile: Option<Value>,
+    pub state: Option<String>,
 }
 
 #[derive(Clone)]
@@ -145,13 +150,19 @@ where
 
         let code = Self::read_string(&authentication.data, "code");
 
-        let profile = authentication.data.get("profile").cloned();
+        if authentication.data.contains_key("profile") {
+            return Err(DogError::bad_request(
+                "OAuth profiles must be fetched from the configured provider",
+            )
+            .into_anyhow());
+        }
+        let state = Self::read_string(&authentication.data, "state");
 
         Ok(OAuthAuthenticateData {
             provider,
             access_token,
             code,
-            profile,
+            state,
         })
     }
 
@@ -254,37 +265,38 @@ where
         let req = self.parse_request(authentication)?;
 
         let cfg = auth.configuration();
-        let provider_cfg_exists = cfg.oauth_providers.contains_key(&req.provider);
-        let external = self.options.providers.get(&req.provider).cloned();
-        if !provider_cfg_exists && external.is_none() {
-            return Err(DogError::not_authenticated("Unknown OAuth provider").into_anyhow());
-        }
-
-        if req.access_token.is_none() && req.code.is_none() && req.profile.is_none() {
-            return Err(DogError::not_authenticated("Missing OAuth credentials").into_anyhow());
-        }
-
-        // Resolve access token and/or profile via external provider implementation.
-        let mut access_token = req.access_token.clone();
-        let mut profile = req.profile.clone();
-
-        if access_token.is_none() {
-            if let (Some(code), Some(provider)) = (req.code.as_deref(), external.as_ref()) {
-                access_token = Some(match provider.exchange_code(code, ctx).await {
-                    Ok(t) => t,
-                    Err(e) => return Err(map_oauth_provider_error(e)),
-                });
+        let provider =
+            self.options.providers.get(&req.provider).ok_or_else(|| {
+                DogError::not_authenticated("Unknown OAuth provider").into_anyhow()
+            })?;
+        let access_token = match (req.code.as_deref(), req.access_token.as_deref()) {
+            (Some(code), None) => provider
+                .exchange_code(code, req.state.as_deref(), ctx)
+                .await
+                .map_err(map_oauth_provider_error)?,
+            (None, Some(token)) => token.to_string(),
+            _ => {
+                return Err(DogError::not_authenticated(
+                    "Supply exactly one OAuth code or access token",
+                )
+                .into_anyhow())
             }
+        };
+        if access_token.trim().is_empty() {
+            return Err(DogError::not_authenticated("Empty OAuth access token").into_anyhow());
         }
-
-        if profile.is_none() {
-            if let (Some(token), Some(provider)) = (access_token.as_deref(), external.as_ref()) {
-                profile = match provider.fetch_profile(token, ctx).await {
-                    Ok(p) => p,
-                    Err(e) => return Err(map_oauth_provider_error(e)),
-                };
-            }
-        }
+        let profile = provider
+            .fetch_profile(&access_token, ctx)
+            .await
+            .map_err(map_oauth_provider_error)?
+            .filter(|profile| {
+                Self::profile_id(&req.provider, profile).is_some_and(|id| !id.trim().is_empty())
+            })
+            .ok_or_else(|| {
+                DogError::not_authenticated("Provider did not return a verified identity")
+                    .into_anyhow()
+            })?;
+        let profile = Some(profile);
 
         // If entity/service are configured and we have a profile, upsert the entity.
         let mut entity_out: Option<Value> = None;
@@ -315,13 +327,6 @@ where
         let mut auth_obj = Map::new();
         auth_obj.insert("strategy".to_string(), Value::String(self.name.clone()));
         auth_obj.insert("provider".to_string(), Value::String(req.provider.clone()));
-        if let Some(t) = access_token.clone() {
-            auth_obj.insert("accessToken".to_string(), Value::String(t));
-        }
-        if let Some(c) = req.code.clone() {
-            auth_obj.insert("code".to_string(), Value::String(c));
-        }
-
         let mut out = json!({
             "authentication": Value::Object(auth_obj),
         });

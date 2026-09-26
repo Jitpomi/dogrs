@@ -22,9 +22,7 @@ async fn main() -> Result<()> {
         .get("http.host")
         .unwrap_or_else(|| "127.0.0.1".to_string());
 
-    let port = dog
-        .get("http.port")
-        .unwrap_or_else(|| "3030".to_string());
+    let port = dog.get("http.port").unwrap_or_else(|| "3030".to_string());
 
     let addr = format!("{host}:{port}");
 
@@ -40,7 +38,7 @@ async fn main() -> Result<()> {
         )
         .fallback_service(
             tower_http::services::ServeDir::new("dog-examples/social-typedb/static")
-                .fallback(to_endpoint(http_service))
+                .fallback(to_endpoint(http_service)),
         );
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

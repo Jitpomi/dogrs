@@ -62,10 +62,9 @@ where
             headers: params.headers().clone(),
         };
 
-        let app = self
-            .app
-            .get()
-            .expect("AuthServiceAdapter must be setup with DogApp");
+        let app = self.app.get().ok_or_else(|| {
+            dog_core::DogError::unavailable("Authentication is not initialized").into_anyhow()
+        })?;
         let services = ServiceCaller::new(app.clone());
         let config = app.config_snapshot();
         let mut hook_ctx = HookContext::new(
@@ -92,10 +91,9 @@ where
             headers: params.headers().clone(),
         };
 
-        let app = self
-            .app
-            .get()
-            .expect("AuthServiceAdapter must be setup with DogApp");
+        let app = self.app.get().ok_or_else(|| {
+            dog_core::DogError::unavailable("Authentication is not initialized").into_anyhow()
+        })?;
         let services = ServiceCaller::new(app.clone());
         let config = app.config_snapshot();
         let mut hook_ctx = HookContext::new(

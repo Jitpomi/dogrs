@@ -1,11 +1,11 @@
 [package]
 name = "dog-queue"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["DogRS Team"]
-description = "Production-grade job queue with multi-tenant semantics, lease-based processing, and reference payloads"
+description = "Tenant-scoped jobs with durable ledgers, lease-based processing, and broker integrations"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/dogrs/dog-queue"
+repository = "https://github.com/Jitpomi/dogrs"
 homepage = "https://dogrs.dev"
 documentation = "https://docs.rs/dog-queue"
 keywords = ["queue", "jobs", "async", "multi-tenant", "background"]
@@ -45,7 +45,7 @@ tinyvec = { version = "1.11.0", features = ["alloc"], optional = true }
 cron = { version = "0.16.0", optional = true }
 
 # Storage backends (optional)
-redis = { version = "0.28.2", optional = true, features = ["tokio-comp", "connection-manager"] }
+redis = { version = "0.28.2", optional = true, features = ["tokio-rustls-comp", "tls-rustls-webpki-roots", "connection-manager"] }
 tokio-postgres = { version = "0.7.17", optional = true, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 sqlx = { version = "0.8.3", optional = true, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "sqlite", "chrono", "uuid", "json"] }
 rmp-serde = { version = "1.3", optional = true }
@@ -54,7 +54,7 @@ lapin = { version = "2.4.0", optional = true }
 rdkafka = { version = "0.36", optional = true, features = ["cmake-build"] }
 rskafka = { version = "0.6.0", optional = true }
 aws-sdk-sqs = { version = "1.56.0", optional = true }
-google-cloud-pubsub = { version = "0.32.3-preview", optional = true }
+google-cloud-pubsub = { version = "1.5", optional = true }
 async-nats = { version = "0.37.0", optional = true }
 
 # Observability (optional)
@@ -68,6 +68,7 @@ tower-http = { version = "0.6.11", optional = true, features = ["cors", "fs"] }
 # Legacy compatibility
 
 [dev-dependencies]
+google-cloud-auth = "1.17"
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-test = "0.4.5"
 tracing-test = "0.2.6"
@@ -88,7 +89,7 @@ redis = ["dep:redis"]
 postgres = ["dep:tokio-postgres"]
 sqlite = ["dep:sqlx"]
 sqlx-postgres = ["dep:sqlx"]
-amqp = ["dep:lapin"]
+amqp = ["rabbitmq-lapin"]
 kafka-rdkafka = ["dep:rdkafka"]
 kafka-rskafka = ["dep:rskafka"]
 kafka = ["kafka-rdkafka", "kafka-rskafka"]

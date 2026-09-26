@@ -14,12 +14,12 @@ use std::time::Duration;
 
 use chrono::Utc;
 pub use cron::Schedule;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep_until, Instant};
 use uuid::Uuid;
 
-use crate::{backend::QueueBackend, QueueAdapter, QueueCtx, QueueError, JobMessage};
+use crate::{backend::QueueBackend, JobMessage, QueueAdapter, QueueCtx, QueueError};
 
 /// A handle that uniquely identifies a scheduled recurring job.
 /// Dropping the handle does **not** cancel the job – call `cancel` on the
@@ -106,10 +106,7 @@ impl<B: QueueBackend + ?Sized + 'static> SchedulerBackend for InMemoryScheduler<
                     }
                 }
                 // Enqueue the job – ignore errors after logging.
-                if let Err(e) = adapter
-                    .enqueue_message(ctx.clone(), msg.clone())
-                    .await
-                {
+                if let Err(e) = adapter.enqueue_message(ctx.clone(), msg.clone()).await {
                     tracing::error!("Failed to enqueue recurring job: {}", e);
                 }
             }

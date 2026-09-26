@@ -1,6 +1,6 @@
-use poem::{Body, Endpoint, Response};
-use http::Request;
 use blog::build;
+use http::Request;
+use poem::{Body, Endpoint, Response};
 use serde_json::{json, Value};
 
 dog_transport::declare_adapter!(poem, to_endpoint, blog::BlogParams);
@@ -29,20 +29,20 @@ impl RouteOneshot for std::sync::Arc<poem::Route> {
             .method(parts.method)
             .uri(parts.uri)
             .version(parts.version);
-        
+
         for (k, v) in parts.headers {
             if let Some(key) = k {
                 builder = builder.header(key, v);
             }
         }
-        
+
         let req = builder.body(body);
         let res = self.call(req).await.unwrap();
         Ok(res)
     }
 }
 
-pub trait CollectCompat {
+trait CollectCompat {
     async fn collect(self) -> Result<CollectedBytes, std::convert::Infallible>;
 }
 

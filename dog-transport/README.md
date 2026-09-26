@@ -100,12 +100,47 @@ Because `nest_service` strips the prefix, `DogHttpService` performs path parsing
 *   **Without Scoping (Global Registry):** 
     *   The first path segment is always interpreted as the service name (e.g., `/persons/123` $\to$ service `"persons"`, ID `"123"`).
 
-### 2. Other Transports (Future Specification)
-Options structs are defined to configure future adapters:
-*   `GrpcOptions`: Controls reflection and gRPC-specific settings.
-*   `WebSocketOptions`: Controls heartbeats and ping/pong intervals.
-*   `SseOptions`: Configures Server-Sent Events parameters.
-*   `CliOptions`: Provides interactive mode flags for command-line runners.
+### 2. gRPC (`grpc` feature)
+
+`app.into_service(GrpcOptions::new())` returns `DogGrpcService`. Mount its
+`into_server()` result in a Tonic server, or use `serve_with_shutdown`.
+Reflection is opt-in through `enable_reflection(true)`. The versioned protocol is
+`dog.v1.DogTransport/Call`; it carries JSON `DogRequest` and `DogResponse` bytes.
+The crate exports the generated client, server, and reflection descriptor under
+`dog_transport::grpc::proto`. Messages are limited to 10 MiB. Configure TLS in
+Tonic or at a trusted reverse proxy before exposing a listener publicly.
+
+### 3. CLI (`cli` feature)
+
+`app.into_service(CliOptions::new()).run_stdio().await` reads one JSON
+`DogRequest` per input line and writes one response per output line. Invalid
+commands produce structured errors without terminating the session; oversized
+commands terminate it. `run(reader, writer)` supports embedding and tests.
+`interactive(true)` writes usage guidance to stderr; stdout remains machine-readable.
+
+### 4. Iroh (`iroh` feature)
+
+`app.into_service(IrohOptions::new(alpn)).await?` asynchronously creates a Router.
+Endpoint creation errors are returned; setup does not block the async runtime.
+Use `.endpoint(endpoint)` to share an existing endpoint, or
+`app.into_service((router_builder, alpn))` to compose multiple protocols before
+spawning the router. Requests and responses use length-prefixed JSON frames,
+with a 10 MiB frame limit and a 30-second request-read timeout.
+
+`BlobPayloadAdapter` stores/retrieves serialized payloads in an Iroh blob store;
+it is separate from the RPC transport and does not automatically fetch remote blobs.
+
+### WebSockets and SSE
+
+Axum adapter macros exist under the `http` feature. RPCs use the same hooks as
+other transports. Automatic global WebSocket broadcasts are disabled by default;
+set `ws.public_broadcasts` to the string `"true"` only for intentionally public
+channels. Private streams require application-authorized, tenant-scoped channels.
+Mount SSE handlers behind the application's authorization middleware.
+`WebSocketOptions` and `SseOptions` remain reserved configuration types; their
+fields are not automatically applied by the adapter macros.
+
+See the runnable `transport-demo` example and `docs/quickstart.md`.
 
 ---
 

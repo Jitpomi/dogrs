@@ -2,12 +2,12 @@
 
 #![cfg(feature = "iroh")]
 
+use async_trait::async_trait;
+use dog_core::{DogApp, DogMethod, DogParams, DogRequest, DogResponse, DogService, TenantContext};
+use dog_transport::{IntoDogService, IrohOptions};
+use iroh::{endpoint::presets, Endpoint};
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
-use iroh::{Endpoint, endpoint::presets};
-use dog_core::{DogApp, DogService, TenantContext, DogRequest, DogResponse, DogMethod, DogParams};
-use dog_transport::{IntoDogService, IrohOptions};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct TestData {
@@ -46,7 +46,10 @@ async fn read_frame<R: tokio::io::AsyncRead + Unpin>(mut reader: R) -> anyhow::R
 }
 
 /// Helper to write framed bytes (prefixed by 4-byte big-endian length)
-async fn write_frame<W: tokio::io::AsyncWrite + Unpin>(mut writer: W, data: &[u8]) -> anyhow::Result<()> {
+async fn write_frame<W: tokio::io::AsyncWrite + Unpin>(
+    mut writer: W,
+    data: &[u8],
+) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt;
     let len = data.len() as u32;
     writer.write_all(&len.to_be_bytes()).await?;
@@ -65,19 +68,21 @@ async fn test_iroh_transport_lifecycle() -> anyhow::Result<()> {
     // 2. Start Server Router
     let alpn = b"dogrs/test/echo/0".to_vec();
     let options = IrohOptions::new(alpn.clone()).relay_url("disabled");
-    let router = app.into_service(options);
-    
+    let router = app.into_service(options).await?;
+
     // Get server address (both NodeId and local socket addrs)
-    let server_addr = router.endpoint().addr();
+    let server_addr = loopback_addr(router.endpoint());
 
-
-    
     // 3. Connect client
     let client_ep = Endpoint::builder(presets::N0)
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind()
         .await?;
-    let conn = client_ep.connect(server_addr, &alpn).await?;
+    let conn = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client_ep.connect(server_addr, &alpn),
+    )
+    .await??;
     let (mut send, mut recv) = conn.open_bi().await?;
 
     // 4. Send DogRequest over bidirectional stream
@@ -92,7 +97,7 @@ async fn test_iroh_transport_lifecycle() -> anyhow::Result<()> {
         payload: None,
         metadata: HashMap::new(),
     };
-    
+
     let req_bytes = serde_json::to_vec(&req)?;
     write_frame(&mut send, &req_bytes).await?;
     send.finish()?;
@@ -100,7 +105,7 @@ async fn test_iroh_transport_lifecycle() -> anyhow::Result<()> {
     // 5. Read response
     let res_bytes = read_frame(&mut recv).await?;
     let res: DogResponse = serde_json::from_slice(&res_bytes)?;
-    
+
     // Verify response
     assert!(res.payload.is_some());
     let data: TestData = serde_json::from_value(res.payload.unwrap())?;
@@ -111,7 +116,7 @@ async fn test_iroh_transport_lifecycle() -> anyhow::Result<()> {
     conn.close(0u32.into(), b"done");
     client_ep.close().await;
     router.shutdown().await?;
-    
+
     Ok(())
 }
 
@@ -130,19 +135,22 @@ async fn test_iroh_transport_shared_endpoint() -> anyhow::Result<()> {
 
     // 3. Start Server Router with the pre-existing Endpoint
     let alpn = b"dogrs/test/echo/1".to_vec();
-    let options = IrohOptions::new(alpn.clone())
-        .endpoint(endpoint.clone());
-    let router = app.into_service(options);
-    
+    let options = IrohOptions::new(alpn.clone()).endpoint(endpoint.clone());
+    let router = app.into_service(options).await?;
+
     // Get server address (both NodeId and local socket addrs)
-    let server_addr = router.endpoint().addr();
-    
+    let server_addr = loopback_addr(router.endpoint());
+
     // 4. Connect client
     let client_ep = Endpoint::builder(presets::N0)
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind()
         .await?;
-    let conn = client_ep.connect(server_addr, &alpn).await?;
+    let conn = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client_ep.connect(server_addr, &alpn),
+    )
+    .await??;
     let (mut send, mut recv) = conn.open_bi().await?;
 
     // 5. Send DogRequest over bidirectional stream
@@ -157,7 +165,7 @@ async fn test_iroh_transport_shared_endpoint() -> anyhow::Result<()> {
         payload: None,
         metadata: HashMap::new(),
     };
-    
+
     let req_bytes = serde_json::to_vec(&req)?;
     write_frame(&mut send, &req_bytes).await?;
     send.finish()?;
@@ -165,7 +173,7 @@ async fn test_iroh_transport_shared_endpoint() -> anyhow::Result<()> {
     // 6. Read response
     let res_bytes = read_frame(&mut recv).await?;
     let res: DogResponse = serde_json::from_slice(&res_bytes)?;
-    
+
     // Verify response
     assert!(res.payload.is_some());
     let data: TestData = serde_json::from_value(res.payload.unwrap())?;
@@ -176,7 +184,7 @@ async fn test_iroh_transport_shared_endpoint() -> anyhow::Result<()> {
     conn.close(0u32.into(), b"done");
     client_ep.close().await;
     router.shutdown().await?;
-    
+
     Ok(())
 }
 
@@ -184,7 +192,10 @@ async fn test_iroh_transport_shared_endpoint() -> anyhow::Result<()> {
 struct MockGossipHandler;
 
 impl iroh::protocol::ProtocolHandler for MockGossipHandler {
-    async fn accept(&self, _connection: iroh::endpoint::Connection) -> Result<(), iroh::protocol::AcceptError> {
+    async fn accept(
+        &self,
+        _connection: iroh::endpoint::Connection,
+    ) -> Result<(), iroh::protocol::AcceptError> {
         Ok(())
     }
 }
@@ -216,12 +227,16 @@ async fn test_iroh_transport_builder_composition() -> anyhow::Result<()> {
     let router = router_builder.spawn();
 
     // 7. Verify we can still perform DogRS RPC on the composed router
-    let server_addr = router.endpoint().addr();
+    let server_addr = loopback_addr(router.endpoint());
     let client_ep = Endpoint::builder(presets::N0)
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind()
         .await?;
-    let conn = client_ep.connect(server_addr, &alpn).await?;
+    let conn = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client_ep.connect(server_addr, &alpn),
+    )
+    .await??;
     let (mut send, mut recv) = conn.open_bi().await?;
 
     let req = DogRequest {
@@ -235,14 +250,14 @@ async fn test_iroh_transport_builder_composition() -> anyhow::Result<()> {
         payload: None,
         metadata: HashMap::new(),
     };
-    
+
     let req_bytes = serde_json::to_vec(&req)?;
     write_frame(&mut send, &req_bytes).await?;
     send.finish()?;
 
     let res_bytes = read_frame(&mut recv).await?;
     let res: DogResponse = serde_json::from_slice(&res_bytes)?;
-    
+
     assert!(res.payload.is_some());
     let data: TestData = serde_json::from_value(res.payload.unwrap())?;
     assert_eq!(data.id, Some("item-111".to_string()));
@@ -251,6 +266,16 @@ async fn test_iroh_transport_builder_composition() -> anyhow::Result<()> {
     conn.close(0u32.into(), b"done");
     client_ep.close().await;
     router.shutdown().await?;
-    
+
     Ok(())
+}
+
+fn loopback_addr(endpoint: &Endpoint) -> iroh::EndpointAddr {
+    let mut socket = endpoint
+        .bound_sockets()
+        .into_iter()
+        .find(|s| s.is_ipv4())
+        .expect("IPv4 socket");
+    socket.set_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    iroh::EndpointAddr::new(endpoint.id()).with_ip_addr(socket)
 }

@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -6,7 +6,7 @@ use dog_core::HookContext;
 use oauth2::basic::BasicClient;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
-    RedirectUrl, Scope, TokenResponse, TokenUrl,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use serde_json::Value;
 
@@ -37,6 +37,24 @@ pub struct OAuth2ClientConfig {
     pub userinfo_url: Option<String>,
 }
 
+/// Store `state` and `code_verifier` server-side, bound to the initiating browser
+/// session with a short expiration. Never return the verifier to an API caller.
+pub struct OAuthAuthorization {
+    pub url: String,
+    pub state: String,
+    pub code_verifier: String,
+}
+
+#[async_trait]
+pub trait OAuthCallbackVerifier<P>: Send + Sync
+where
+    P: Clone + Send + Sync + 'static,
+{
+    /// Validate browser/session binding and expiration, atomically consume the
+    /// one-use state, then return its stored PKCE verifier. Reject missing/replayed state.
+    async fn consume(&self, state: &str, ctx: &mut HookContext<Value, P>) -> Result<String>;
+}
+
 pub struct OAuth2AuthorizationCodeProvider<P>
 where
     P: Clone + Send + Sync + 'static,
@@ -45,14 +63,18 @@ where
     client: ConfiguredBasicClient,
     scopes: Vec<String>,
     userinfo_url: Option<String>,
-    _marker: PhantomData<fn() -> P>,
+    verifier: Arc<dyn OAuthCallbackVerifier<P>>,
+    http: reqwest::Client,
 }
 
 impl<P> OAuth2AuthorizationCodeProvider<P>
 where
     P: Clone + Send + Sync + 'static,
 {
-    pub fn new(config: OAuth2ClientConfig) -> Result<Self> {
+    pub fn new(
+        config: OAuth2ClientConfig,
+        verifier: Arc<dyn OAuthCallbackVerifier<P>>,
+    ) -> Result<Self> {
         // oauth2 5.x: BasicClient::new() takes only ClientId; other fields via builders.
         // Each set_* call changes the type-state, giving us ConfiguredBasicClient.
         let client = BasicClient::new(ClientId::new(config.client_id))
@@ -66,19 +88,29 @@ where
             client,
             scopes: config.scopes,
             userinfo_url: config.userinfo_url,
-            _marker: PhantomData,
+            verifier,
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(15))
+                .build()?,
         })
     }
 
-    pub fn authorize_url(&self) -> String {
-        // oauth2 5.x with EndpointSet: authorize_url() returns AuthorizationRequest directly
-        // (infallible — no Result). Use .url() to extract the (Url, CsrfToken) pair.
-        let mut req = self.client.authorize_url(CsrfToken::new_random);
-        for s in &self.scopes {
-            req = req.add_scope(Scope::new(s.clone()));
+    pub fn authorize_url(&self) -> OAuthAuthorization {
+        let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+        let mut req = self
+            .client
+            .authorize_url(CsrfToken::new_random)
+            .set_pkce_challenge(challenge);
+        for scope in &self.scopes {
+            req = req.add_scope(Scope::new(scope.clone()));
         }
-        let (url, _csrf) = req.url();
-        url.to_string()
+        let (url, state) = req.url();
+        OAuthAuthorization {
+            url: url.to_string(),
+            state: state.secret().clone(),
+            code_verifier: verifier.secret().clone(),
+        }
     }
 }
 
@@ -91,14 +123,23 @@ where
         &self.name
     }
 
-    async fn exchange_code(&self, code: &str, _ctx: &mut HookContext<Value, P>) -> Result<String> {
+    async fn exchange_code(
+        &self,
+        code: &str,
+        state: Option<&str>,
+        ctx: &mut HookContext<Value, P>,
+    ) -> Result<String> {
         // oauth2 5.x with EndpointSet: exchange_code() returns CodeTokenRequest (not Result).
         // request_async takes a &reqwest::Client (implements AsyncHttpClient).
-        let http_client = reqwest::Client::new();
+        let state = state.filter(|s| !s.is_empty()).ok_or_else(|| {
+            dog_core::DogError::not_authenticated("Missing OAuth state").into_anyhow()
+        })?;
+        let verifier = self.verifier.consume(state, ctx).await?;
         let token = self
             .client
             .exchange_code(AuthorizationCode::new(code.to_string()))
-            .request_async(&http_client)
+            .set_pkce_verifier(PkceCodeVerifier::new(verifier))
+            .request_async(&self.http)
             .await?;
 
         Ok(token.access_token().secret().to_string())
@@ -113,8 +154,8 @@ where
             return Ok(None);
         };
 
-        let client = reqwest::Client::new();
-        let profile = client
+        let profile = self
+            .http
             .get(url)
             .bearer_auth(access_token)
             .send()

@@ -41,7 +41,7 @@ Enable a JWT backend feature (one of):
 Key options:
 
 - **`jwt.secret`**
-  - Required if `AuthStrategy::Jwt` is enabled
+  - Required for HMAC algorithms; RSA/ECDSA use configured PEM key paths
 - **`strategies`**
   - Enabled strategy list (e.g. `Jwt`, `OAuth`, `Custom("local")`)
 - **Entity attachment (Feathers-like)**
@@ -66,7 +66,7 @@ use dog_core::DogAppBuilder;
 use serde_json::Value;
 
 // P is your params type
-fn setup_auth<P: Send + Clone + 'static>(builder: &mut DogAppBuilder<Value, P>) -> anyhow::Result<()> {
+fn setup_auth<P: Send + Sync + Clone + 'static>(builder: &mut DogAppBuilder<Value, P>) -> anyhow::Result<()> {
     let options = AuthOptions::default();
     
     // Create the auth builder
@@ -120,3 +120,10 @@ fn mount_auth<P: Send + Sync + Clone + 'static>(builder: &mut DogAppBuilder<Valu
 
 - `dog-auth` is **transport-agnostic**. HTTP/WebSocket concerns belong in the server adapter.
 - If you use entity attachment, ensure your `DogService` implementation supports the required operations for your strategy.
+
+## 0.2 security changes
+
+See [release notes](../docs/release-0.2.md) for token-type verification, PEM features,
+key rotation, external parameter handling and OAuth's required callback-state verifier.
+Refresh tokens cannot be used as access tokens. Applications must authorize tenant
+access after authenticating the caller; a tenant ID by itself is not authorization.

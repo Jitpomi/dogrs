@@ -8,7 +8,7 @@ use axum::{
     routing, Json, Router,
 };
 use dog_core::errors::DogError;
-use dog_core::{tenant::TenantContext, DogApp, DogRequest, DogTransportKind, DogMethod, DogParams};
+use dog_core::{tenant::TenantContext, DogApp, DogMethod, DogParams, DogRequest, DogTransportKind};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -74,7 +74,7 @@ where
         metadata,
     };
 
-    let res = app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+    let res = app.handle(req).await.map_err(DogAxumError::from)?;
     Ok(res.payload.unwrap_or(serde_json::Value::Null))
 }
 
@@ -390,7 +390,8 @@ where
                         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
                     let rest_params = RestParams::from_parts("rest", &headers, query, "GET", &uri);
-                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let params_val =
+                        serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
                     let params_map = match params_val {
                         serde_json::Value::Object(map) => map.into_iter().collect(),
                         _ => std::collections::HashMap::new(),
@@ -399,7 +400,8 @@ where
                     let mut metadata = std::collections::HashMap::new();
                     for (k, v) in &headers {
                         if let Ok(s) = v.to_str() {
-                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                            metadata
+                                .insert(k.to_string(), serde_json::Value::String(s.to_string()));
                         }
                     }
 
@@ -425,7 +427,7 @@ where
                         metadata,
                     };
 
-                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    let res = state.app.handle(req).await.map_err(DogAxumError::from)?;
                     Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             })
@@ -448,23 +450,25 @@ where
                         .map_err(|e| anyhow::anyhow!(e))?;
 
                     let payload = if !body_bytes.is_empty() {
-                        let val: serde_json::Value = serde_json::from_slice(&body_bytes).map_err(|e| {
-                            dog_core::errors::DogError::bad_request(format!(
-                                "Failed to parse JSON: {}",
-                                e
-                            ))
-                            .with_errors(serde_json::json!({
-                                "_schema": [e.to_string()]
-                            }))
-                            .into_anyhow()
-                        })?;
+                        let val: serde_json::Value =
+                            serde_json::from_slice(&body_bytes).map_err(|e| {
+                                dog_core::errors::DogError::bad_request(format!(
+                                    "Failed to parse JSON: {}",
+                                    e
+                                ))
+                                .with_errors(serde_json::json!({
+                                    "_schema": [e.to_string()]
+                                }))
+                                .into_anyhow()
+                            })?;
                         Some(val)
                     } else {
                         None
                     };
 
                     let rest_params = RestParams::from_parts("rest", &headers, query, "POST", &uri);
-                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let params_val =
+                        serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
                     let params_map = match params_val {
                         serde_json::Value::Object(map) => map.into_iter().collect(),
                         _ => std::collections::HashMap::new(),
@@ -473,7 +477,8 @@ where
                     let mut metadata = std::collections::HashMap::new();
                     for (k, v) in &headers {
                         if let Ok(s) = v.to_str() {
-                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                            metadata
+                                .insert(k.to_string(), serde_json::Value::String(s.to_string()));
                         }
                     }
 
@@ -499,7 +504,7 @@ where
                         metadata,
                     };
 
-                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    let res = state.app.handle(req).await.map_err(DogAxumError::from)?;
                     Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             }),
@@ -521,7 +526,8 @@ where
                         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
                     let rest_params = RestParams::from_parts("rest", &headers, query, "GET", &uri);
-                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let params_val =
+                        serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
                     let params_map = match params_val {
                         serde_json::Value::Object(map) => map.into_iter().collect(),
                         _ => std::collections::HashMap::new(),
@@ -530,7 +536,8 @@ where
                     let mut metadata = std::collections::HashMap::new();
                     for (k, v) in &headers {
                         if let Ok(s) = v.to_str() {
-                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                            metadata
+                                .insert(k.to_string(), serde_json::Value::String(s.to_string()));
                         }
                     }
 
@@ -546,7 +553,7 @@ where
                         metadata,
                     };
 
-                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    let res = state.app.handle(req).await.map_err(DogAxumError::from)?;
                     Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             })
@@ -570,23 +577,25 @@ where
                         .map_err(|e| anyhow::anyhow!(e))?;
 
                     let payload = if !body_bytes.is_empty() {
-                        let val: serde_json::Value = serde_json::from_slice(&body_bytes).map_err(|e| {
-                            dog_core::errors::DogError::bad_request(format!(
-                                "Failed to parse JSON: {}",
-                                e
-                            ))
-                            .with_errors(serde_json::json!({
-                                "_schema": [e.to_string()]
-                            }))
-                            .into_anyhow()
-                        })?;
+                        let val: serde_json::Value =
+                            serde_json::from_slice(&body_bytes).map_err(|e| {
+                                dog_core::errors::DogError::bad_request(format!(
+                                    "Failed to parse JSON: {}",
+                                    e
+                                ))
+                                .with_errors(serde_json::json!({
+                                    "_schema": [e.to_string()]
+                                }))
+                                .into_anyhow()
+                            })?;
                         Some(val)
                     } else {
                         None
                     };
 
                     let rest_params = RestParams::from_parts("rest", &headers, query, "PUT", &uri);
-                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let params_val =
+                        serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
                     let params_map = match params_val {
                         serde_json::Value::Object(map) => map.into_iter().collect(),
                         _ => std::collections::HashMap::new(),
@@ -595,7 +604,8 @@ where
                     let mut metadata = std::collections::HashMap::new();
                     for (k, v) in &headers {
                         if let Ok(s) = v.to_str() {
-                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                            metadata
+                                .insert(k.to_string(), serde_json::Value::String(s.to_string()));
                         }
                     }
 
@@ -611,7 +621,7 @@ where
                         metadata,
                     };
 
-                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    let res = state.app.handle(req).await.map_err(DogAxumError::from)?;
                     Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             })
@@ -635,23 +645,26 @@ where
                         .map_err(|e| anyhow::anyhow!(e))?;
 
                     let payload = if !body_bytes.is_empty() {
-                        let val: serde_json::Value = serde_json::from_slice(&body_bytes).map_err(|e| {
-                            dog_core::errors::DogError::bad_request(format!(
-                                "Failed to parse JSON: {}",
-                                e
-                            ))
-                            .with_errors(serde_json::json!({
-                                "_schema": [e.to_string()]
-                            }))
-                            .into_anyhow()
-                        })?;
+                        let val: serde_json::Value =
+                            serde_json::from_slice(&body_bytes).map_err(|e| {
+                                dog_core::errors::DogError::bad_request(format!(
+                                    "Failed to parse JSON: {}",
+                                    e
+                                ))
+                                .with_errors(serde_json::json!({
+                                    "_schema": [e.to_string()]
+                                }))
+                                .into_anyhow()
+                            })?;
                         Some(val)
                     } else {
                         None
                     };
 
-                    let rest_params = RestParams::from_parts("rest", &headers, query, "PATCH", &uri);
-                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let rest_params =
+                        RestParams::from_parts("rest", &headers, query, "PATCH", &uri);
+                    let params_val =
+                        serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
                     let params_map = match params_val {
                         serde_json::Value::Object(map) => map.into_iter().collect(),
                         _ => std::collections::HashMap::new(),
@@ -660,7 +673,8 @@ where
                     let mut metadata = std::collections::HashMap::new();
                     for (k, v) in &headers {
                         if let Ok(s) = v.to_str() {
-                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                            metadata
+                                .insert(k.to_string(), serde_json::Value::String(s.to_string()));
                         }
                     }
 
@@ -676,7 +690,7 @@ where
                         metadata,
                     };
 
-                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    let res = state.app.handle(req).await.map_err(DogAxumError::from)?;
                     Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             })
@@ -694,8 +708,10 @@ where
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-                    let rest_params = RestParams::from_parts("rest", &headers, query, "DELETE", &uri);
-                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let rest_params =
+                        RestParams::from_parts("rest", &headers, query, "DELETE", &uri);
+                    let params_val =
+                        serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
                     let params_map = match params_val {
                         serde_json::Value::Object(map) => map.into_iter().collect(),
                         _ => std::collections::HashMap::new(),
@@ -704,7 +720,8 @@ where
                     let mut metadata = std::collections::HashMap::new();
                     for (k, v) in &headers {
                         if let Ok(s) = v.to_str() {
-                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                            metadata
+                                .insert(k.to_string(), serde_json::Value::String(s.to_string()));
                         }
                     }
 
@@ -720,7 +737,7 @@ where
                         metadata,
                     };
 
-                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    let res = state.app.handle(req).await.map_err(DogAxumError::from)?;
                     Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             }),

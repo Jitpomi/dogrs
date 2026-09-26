@@ -153,5 +153,5 @@ async fn non_dogerror_maps_to_generalerror_shape() {
     assert_eq!(body["name"], "GeneralError");
     assert_eq!(body["code"], 500);
     assert_eq!(body["className"], "general-error");
-    assert!(body["message"].as_str().unwrap().contains("boom"));
+    assert_eq!(body["message"], "Internal server error");
 }

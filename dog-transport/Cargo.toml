@@ -1,13 +1,21 @@
 [package]
 name = "dog-transport"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+description = "HTTP, gRPC, CLI and Iroh transports for DogRS"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Jitpomi/dogrs"
 
 [dependencies]
-dog-core = { path = "../dog-core", version = "0.1.8", features = ["json"] }
+dog-core = { path = "../dog-core", version = "0.2.0", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1.44"
+
+tonic = { version = "0.14", optional = true, features = ["transport"] }
+tonic-prost = { version = "0.14", optional = true }
+prost = { version = "0.14", optional = true }
+tonic-reflection = { version = "0.14", optional = true }
 
 # HTTP optional dependencies
 http = { version = "1", optional = true }
@@ -25,8 +33,14 @@ iroh-blobs = { version = "0.103.0", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 futures = { version = "0.3", optional = true }
 
+[build-dependencies]
+tonic-prost-build = { version = "0.14", optional = true }
+protoc-bin-vendored = { version = "3", optional = true }
+
 [features]
 default = []
+grpc = ["dep:tonic", "dep:tonic-prost", "dep:prost", "dep:tonic-reflection", "dep:tonic-prost-build", "dep:protoc-bin-vendored", "dep:tokio"]
+cli = ["dep:tokio"]
 http = [
     "dep:http",
     "dep:tower",
@@ -49,6 +63,10 @@ iroh = [
 ]
 
 [dev-dependencies]
+dog-auth = { path = "../dog-auth" }
+async-trait = "0.1"
+anyhow = "1"
+tokio-stream = { version = "0.1", features = ["net"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 

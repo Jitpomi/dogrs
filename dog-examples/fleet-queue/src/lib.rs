@@ -6,13 +6,16 @@ pub mod hooks;
 pub mod services;
 pub mod typedb;
 
+use dog_core::DogApp;
+use dog_transport::{http::DogHttpService, HttpOptions, IntoDogService};
 use serde_json::Value;
 pub use services::FleetParams;
 use std::sync::Arc;
-use dog_core::DogApp;
-use dog_transport::{HttpOptions, IntoDogService, http::DogHttpService};
 
-pub async fn build() -> anyhow::Result<(DogApp<Value, FleetParams>, DogHttpService<Value, FleetParams>)> {
+pub async fn build() -> anyhow::Result<(
+    DogApp<Value, FleetParams>,
+    DogHttpService<Value, FleetParams>,
+)> {
     let mut builder = app::build_builder().await?;
 
     let state = builder
@@ -48,7 +51,7 @@ pub async fn build() -> anyhow::Result<(DogApp<Value, FleetParams>, DogHttpServi
             .route("/tomtom", "tomtom")
             .route("/jobs", "jobs")
             .route("/rules", "rules")
-            .route("/certifications", "certifications")
+            .route("/certifications", "certifications"),
     );
 
     // Start background system with built app

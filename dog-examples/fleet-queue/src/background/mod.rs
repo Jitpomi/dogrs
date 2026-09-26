@@ -7,7 +7,7 @@ use crate::services::FleetParams;
 use anyhow::Result;
 use dog_core::DogApp;
 use dog_queue::backend::memory::MemoryBackend;
-use dog_queue::{QueueAdapter, QueueCtx, Job, EnqueueOptions, WorkerHandle};
+use dog_queue::{EnqueueOptions, Job, QueueAdapter, QueueCtx, WorkerHandle};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
@@ -33,8 +33,10 @@ impl BackgroundSystem {
         let backend = MemoryBackend::new();
 
         // Use custom configuration with long idle timeout so workers don't shutdown during testing
-        let mut config = dog_queue::QueueConfig::default();
-        config.worker_idle_timeout = std::time::Duration::from_secs(86400); // 24 hours
+        let config = dog_queue::QueueConfig {
+            worker_idle_timeout: std::time::Duration::from_secs(86400),
+            ..Default::default()
+        };
         let adapter = Arc::new(QueueAdapter::with_config(backend, config));
 
         // Register all implemented job types
@@ -80,11 +82,16 @@ impl BackgroundSystem {
 
     /// Enqueue a GPS tracking job for a specific assignment
     pub async fn enqueue_gps_tracking(&self, assignment_id: String) -> Result<()> {
-        self.enqueue_gps_tracking_opts(assignment_id, EnqueueOptions::immediate()).await
+        self.enqueue_gps_tracking_opts(assignment_id, EnqueueOptions::immediate())
+            .await
     }
 
     /// Enqueue a GPS tracking job with options
-    pub async fn enqueue_gps_tracking_opts(&self, assignment_id: String, opts: EnqueueOptions) -> Result<()> {
+    pub async fn enqueue_gps_tracking_opts(
+        &self,
+        assignment_id: String,
+        opts: EnqueueOptions,
+    ) -> Result<()> {
         let ctx = QueueCtx::new("fleet_tenant".to_string());
         let job = GPSTrackingJob::new(assignment_id);
 
@@ -99,7 +106,13 @@ impl BackgroundSystem {
         traffic_delay_minutes: i32,
         trigger_reason: String,
     ) -> Result<()> {
-        self.enqueue_route_rebalancing_opts(affected_routes, traffic_delay_minutes, trigger_reason, EnqueueOptions::immediate()).await
+        self.enqueue_route_rebalancing_opts(
+            affected_routes,
+            traffic_delay_minutes,
+            trigger_reason,
+            EnqueueOptions::immediate(),
+        )
+        .await
     }
 
     /// Enqueue a Route Rebalancing job with options

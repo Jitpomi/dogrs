@@ -13,7 +13,10 @@ use serde_json::Value;
 pub use crate::services::AuthDemoParams;
 pub use auth::oauth2::google::http::configure as configure_oauth;
 
-pub async fn build() -> Result<(DogApp<Value, AuthDemoParams>, DogHttpService<Value, AuthDemoParams>)> {
+pub async fn build() -> Result<(
+    DogApp<Value, AuthDemoParams>,
+    DogHttpService<Value, AuthDemoParams>,
+)> {
     let (dog, http_service) = app::auth_app().await?;
     Ok((dog, http_service))
 }
