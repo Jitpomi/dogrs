@@ -1,0 +1,84 @@
+name: Hosted system acceptance
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/dogrs-hosted-validation]
+permissions:
+  contents: read
+concurrency:
+  group: dogrs-hosted-system
+  cancel-in-progress: false
+jobs:
+  hosted-system:
+    if: github.repository == 'Jitpomi/dogrs'
+    environment: dogrs-hosted-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev libcurl4-openssl-dev pkg-config
+      - run: cargo build -p hosted-system --all-features --locked
+      - name: Materialize dedicated test credentials
+        env:
+          CONNECTIONS: ${{ secrets.DOGRS_TEST_CONNECTIONS }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'dogrs-secrets'
+          root.mkdir(mode=0o700)
+          credentials = json.loads(os.environ['CONNECTIONS'])
+          for name, value in credentials.items():
+              assert '/' not in name and '..' not in name
+              path = root / name
+              path.write_text(value)
+              path.chmod(0o600)
+              for line in value.splitlines():
+                  if line: print('::add-mask::' + line)
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('DOGRS_SECRETS_DIR=' + str(root) + '\n')
+          PY
+      - name: Verify provider-specific limits
+        env:
+          DOGRS_TEST_TENANT: dogrs-test-capacity
+        run: |
+          DOGRS_BACKEND=nats target/debug/hosted-system probe
+          DOGRS_BACKEND=redis target/debug/hosted-system probe
+      - name: Exercise the complete system on hosted services
+        env:
+          DOGRS_SYSTEM_BINARY: target/debug/hosted-system
+          DOGRS_REPORT_DIR: hosted-results
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          failures = []
+          for backend in ['postgres', 'nats', 'redis', 'rabbitmq', 'kafka', 'kafka-rust']:
+              result = subprocess.run(['python3', 'dog-examples/hosted-system/run_system.py', backend], timeout=420)
+              if result.returncode: failures.append(backend)
+          if failures: raise SystemExit('Failed hosted backends: ' + ', '.join(failures))
+          PY
+      - name: Record acceptance results
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('## Hosted system results\n\nSynthetic payment workflow; free hosted services; verified TLS.\n\n')
+              out.write('| Backend | Result | Checks | Jobs/s | Enqueue p95 ms |\n|---|---|---:|---:|---:|\n')
+              for path in sorted(pathlib.Path('hosted-results').glob('*.json')):
+                  r=json.loads(path.read_text()); m=r.get('metrics',{})
+                  out.write(f"| {r['backend']} | {r['result']} | {len(r['checks'])} | {m.get('jobs_per_second','—')} | {m.get('enqueue_p95_ms','—')} |\n")
+                  print(json.dumps(r))
+              out.write('\nValkey does not provide AOF here: successful process recovery does not prove provider-crash durability. Free plans do not prove cluster failover or production throughput.\n')
+          PY
+      - name: Delete runner credential files
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os,pathlib,shutil
+          shutil.rmtree(pathlib.Path(os.environ['RUNNER_TEMP'])/'dogrs-secrets',ignore_errors=True)
+          PY

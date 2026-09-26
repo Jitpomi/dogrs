@@ -385,3 +385,95 @@ impl<S: StateStore> DurableBackend<S> {
 
 impl<S: StateStore> super::broker::sealed::Sealed for DurableBackend<S> {}
 impl<S: StateStore> super::broker::JobLedger for DurableBackend<S> {}
+
+#[cfg(test)]
+mod latency_tests {
+    use super::*;
+    use crate::{Job, JobError, QueueAdapter, QueueConfig};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    struct SlowStore {
+        state: tokio::sync::Mutex<TenantState>,
+    }
+    #[async_trait]
+    impl StateStore for SlowStore {
+        async fn update(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+            if matches!(op, Operation::Heartbeat(..)) {
+                // Response/lock latency must not accumulate into a shrinking lease.
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+            self.state.lock().await.apply(tenant, op)
+        }
+        async fn tenants(&self) -> QueueResult<Vec<String>> {
+            Ok(vec!["latency".into()])
+        }
+    }
+    #[derive(Serialize, Deserialize)]
+    struct SlowJob;
+    #[async_trait]
+    impl Job for SlowJob {
+        type Context = Arc<AtomicUsize>;
+        type Result = ();
+        const JOB_TYPE: &'static str = "slow-job";
+        const MAX_RETRIES: u32 = 0;
+        async fn execute(&self, executions: Self::Context) -> Result<(), JobError> {
+            executions.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn heartbeat_accounts_for_backend_round_trip_time() {
+        let lease = Duration::from_millis(800);
+        let backend = DurableBackend {
+            store: SlowStore {
+                state: Default::default(),
+            },
+            lease_duration: lease,
+        };
+        let adapter = QueueAdapter::try_with_config(
+            backend,
+            QueueConfig {
+                max_workers: 1,
+                lease_duration: lease,
+                heartbeat_interval: Duration::from_millis(100),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        adapter.register_job::<SlowJob>().await.unwrap();
+        let ctx = QueueCtx::new("latency");
+        let id = adapter.enqueue(ctx.clone(), SlowJob).await.unwrap();
+        let executions = Arc::new(AtomicUsize::new(0));
+        let workers = adapter
+            .start_workers(
+                ctx.clone(),
+                executions.clone(),
+                vec![SlowJob::JOB_TYPE.into()],
+            )
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(6), async {
+            loop {
+                let status = adapter
+                    .backend()
+                    .get_status(ctx.clone(), id.clone())
+                    .await
+                    .unwrap();
+                if status.is_terminal() {
+                    break status;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await;
+        workers.shutdown().await.unwrap();
+        assert!(
+            matches!(result.unwrap(), JobStatus::Completed { .. }),
+            "a healthy slow heartbeat must retain ownership"
+        );
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+    }
+}

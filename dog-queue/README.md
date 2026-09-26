@@ -83,7 +83,10 @@ use their explicit names to choose one.
 
 NATS `new` is a development convenience with a single file replica. Production
 callers should provision a dedicated replicated KV bucket, disable direct/follower
-reads, set no TTL and use discard-new, then call `from_store`. `NatsConfig.subject`
+reads, set no TTL and use discard-new, then call `from_store_with_max_payload(bucket, account_payload_limit)`.
+Use the smaller of the server and account limits; hosted account limits can be
+lower than the server INFO value. The older `from_store` convenience assumes a
+1 MiB payload limit. `NatsConfig.subject`
 now names that KV bucket, not a Core NATS subject.
 
 ## Capacity, security and migration
@@ -93,7 +96,8 @@ intended for modest job volumes, not high-throughput bulk queues. Keep payloads
 small, store large payloads by reference, and regularly use
 `purge_terminal_before(ctx, cutoff)` on the ledger. JetStream's maximum value and
 server message limits also bound tenant state. NATS admission reserves 8 KiB per
-record for later status updates within a 900 KB state budget. Purge terminal
+record for later status updates within a state budget capped at 900 KB and reduced for smaller account/stream
+payload limits (with 4 KiB reserved for protocol framing). Purge terminal
 history before that budget fills. Persisted result references must serialize to
 at most 4 KiB; error summaries retain at most 256 characters. Benchmark realistic tenant volume
 and maintain free capacity for status updates before deploying.

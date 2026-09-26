@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "dog-examples/transport-demo",
+    "dog-examples/hosted-system",
     "dog-core",
     "dog-transport",
     "dog-axum",

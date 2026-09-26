@@ -90,6 +90,20 @@ impl PostgresBackend {
 impl StateStore for PostgresStore {
     async fn update(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
         let mut client = self.client().await?;
+        if matches!(op, Operation::Get(_)) {
+            let row = client
+                .query_opt(
+                    "SELECT state FROM dogrs_queue_state_v1 WHERE tenant=$1",
+                    &[&tenant],
+                )
+                .await
+                .map_err(error)?;
+            let mut state: TenantState = match row {
+                Some(row) => serde_json::from_value(row.get(0)).map_err(error)?,
+                None => TenantState::default(),
+            };
+            return state.apply(tenant, op);
+        }
         let tx = client.transaction().await.map_err(error)?;
         let empty = serde_json::to_value(TenantState::default()).map_err(error)?;
         tx.execute(
@@ -105,15 +119,18 @@ impl StateStore for PostgresStore {
             )
             .await
             .map_err(error)?;
-        let mut state: TenantState = serde_json::from_value(row.get(0)).map_err(error)?;
+        let previous: serde_json::Value = row.get(0);
+        let mut state: TenantState = serde_json::from_value(previous.clone()).map_err(error)?;
         let result = state.apply(tenant, op)?;
         let value = serde_json::to_value(state).map_err(error)?;
-        tx.execute(
-            "UPDATE dogrs_queue_state_v1 SET state=$2 WHERE tenant=$1",
-            &[&tenant, &value],
-        )
-        .await
-        .map_err(error)?;
+        if value != previous {
+            tx.execute(
+                "UPDATE dogrs_queue_state_v1 SET state=$2 WHERE tenant=$1",
+                &[&tenant, &value],
+            )
+            .await
+            .map_err(error)?;
+        }
         tx.commit().await.map_err(error)?;
         Ok(result)
     }
