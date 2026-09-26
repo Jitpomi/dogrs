@@ -344,6 +344,12 @@ impl RedisStore {
             }
             return Ok(outcome);
         }
+        if matches!(op, Operation::Dequeue(..)) {
+            // Every attempted claim lost its CAS: this caller owns no lease.
+            // Other workers making progress is an empty poll, not a backend
+            // failure. Keep the work bounded and let the caller poll again.
+            return Ok(Outcome::Lease(None));
+        }
         Err(error("Redis job contention: retry operation"))
     }
     async fn tenants(&self) -> QueueResult<Vec<String>> {

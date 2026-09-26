@@ -215,3 +215,9 @@ reserves one quarter of the connection pool for non-enqueue operations (at least
 one connection when possible). A live regression holds row locks that block
 submissions and verifies that a leased job still completes before those locks
 are released. Explicit producer limits remain available for measured tuning.
+
+Redis concurrent dequeue no longer reports a backend failure when all bounded
+claim attempts lose compare-and-swap races. It returns an empty poll, with no
+lease acquired. A 64-worker / 512-job live regression reproduced the error before
+the fix and passed afterward with each job completed once. Other operation
+errors are unchanged.

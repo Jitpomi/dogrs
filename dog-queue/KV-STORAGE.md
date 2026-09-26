@@ -5,6 +5,11 @@ supply their own `JobLedger` implementation for broker adapters.
 
 ## Redis
 
+Concurrent claimers may exhaust a bounded scan by losing compare-and-swap races
+to other workers. Such a dequeue returns `None` because it acquired no lease;
+callers should continue polling. Backend connectivity errors and failures of
+other state-changing operations still propagate as errors.
+
 V2 stores metadata and binary payloads in separate per-tenant hashes. Ready,
 delayed, leased and terminal jobs have separate sorted-set indexes. Lua scripts
 atomically compare the selected record, change its state, and update its indexes

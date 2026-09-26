@@ -145,3 +145,77 @@ async fn nats_independent_records_and_reused_dedupe() {
     let js = async_nats::jetstream::new(async_nats::connect(config.url).await.unwrap());
     js.delete_key_value(config.subject).await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires disposable Redis"]
+async fn redis_claim_contention_is_an_empty_poll_not_an_error() {
+    use dog_queue::backend::redis::{RedisBackend, RedisConfig};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let backend = Arc::new(
+        RedisBackend::new(RedisConfig {
+            connection_string: std::env::var("DOGRS_REDIS_URL").unwrap(),
+        })
+        .await
+        .unwrap(),
+    );
+    let ctx = QueueCtx::new(format!("contention-{}", uuid::Uuid::new_v4()));
+    const JOBS: usize = 512;
+    const WORKERS: usize = 64;
+    for _ in 0..JOBS {
+        backend
+            .enqueue(
+                ctx.clone(),
+                JobMessage::new("race", vec![1], "bytes", "q")
+                    .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1)),
+            )
+            .await
+            .unwrap();
+    }
+    let completed = Arc::new(AtomicUsize::new(0));
+    let barrier = Arc::new(tokio::sync::Barrier::new(WORKERS));
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..WORKERS {
+        let (backend, ctx, completed, barrier) = (
+            backend.clone(),
+            ctx.clone(),
+            completed.clone(),
+            barrier.clone(),
+        );
+        tasks.spawn(async move {
+            barrier.wait().await;
+            let mut claimed = Vec::new();
+            while completed.load(Ordering::SeqCst) < JOBS {
+                match backend.dequeue(ctx.clone(), &["q"]).await.unwrap() {
+                    Some(job) => {
+                        let id = job.record.job_id;
+                        backend
+                            .ack_complete(ctx.clone(), id.clone(), job.lease_token, None)
+                            .await
+                            .unwrap();
+                        claimed.push(id);
+                        completed.fetch_add(1, Ordering::SeqCst);
+                    }
+                    None => tokio::time::sleep(Duration::from_millis(1)).await,
+                }
+            }
+            claimed
+        });
+    }
+    let ids = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut ids = std::collections::HashSet::new();
+        while let Some(result) = tasks.join_next().await {
+            for id in result.unwrap() {
+                assert!(ids.insert(id), "two workers owned the same job");
+            }
+        }
+        ids
+    })
+    .await
+    .unwrap();
+    assert_eq!(ids.len(), JOBS);
+    for id in ids {
+        let record = backend.get_record(ctx.clone(), id).await.unwrap();
+        assert!(matches!(record.status, JobStatus::Completed { .. }));
+        assert_eq!(record.attempt, 1);
+    }
+}
