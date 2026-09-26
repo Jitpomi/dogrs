@@ -32,7 +32,12 @@ pub async fn contract(
     );
     let lease = left.or(right).unwrap();
     assert!(a
-        .ack_complete(stranger, id.clone(), lease.lease_token.clone(), None)
+        .ack_complete(
+            stranger.clone(),
+            id.clone(),
+            lease.lease_token.clone(),
+            None
+        )
         .await
         .is_err());
     b.ack_complete(
@@ -43,9 +48,28 @@ pub async fn contract(
     )
     .await
     .unwrap();
+    let snapshot = a.get_snapshot(tenant.clone(), id.clone()).await.unwrap();
+    let batch = a
+        .get_snapshots(tenant.clone(), &[id.clone(), id.clone()])
+        .await
+        .unwrap();
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch[0].job_id, id);
+    assert_eq!(batch[1].job_id, id);
+    assert!(a
+        .get_snapshots(stranger.clone(), std::slice::from_ref(&id))
+        .await
+        .is_err());
     let record = a.get_record(tenant.clone(), id).await.unwrap();
+    assert_eq!(snapshot.attempt, record.attempt);
+    assert_eq!(snapshot.result, record.result);
+    assert!(serde_json::to_value(snapshot)
+        .unwrap()
+        .get("message")
+        .is_none());
     assert!(matches!(record.status, JobStatus::Completed { .. }));
     assert_eq!(record.result.as_deref(), Some("42"));
+    assert_eq!(record.message.payload_bytes, vec![1, 2, 3]);
 
     let cancel = a
         .enqueue(

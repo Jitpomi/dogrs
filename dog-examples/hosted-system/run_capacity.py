@@ -38,7 +38,7 @@ env = {**os.environ, 'DOGRS_BACKEND': args.backend, 'DOGRS_TEST_TENANT': tenant,
 children, logs = [], []
 base = 'http://127.0.0.1:38171/payments'
 report = {'tenant': tenant, 'backend': args.backend, 'target_jobs_per_second': args.rate,
-          'target_tenants': 100, 'scope': 'single-tenant capacity gate', 'stages': []}
+          'workers_per_process': int(env.get('DOGRS_TEST_WORKERS', '2')), 'worker_processes': 2, 'target_tenants': 100, 'scope': 'single-tenant capacity gate', 'stages': []}
 
 
 def request(method='GET', tail='', body=None):
@@ -123,8 +123,9 @@ try:
             time.sleep(1)
         effects_elapsed = time.monotonic() - started
         while True:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                states = list(pool.map(lambda job: request(tail='/' + job), accepted))
+            states = []
+            for offset in range(0,len(accepted),1000):
+                states.extend(request('POST',body={'status_ids':accepted[offset:offset+1000]})['snapshots'])
             if all(state['status'] in ('completed', 'failed', 'canceled') for state in states):
                 break
             if time.monotonic() >= deadline:

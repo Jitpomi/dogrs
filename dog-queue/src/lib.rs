@@ -42,8 +42,8 @@ pub use codec::{CodecRegistry, EnqueueOptions, JobCodec};
 pub use error::{JobError, QueueError, QueueResult};
 pub use job::{Job, JobRegistry};
 pub use types::{
-    JobEvent, JobId, JobMessage, JobPriority, JobRecord, JobStatus, LeaseToken, LeasedJob,
-    QueueCapabilities, QueueCtx, QueueFeature,
+    JobEvent, JobId, JobMessage, JobPriority, JobRecord, JobSnapshot, JobStatus, LeaseToken,
+    LeasedJob, QueueCapabilities, QueueCtx, QueueFeature,
 };
 
 // Observability exports

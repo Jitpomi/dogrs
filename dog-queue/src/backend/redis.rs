@@ -45,7 +45,10 @@ impl StateStore for RedisStore {
                 None => TenantState::default(),
             };
             let result = state.apply(tenant, op)?;
-            if matches!(op, Operation::Get(_)) {
+            if matches!(
+                op,
+                Operation::Get(_) | Operation::Snapshot(_) | Operation::Snapshots(_)
+            ) {
                 return Ok(result);
             }
             let value = serde_json::to_string(&state).map_err(error)?;

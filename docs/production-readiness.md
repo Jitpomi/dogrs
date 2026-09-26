@@ -32,17 +32,32 @@ Accepted jobs finished their business effects in 35.794 seconds; enqueue p95 was
 This is a failed capacity gate, not a successful 10-job/second benchmark. Later
 payload stages and the 100-tenant gate were not run in that failing workload.
 
-PostgreSQL currently holds a client mutex across multi-round-trip transactions
-and rewrites tenant-wide JSON under a tenant row lock. Historical jobs participate
-in every transition. This architecture must be revised and remeasured before
-claiming the agreed workload. Candidate changes are per-job records, indexed
-eligibility/retention, atomic database-side claims, bounded connection pooling,
-and server-authoritative lease times. Migration, active-job deduplication and
-stale-lease fencing must remain part of the acceptance contract.
+PostgreSQL's former client mutex and whole-tenant JSON ledger have been replaced
+by indexed per-job rows, binary payloads, pooled connections, atomic SQL enqueue
+and claim operations, and database-authoritative lease transitions. Status polling
+uses the portable `get_snapshot` API to avoid fetching payloads. Migration is
+explicit and fences old binaries; see [PostgreSQL upgrade](../dog-queue/POSTGRES.md).
+The original failed runs remain historical evidence. Updated benchmarks must
+record worker counts, payload sizes and test duration; the 100-tenant aggregate
+requirement remains a separate gate.
 
-A separate low-rate run accepted and completed exact serialized job sizes of
-1 KiB, 16 KiB and 64 KiB. That boundary coverage does not establish their
-throughput at the agreed rate.
+The optimized v2 application, with two processes and eight workers per process,
+accepted and completed all 600 one-KiB jobs offered at 10/second for one minute.
+Business effects finished by 60.548 seconds and terminal verification by 61.278
+seconds; no duplicate attempts were observed. The earlier single-record polling
+benchmark spent additional time making hundreds of verification requests. The
+portable bounded `get_snapshots` API now verifies up to 1,000 IDs per request.
+
+The 64-KiB gate remains unresolved in this hosted environment. In the optimized
+three-size run, 79/100 offers were admitted at 64 KiB; 21 exceeded the client
+concurrency bound. All admitted jobs completed. Earlier intermediate runs admitted
+all 100 but exceeded the drain deadline. Do not treat a smaller-payload pass as
+certification of the full target or attribute every failure to provider capacity.
+
+A separate no-queue transport probe sends binary parameters to PostgreSQL without
+writing data. It measured p95 latencies of 108 ms, 2,437 ms and 700 ms for 1/16/64
+KiB in one run. This establishes variability on the test connection, not its cause.
+The 100-tenant aggregate workload has not been established.
 
 ## Controlled recovery tests
 
@@ -69,8 +84,9 @@ Neither test establishes provider failover behavior or a disaster-recovery RPO.
 
 - Sustained aggregate load, large retained histories, fairness, latency spikes,
   and all payload stages at the agreed traffic rate.
-- Clock skew and clock jumps; current shared transitions consult the process
-  wall clock. A passing no-skew lease test does not certify distributed clock safety.
+- Clock skew and clock jumps: PostgreSQL now uses database time for ownership;
+  other ledgers still consult the process clock, and authoritative server clock
+  jumps remain an operational test requirement. A passing no-skew lease test does not certify distributed clock safety.
 - Equivalent controlled recovery/failover evidence for each supported deployment.
 - A durable Redis deployment: the tested Aiven Valkey service has AOF disabled.
   Its application recovery result cannot establish lossless server-crash recovery.

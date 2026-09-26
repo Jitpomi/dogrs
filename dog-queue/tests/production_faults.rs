@@ -52,9 +52,9 @@ async fn postgres_recovers_after_partition_and_fences_expired_owner() {
             && !password.contains(['\'', '\\'])
             && !database.contains(['\'', '\\'])
     );
-    let backend = PostgresBackend::new(PostgresConfig {
+    let backend = PostgresBackend::new_with_tls_options(PostgresConfig {
         connection_string: format!("host=127.0.0.1 port={port} user='{user}' password='{password}' dbname='{database}' connect_timeout=2"),
-    }).await.unwrap().with_lease_duration(Duration::from_secs(1));
+    }, tokio_postgres::NoTls, dog_queue::backend::postgres::PostgresOptions { operation_timeout: Duration::from_secs(2), ..Default::default() }).await.unwrap().with_lease_duration(Duration::from_secs(1));
     let tenant = QueueCtx::new(format!("dogrs-test-partition-{}", uuid::Uuid::new_v4()));
     let id = backend
         .enqueue(
@@ -138,21 +138,16 @@ async fn postgres_restored_snapshot_reclaims_inflight_job() {
     assert!(config.get_dbname().unwrap().starts_with("dogrs_restore_"));
     let (client, connection) = config.connect(tokio_postgres::NoTls).await.unwrap();
     let task = tokio::spawn(connection);
-    let rows = client.query("SELECT tenant,state FROM dogrs_queue_state_v1 WHERE tenant LIKE 'dogrs-test-partition-%'", &[]).await.unwrap();
+    let rows = client.query("SELECT tenant,state FROM dogrs_queue_jobs_v2 WHERE tenant LIKE 'dogrs-test-partition-%' AND status='processing'", &[]).await.unwrap();
     let (tenant, record, token) = rows
         .iter()
         .find_map(|row| {
-            let state: serde_json::Value = row.get(1);
-            state["jobs"].as_object()?.values().find_map(|stored| {
-                let record: dog_queue::JobRecord =
-                    serde_json::from_value(stored["record"].clone()).ok()?;
-                if !record.status.is_processing() {
-                    return None;
-                }
-                let token: dog_queue::LeaseToken =
-                    serde_json::from_value(stored["token"].clone()).ok()?;
-                Some((QueueCtx::new(row.get::<_, String>(0)), record, token))
-            })
+            let stored: serde_json::Value = row.get(1);
+            let record: dog_queue::JobRecord =
+                serde_json::from_value(stored["record"].clone()).ok()?;
+            let token: dog_queue::LeaseToken =
+                serde_json::from_value(stored["token"].clone()).ok()?;
+            Some((QueueCtx::new(row.get::<_, String>(0)), record, token))
         })
         .expect("snapshot must contain the interrupted partition job");
     let backend = PostgresBackend::new(PostgresConfig {

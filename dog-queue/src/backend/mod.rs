@@ -63,6 +63,32 @@ pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send + 'static>>;
 /// Backend trait for queue storage primitives
 #[async_trait]
 pub trait QueueBackend: Send + Sync {
+    /// Read execution metadata without requiring payload transfer. Custom backends
+    /// retain source compatibility through this default implementation.
+    async fn get_snapshot(&self, ctx: QueueCtx, id: JobId) -> QueueResult<crate::JobSnapshot> {
+        Ok(crate::JobSnapshot::from(&self.get_record(ctx, id).await?))
+    }
+
+    /// Read up to 1,000 snapshots in input order, preserving duplicate IDs.
+    /// Missing or foreign-tenant IDs fail the batch. Backends may optimize the
+    /// default per-record reads; this does not promise cross-record atomicity.
+    async fn get_snapshots(
+        &self,
+        ctx: QueueCtx,
+        ids: &[JobId],
+    ) -> QueueResult<Vec<crate::JobSnapshot>> {
+        if ids.len() > 1000 {
+            return Err(QueueError::InvalidConfig(
+                "snapshot batches are limited to 1000 jobs".into(),
+            ));
+        }
+        let mut result = Vec::with_capacity(ids.len());
+        for id in ids {
+            result.push(self.get_snapshot(ctx.clone(), id.clone()).await?);
+        }
+        Ok(result)
+    }
+
     /// Enqueue a job with tenant-scoped idempotency
     async fn enqueue(&self, ctx: QueueCtx, message: JobMessage) -> QueueResult<JobId>;
 

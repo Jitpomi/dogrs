@@ -12,4 +12,4 @@ pub use events::JobEvent;
 pub use ids::{JobId, LeaseToken};
 pub use message::JobMessage;
 pub use priority::JobPriority;
-pub use record::{JobRecord, JobStatus, LeasedJob};
+pub use record::{JobRecord, JobSnapshot, JobStatus, LeasedJob};

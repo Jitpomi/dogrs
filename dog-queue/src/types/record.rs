@@ -301,3 +301,30 @@ impl LeasedJob {
         }
     }
 }
+
+/// Execution metadata without the job payload or lease token. Suitable for polling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobSnapshot {
+    pub job_id: JobId,
+    pub tenant_id: String,
+    pub status: JobStatus,
+    pub attempt: u32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_error: Option<String>,
+    pub result: Option<String>,
+}
+impl From<&JobRecord> for JobSnapshot {
+    fn from(record: &JobRecord) -> Self {
+        Self {
+            job_id: record.job_id.clone(),
+            tenant_id: record.tenant_id.clone(),
+            status: record.status.clone(),
+            attempt: record.attempt,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+            last_error: record.last_error.clone(),
+            result: record.result.clone(),
+        }
+    }
+}

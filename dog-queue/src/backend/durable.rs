@@ -1,5 +1,5 @@
-//! Shared state transitions for durable, tenant-scoped stores.
-//! Stores must atomically read/modify/write one tenant's state across processes.
+//! Shared transitions for a durable, tenant-scoped selection of job records.
+//! Stores must atomically lock or compare-and-swap the records they select.
 use super::{BoxStream, QueueBackend, ReapOutcome};
 use crate::{
     types::LeaseToken, JobEvent, JobId, JobMessage, JobRecord, JobStatus, LeasedJob,
@@ -12,12 +12,12 @@ use std::{collections::HashMap, time::Duration};
 
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct TenantState {
-    jobs: HashMap<JobId, StoredRecord>,
+    pub(crate) jobs: HashMap<JobId, StoredRecord>,
 }
 #[derive(Serialize, Deserialize)]
-struct StoredRecord {
-    record: JobRecord,
-    token: Option<LeaseToken>,
+pub(crate) struct StoredRecord {
+    pub(crate) record: JobRecord,
+    pub(crate) token: Option<LeaseToken>,
 }
 
 pub(crate) enum Operation {
@@ -28,6 +28,8 @@ pub(crate) enum Operation {
     Heartbeat(JobId, LeaseToken, Duration),
     Cancel(JobId),
     Get(JobId),
+    Snapshot(JobId),
+    Snapshots(Vec<JobId>),
     Reap,
     Purge(DateTime<Utc>),
 }
@@ -37,6 +39,8 @@ pub(crate) enum Outcome {
     Done,
     Canceled(bool),
     Record(JobRecord),
+    Snapshot(crate::JobSnapshot),
+    Snapshots(Vec<crate::JobSnapshot>),
     Reaped(Vec<ReapOutcome>),
     Purged(usize),
 }
@@ -48,8 +52,17 @@ impl TenantState {
         self.jobs.len().saturating_mul(8192)
     }
 
+    #[cfg(any(feature = "redis", feature = "nats-async", test))]
     pub(crate) fn apply(&mut self, tenant: &str, operation: &Operation) -> QueueResult<Outcome> {
-        let now = Utc::now();
+        self.apply_at(tenant, operation, Utc::now())
+    }
+
+    pub(crate) fn apply_at(
+        &mut self,
+        tenant: &str,
+        operation: &Operation,
+        now: DateTime<Utc>,
+    ) -> QueueResult<Outcome> {
         match operation {
             Operation::Enqueue(message) => {
                 if let Some(key) = &message.idempotency_key {
@@ -66,7 +79,12 @@ impl TenantState {
                 self.jobs.insert(
                     id.clone(),
                     StoredRecord {
-                        record: JobRecord::new(id.clone(), tenant, message.clone()),
+                        record: {
+                            let mut record = JobRecord::new(id.clone(), tenant, message.clone());
+                            record.created_at = now;
+                            record.updated_at = now;
+                            record
+                        },
                         token: None,
                     },
                 );
@@ -107,6 +125,7 @@ impl TenantState {
                 let token = LeaseToken::new();
                 row.record.attempt += 1;
                 row.record.start_processing(token.clone(), until);
+                row.record.updated_at = now;
                 row.token = Some(token.clone());
                 Ok(Outcome::Lease(Some(LeasedJob::new(
                     row.record.clone(),
@@ -114,6 +133,25 @@ impl TenantState {
                     until,
                 ))))
             }
+            Operation::Snapshots(ids) => {
+                let snapshots = ids
+                    .iter()
+                    .map(|id| {
+                        self.jobs
+                            .get(id)
+                            .map(|s| crate::JobSnapshot::from(&s.record))
+                            .ok_or_else(|| QueueError::JobNotFound(id.clone()))
+                    })
+                    .collect::<QueueResult<Vec<_>>>()?;
+                Ok(Outcome::Snapshots(snapshots))
+            }
+            Operation::Snapshot(id) => Ok(Outcome::Snapshot(crate::JobSnapshot::from(
+                &self
+                    .jobs
+                    .get(id)
+                    .ok_or_else(|| QueueError::JobNotFound(id.clone()))?
+                    .record,
+            ))),
             Operation::Get(id) => Ok(Outcome::Record(
                 self.jobs
                     .get(id)
@@ -128,7 +166,9 @@ impl TenantState {
                 if row.record.status.is_terminal() {
                     return Ok(Outcome::Canceled(false));
                 }
-                row.record.cancel();
+                row.record.status = JobStatus::Canceled { canceled_at: now };
+                row.record.updated_at = now;
+                row.record.lease_token = None;
                 row.token = None;
                 Ok(Outcome::Canceled(true))
             }
@@ -156,8 +196,13 @@ impl TenantState {
                     if let Some(at) = retry_at {
                         row.record.schedule_retry(at);
                     } else {
-                        row.record.fail("Lease expired".into());
+                        row.record.status = JobStatus::Failed {
+                            failed_at: now,
+                            error: "Lease expired".into(),
+                        };
                     }
+                    row.record.updated_at = now;
+                    row.record.lease_token = None;
                     row.token = None;
                     outcomes.push(ReapOutcome {
                         tenant_id: tenant.into(),
@@ -197,7 +242,9 @@ impl TenantState {
                         {
                             return Err(QueueError::InvalidConfig("Persisted result must fit in 4 KiB; store large results by reference".into()));
                         }
-                        row.record.complete();
+                        row.record.status = JobStatus::Completed { completed_at: now };
+                        row.record.updated_at = now;
+                        row.record.lease_token = None;
                         row.record.result = result.clone();
                         row.token = None;
                     }
@@ -208,8 +255,15 @@ impl TenantState {
                             Some(at) if row.record.attempt <= row.record.message.max_retries => {
                                 row.record.schedule_retry(*at)
                             }
-                            _ => row.record.fail(error),
+                            _ => {
+                                row.record.status = JobStatus::Failed {
+                                    failed_at: now,
+                                    error,
+                                }
+                            }
                         }
+                        row.record.updated_at = now;
+                        row.record.lease_token = None;
                         row.token = None;
                     }
                     Operation::Heartbeat(_, _, duration) => {
@@ -225,6 +279,7 @@ impl TenantState {
                                 QueueError::InvalidConfig("Lease duration overflow".into())
                             })?;
                         row.record.start_processing(token.clone(), until);
+                        row.record.updated_at = now;
                     }
                     _ => unreachable!(),
                 }
@@ -327,7 +382,39 @@ impl<S: StateStore> QueueBackend for DurableBackend<S> {
         }
     }
     async fn get_status(&self, ctx: QueueCtx, id: JobId) -> QueueResult<JobStatus> {
-        Ok(self.get_record(ctx, id).await?.status)
+        Ok(self.get_snapshot(ctx, id).await?.status)
+    }
+    async fn get_snapshots(
+        &self,
+        ctx: QueueCtx,
+        ids: &[JobId],
+    ) -> QueueResult<Vec<crate::JobSnapshot>> {
+        if ids.len() > 1000 {
+            return Err(QueueError::InvalidConfig(
+                "snapshot batches are limited to 1000 jobs".into(),
+            ));
+        }
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        match self
+            .store
+            .update(&ctx.tenant_id, &Operation::Snapshots(ids.to_vec()))
+            .await?
+        {
+            Outcome::Snapshots(snapshots) => Ok(snapshots),
+            _ => unreachable!(),
+        }
+    }
+    async fn get_snapshot(&self, ctx: QueueCtx, id: JobId) -> QueueResult<crate::JobSnapshot> {
+        match self
+            .store
+            .update(&ctx.tenant_id, &Operation::Snapshot(id))
+            .await?
+        {
+            Outcome::Snapshot(snapshot) => Ok(snapshot),
+            _ => unreachable!(),
+        }
     }
     async fn get_record(&self, ctx: QueueCtx, id: JobId) -> QueueResult<JobRecord> {
         match self
@@ -383,7 +470,6 @@ impl<S: StateStore> DurableBackend<S> {
     }
 }
 
-impl<S: StateStore> super::broker::sealed::Sealed for DurableBackend<S> {}
 impl<S: StateStore> super::broker::JobLedger for DurableBackend<S> {}
 
 #[cfg(test)]
@@ -475,5 +561,49 @@ mod latency_tests {
             "a healthy slow heartbeat must retain ownership"
         );
         assert_eq!(executions.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod authoritative_clock_tests {
+    use super::*;
+    #[test]
+    fn lease_and_completion_use_supplied_clock_not_worker_wall_time() {
+        let now = DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut state = TenantState::default();
+        let mut message = JobMessage::new("clock", vec![], "json", "q");
+        message.run_at = now;
+        let Outcome::Id(id) = state
+            .apply_at("clock", &Operation::Enqueue(message), now)
+            .unwrap()
+        else {
+            panic!()
+        };
+        let Outcome::Lease(Some(job)) = state
+            .apply_at(
+                "clock",
+                &Operation::Dequeue(vec!["q".into()], Duration::from_secs(10)),
+                now,
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(job.lease_until, now + chrono::Duration::seconds(10));
+        assert_eq!(job.record.created_at, now);
+        state
+            .apply_at(
+                "clock",
+                &Operation::Complete(id.clone(), job.lease_token, None),
+                now + chrono::Duration::seconds(1),
+            )
+            .unwrap();
+        let record = &state.jobs[&id].record;
+        assert_eq!(record.updated_at, now + chrono::Duration::seconds(1));
+        assert!(
+            matches!(record.status,JobStatus::Completed{completed_at} if completed_at == now+chrono::Duration::seconds(1))
+        );
     }
 }
