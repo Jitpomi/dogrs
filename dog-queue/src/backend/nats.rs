@@ -113,7 +113,10 @@ impl StateStore for NatsStore {
                 _ => TenantState::default(),
             };
             let outcome = state.apply(tenant, op)?;
-            if matches!(op, Operation::Get(_)) {
+            if matches!(
+                op,
+                Operation::Get(_) | Operation::Snapshot(_) | Operation::Snapshots(_)
+            ) {
                 return Ok(outcome);
             }
             let value = serde_json::to_vec(&state).map_err(error)?;

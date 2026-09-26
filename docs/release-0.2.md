@@ -88,8 +88,9 @@ that could lose work. See [queue documentation](../dog-queue/README.md) for exam
 operator requirements, retention and capacity limits.
 
 These are at-least-once queues. Handlers must make their side effects idempotent.
-The state stores target modest job volume and are not high-throughput sharded
-implementations. Terminal history needs retention; persisted result references are
+Redis and JetStream tenant-state stores target modest job volume. PostgreSQL v2
+uses independent indexed rows, pooled connections and binary payloads; its upgrade
+requires an explicit offline migration. Aggregate capacity remains workload-dependent. Terminal history needs retention; persisted result references are
 bounded. The unused SQLite/SQLx dependency flags are removed; they never exposed a backend.
 UI/workflow placeholders are not implemented products.
 

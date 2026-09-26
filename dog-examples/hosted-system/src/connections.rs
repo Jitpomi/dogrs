@@ -85,6 +85,23 @@ async fn notification_probe(n: &impl Notifications) -> Result<()> {
 }
 pub async fn dispatch(role: &str) -> Result<()> {
     let kind = env("DOGRS_BACKEND")?;
+    if role == "migrate" {
+        anyhow::ensure!(kind == "postgres", "migration role is PostgreSQL-specific");
+        PostgresBackend::new_with_tls_options(
+            PostgresConfig {
+                connection_string: secret("postgres.uri")?,
+            },
+            pg_tls()?,
+            dog_queue::backend::postgres::PostgresOptions {
+                migrate_legacy: true,
+                operation_timeout: Duration::from_secs(300),
+                ..Default::default()
+            },
+        )
+        .await?;
+        println!("POSTGRES_OFFLINE_MIGRATION_COMPLETE");
+        return Ok(());
+    }
     match kind.as_str() {
         "postgres" => run(postgres().await?, role).await,
         #[cfg(feature = "pubsub")]

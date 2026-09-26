@@ -18,12 +18,14 @@ use std::{
     time::Duration,
 };
 
-pub(crate) mod sealed {
-    pub trait Sealed {}
-}
 /// Persistent job state; implemented by the PostgreSQL, Redis and JetStream ledgers.
 /// Redis and JetStream must be provisioned with persistence and suitable replication.
-pub trait JobLedger: QueueBackend + sealed::Sealed {}
+/// Custom ledgers may implement this public extension point. They must durably
+/// commit enqueue before returning success, atomically claim jobs across workers,
+/// fence expired/replaced lease owners, isolate tenants, and retain recoverable
+/// state independently of wakeup delivery. Implementing this marker is an explicit
+/// assertion of those guarantees; it does not turn an in-memory store durable.
+pub trait JobLedger: QueueBackend {}
 
 #[async_trait]
 pub trait Notifications: Send + Sync {
@@ -123,6 +125,16 @@ impl<N: Notifications> QueueBackend for BrokerBackend<N> {
     }
     async fn get_status(&self, ctx: QueueCtx, id: JobId) -> QueueResult<JobStatus> {
         self.ledger.get_status(ctx, id).await
+    }
+    async fn get_snapshots(
+        &self,
+        ctx: QueueCtx,
+        ids: &[JobId],
+    ) -> QueueResult<Vec<crate::JobSnapshot>> {
+        self.ledger.get_snapshots(ctx, ids).await
+    }
+    async fn get_snapshot(&self, ctx: QueueCtx, id: JobId) -> QueueResult<crate::JobSnapshot> {
+        self.ledger.get_snapshot(ctx, id).await
     }
     async fn get_record(&self, ctx: QueueCtx, id: JobId) -> QueueResult<JobRecord> {
         self.ledger.get_record(ctx, id).await

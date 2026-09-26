@@ -32,6 +32,8 @@ struct BillingContext {
 struct RecordPayment {
     invoice: String,
     mode: String,
+    #[serde(default)]
+    padding: String,
 }
 #[async_trait::async_trait]
 impl Job for RecordPayment {
@@ -74,6 +76,21 @@ struct BillingService<B: QueueBackend> {
 #[async_trait::async_trait]
 impl<B: QueueBackend + 'static> DogService<Value, ()> for BillingService<B> {
     async fn create(&self, _: &TenantContext, data: Value, _: ()) -> Result<Value> {
+        if let Some(ids) = data.get("status_ids") {
+            let ids: Vec<String> = serde_json::from_value(ids.clone())?;
+            anyhow::ensure!(
+                ids.len() <= 1000 && ids.iter().all(|id| !id.is_empty()),
+                "invalid status batch"
+            );
+            let ids: Vec<JobId> = ids.into_iter().map(JobId::from).collect();
+            let snapshots = self
+                .adapter
+                .backend()
+                .get_snapshots(QueueCtx::new(&self.tenant), &ids)
+                .await?;
+            let rows: Vec<Value>=snapshots.into_iter().map(|r|json!({"id":r.job_id,"status":r.status.name(),"attempts":r.attempt,"result":r.result})).collect();
+            return Ok(json!({"snapshots":rows}));
+        }
         let job: RecordPayment = serde_json::from_value(data)?;
         anyhow::ensure!(
             !job.invoice.is_empty() && job.invoice.len() <= 100,
@@ -93,7 +110,7 @@ impl<B: QueueBackend + 'static> DogService<Value, ()> for BillingService<B> {
         let record = self
             .adapter
             .backend()
-            .get_record(QueueCtx::new(&self.tenant), JobId::from(id))
+            .get_snapshot(QueueCtx::new(&self.tenant), JobId::from(id))
             .await?;
         Ok(
             json!({"id":record.job_id,"status":record.status.name(),"attempts":record.attempt,"result":record.result}),
@@ -108,16 +125,27 @@ impl<B: QueueBackend + 'static> DogService<Value, ()> for BillingService<B> {
 }
 async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {
     let tenant = tenant()?;
+    let max_payload: usize = std::env::var("DOGRS_TEST_MAX_PAYLOAD")
+        .unwrap_or_else(|_| "4096".into())
+        .parse()?;
+    anyhow::ensure!(
+        (4096..=65536).contains(&max_payload),
+        "payload limit must be 4–64 KiB"
+    );
+    let workers: usize = std::env::var("DOGRS_TEST_WORKERS")
+        .unwrap_or_else(|_| "2".into())
+        .parse()?;
+    anyhow::ensure!((1..=32).contains(&workers), "worker count must be 1–32");
     let adapter = Arc::new(QueueAdapter::try_with_config(
         backend,
         QueueConfig {
-            max_workers: 2,
+            max_workers: workers,
             lease_duration: LEASE,
             heartbeat_interval: Duration::from_secs(2),
             poll_interval: Duration::from_millis(250),
             poll_jitter: Duration::from_millis(25),
             worker_idle_timeout: Duration::from_secs(300),
-            max_payload_size: Some(4096),
+            max_payload_size: Some(max_payload),
             ..Default::default()
         },
     )?);
@@ -209,6 +237,47 @@ async fn main() -> Result<()> {
     let role = std::env::args()
         .nth(1)
         .context("usage: hosted-system init|inspect|serve|worker")?;
+    if role == "network-probe" {
+        // Isolate PostgreSQL transport latency from queue transactions and workers.
+        let db = Arc::new(connections::postgres_client().await?);
+        for bytes in [1024usize, 16384, 65536] {
+            let payload = Arc::new(vec![42u8; bytes]);
+            let mut tasks = tokio::task::JoinSet::new();
+            let start = std::time::Instant::now();
+            for index in 0..100u32 {
+                tokio::time::sleep_until(tokio::time::Instant::from_std(
+                    start + Duration::from_millis(u64::from(index) * 100),
+                ))
+                .await;
+                let db = db.clone();
+                let payload = payload.clone();
+                tasks.spawn(async move {
+                    let start = std::time::Instant::now();
+                    let row = db
+                        .query_typed_one(
+                            "SELECT octet_length($1::bytea)",
+                            &[(&*payload, tokio_postgres::types::Type::BYTEA)],
+                        )
+                        .await?;
+                    anyhow::ensure!(
+                        row.get::<_, i32>(0) == payload.len() as i32,
+                        "unexpected transport echo"
+                    );
+                    Ok::<_, anyhow::Error>(start.elapsed().as_secs_f64() * 1000.0)
+                });
+            }
+            let mut timings = vec![];
+            while let Some(result) = tasks.join_next().await {
+                timings.push(result??);
+            }
+            timings.sort_by(f64::total_cmp);
+            println!(
+                "{}",
+                json!({"probe":"postgres_transport_only","payload_bytes":bytes,"requests":100,"offered_rps":10,"seconds":start.elapsed().as_secs_f64(),"p50_ms":timings[49],"p95_ms":timings[94]})
+            );
+        }
+        return Ok(());
+    }
     if role == "init" || role == "inspect" {
         let db = connections::postgres_client().await?;
         if role == "init" {

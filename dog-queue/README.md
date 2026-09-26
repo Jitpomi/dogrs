@@ -91,9 +91,10 @@ now names that KV bucket, not a Core NATS subject.
 
 ## Capacity, security and migration
 
-The durable implementations serialize one tenant's state per operation. They are
-intended for modest job volumes, not high-throughput bulk queues. Keep payloads
-small, store large payloads by reference, and regularly use
+PostgreSQL v2 uses indexed job rows, binary payloads and a bounded connection pool.
+Redis and JetStream currently serialize tenant state and target modest job volumes.
+Choose a ledger to match the workload; custom durable ledgers are supported through
+`JobLedger`. Keep payloads bounded, use `get_snapshot` for metadata polling, and regularly use
 `purge_terminal_before(ctx, cutoff)` on the ledger. JetStream's maximum value and
 server message limits also bound tenant state. NATS admission reserves 8 KiB per
 record for later status updates within a state budget capped at 900 KB and reduced for smaller account/stream
@@ -124,3 +125,10 @@ local services. They check independent connections, exclusive leases, tenant
 isolation, cancel-wins, retries, expiry, notification receipt and broker-outage
 recovery. SQS and Pub/Sub are exercised against local emulators; cloud IAM, TLS
 policies and provider quotas need verification in the deployment environment.
+
+### PostgreSQL v2 upgrade
+
+The optional PostgreSQL adapter now uses indexed per-job rows and a bounded pool.
+See [storage, clock, and offline migration requirements](POSTGRES.md) before
+upgrading an existing v1 ledger. Custom durable ledgers can implement the public
+`JobLedger` trait; PostgreSQL is not required by the portable queue API.

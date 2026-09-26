@@ -93,8 +93,10 @@ reserves framing and completion space before admitting work.
 Aiven Valkey reports `aof_enabled:0`; Aiven does not support AOF. Its successful
 application-process recovery is **not** evidence of lossless recovery after a
 provider server crash. Use a suitably persistent/replicated deployment or another
-ledger for that requirement. PostgreSQL, Redis and JetStream still serialize tenant
-state; a successful small test does not remove that throughput limit.
+ledger for that requirement. Redis and JetStream still serialize tenant state. PostgreSQL v2 uses per-job rows
+and binary payloads; see its explicit offline migration requirements in
+[POSTGRES.md](../../dog-queue/POSTGRES.md). A small hosted run does not establish
+aggregate production capacity.
 
 These tests do not certify provider failover, backup restore, long outages,
 clock skew, large payloads, sustained load, cloud IAM policies or an always-on
@@ -114,3 +116,24 @@ tenant's records. Never put these credentials in public logs or artifacts.
 SQS uses the private `dogrs-validation` queue in the dedicated AWS validation account, region `us-east-2`. Its IAM test identity can only send, receive and delete messages on that queue over TLS. Disable the credential after validation. The workflow includes SQS only when `aws.json` is supplied. Removing that entry after deactivation keeps future runs limited to available credentials.
 
 For `pubsub`, run inside a Google Cloud environment in `us-west1`, using existing Application Default Credentials and `DOGRS_GCP_PROJECT`. Pre-create `dogrs-validation` topic and subscription with message storage restricted to `us-west1`, no topic retention, and subscription retention at most one day. The client uses the regional HTTPS endpoint. This transport is excluded from the external GitHub runner to avoid Pub/Sub internet delivery charges.
+
+## Production gates
+
+The agreed launch workload and outstanding release gates are tracked in
+[production readiness](../../docs/production-readiness.md). Run
+`run_capacity.py` with the same binary/secret/report environment to test an
+open-loop arrival rate and increasing payload sizes. The first hosted 10-job/s
+single-tenant gate failed. Passing this acceptance suite does not override that
+failed capacity gate.
+
+`DOGRS_TEST_WORKERS` selects workers per process (default 2, maximum 32). Capacity
+runs with 8 workers per process keep the PostgreSQL pool at four connections per
+process. `get_snapshot` polls execution metadata without downloading job payloads.
+Before running against a v1 test ledger, take a backup, stop old test processes,
+and run `DOGRS_BACKEND=postgres hosted-system migrate` with the private secrets
+directory configured. The normal commands refuse an unmigrated nonempty ledger.
+
+For production-like compilation use `cargo build --release -p hosted-system` and
+set `DOGRS_SYSTEM_BINARY` to the release executable. The `network-probe` role
+separately measures PostgreSQL transport with 100 binary parameters per payload
+size at 10 requests/second, without queue operations or persistent writes.
