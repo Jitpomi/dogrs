@@ -56,7 +56,7 @@ cargo test --workspace --doc --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-CI also checks transport feature combinations, alternative JWT cryptography,
+CI also checks transport feature combinations, JWT builds with and without PEM support,
 TypeDB 3.13.6, persistent queues and local broker/emulator integrations. Cloud IAM,
 provider quotas and deployment-specific TLS configuration are not emulator-tested.
 

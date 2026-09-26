@@ -29,10 +29,9 @@ In your crate:
 dog-auth = { path = "../dog-auth" }
 ```
 
-Enable a JWT backend feature (one of):
-
-- `jwt-aws-lc-rs`
-- `jwt-rust-crypto`
+The default `jwt-aws-lc-rs` feature supplies JWT cryptography. The previous
+`jwt-rust-crypto` feature is removed because its RSA dependency has an unresolved
+private-key timing advisory (RUSTSEC-2023-0071).
 
 ## Configuration
 

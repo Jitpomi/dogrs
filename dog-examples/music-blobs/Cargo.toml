@@ -33,7 +33,7 @@ async-stream = "0.3"
 
 # AWS SDK for RustFS (S3-compatible)
 aws-config = "1.8.18"
-aws-sdk-s3 = "1.135.0"
+aws-sdk-s3 = { version = "1.150", default-features = false, features = ["default-https-client", "rt-tokio", "http-1x", "sigv4a"] }
 aws-credential-types = "1.2.14"
 
 # Utilities

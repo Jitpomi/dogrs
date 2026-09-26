@@ -91,3 +91,45 @@ async fn code_exchange_receives_callback_state() {
     assert_eq!(out["profile"]["sub"], "verified-user");
     assert!(out["authentication"].get("code").is_none());
 }
+
+struct RejectEntity;
+#[async_trait]
+impl dog_auth_oauth::OAuthEntityResolver<()> for RejectEntity {
+    async fn resolve_entity(
+        &self,
+        _: &str,
+        _: &Value,
+        _: &mut HookContext<Value, ()>,
+    ) -> anyhow::Result<Option<Value>> {
+        Ok(None)
+    }
+}
+#[tokio::test]
+async fn configured_entity_resolver_can_reject_login() {
+    let mut builder = DogAppBuilder::<Value, ()>::new();
+    let options = AuthOptions {
+        entity: Some("user".into()),
+        service: Some("users".into()),
+        ..Default::default()
+    };
+    let auth = AuthenticationService::builder(&mut builder, Some(options))
+        .unwrap()
+        .build();
+    let app = builder.build();
+    let strategy = OAuthStrategy::new()
+        .register_provider(Arc::new(Provider))
+        .with_entity_resolver(Arc::new(RejectEntity));
+    let request =
+        serde_json::from_value(json!({"provider":"test","accessToken":"valid-token"})).unwrap();
+    let mut ctx = HookContext::new(
+        TenantContext::new("test"),
+        ServiceMethodKind::Create,
+        (),
+        ServiceCaller::new(app.clone()),
+        app.config_snapshot(),
+    );
+    assert!(strategy
+        .authenticate(&request, &AuthenticationParams::default(), &mut ctx, &auth)
+        .await
+        .is_err());
+}

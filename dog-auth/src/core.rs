@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::options::{AuthOptions, TokenType};
 
-#[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+#[cfg(feature = "jwt-aws-lc-rs")]
 use crate::options::JwtAlgorithm;
 
 pub type AuthenticationResult = Value;
@@ -79,10 +79,10 @@ pub trait JwtProvider: Send + Sync {
     ) -> Result<Value>;
 }
 
-#[cfg(not(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto")))]
+#[cfg(not(feature = "jwt-aws-lc-rs"))]
 struct NoJwtProvider;
 
-#[cfg(not(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto")))]
+#[cfg(not(feature = "jwt-aws-lc-rs"))]
 impl JwtProvider for NoJwtProvider {
     fn sign(
         &self,
@@ -91,7 +91,7 @@ impl JwtProvider for NoJwtProvider {
         _token_type: TokenType,
     ) -> Result<String> {
         Err(anyhow::anyhow!(
-            "JWT support is disabled (enable one of: jwt-aws-lc-rs, jwt-rust-crypto)"
+            "JWT support is disabled (enable jwt-aws-lc-rs)"
         ))
     }
 
@@ -102,19 +102,19 @@ impl JwtProvider for NoJwtProvider {
         _overrides: Option<&JwtOverrides>,
     ) -> Result<Value> {
         Err(anyhow::anyhow!(
-            "JWT support is disabled (enable one of: jwt-aws-lc-rs, jwt-rust-crypto)"
+            "JWT support is disabled (enable jwt-aws-lc-rs)"
         ))
     }
 }
 
-#[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+#[cfg(feature = "jwt-aws-lc-rs")]
 #[derive(Default)]
 struct JsonwebtokenProvider {
     encoding: std::sync::OnceLock<std::result::Result<jsonwebtoken::EncodingKey, String>>,
     decoding: std::sync::OnceLock<std::result::Result<jsonwebtoken::DecodingKey, String>>,
 }
 
-#[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+#[cfg(feature = "jwt-aws-lc-rs")]
 impl JsonwebtokenProvider {
     fn algorithm(alg: JwtAlgorithm) -> jsonwebtoken::Algorithm {
         match alg {
@@ -130,7 +130,7 @@ impl JsonwebtokenProvider {
     }
 }
 
-#[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+#[cfg(feature = "jwt-aws-lc-rs")]
 impl JwtProvider for JsonwebtokenProvider {
     fn sign(
         &self,
@@ -242,11 +242,11 @@ where
         builder.set(config_key.into(), opts.clone());
 
         let jwt: Arc<dyn JwtProvider> = {
-            #[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+            #[cfg(feature = "jwt-aws-lc-rs")]
             {
                 Arc::new(JsonwebtokenProvider::default())
             }
-            #[cfg(not(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto")))]
+            #[cfg(not(feature = "jwt-aws-lc-rs"))]
             {
                 Arc::new(NoJwtProvider)
             }
@@ -449,7 +449,7 @@ where
     }
 }
 
-#[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+#[cfg(feature = "jwt-aws-lc-rs")]
 fn jwt_encoding_key(jwt: &crate::options::JwtOptions) -> Result<jsonwebtoken::EncodingKey> {
     match jwt.algorithm {
         JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
@@ -480,7 +480,7 @@ fn jwt_encoding_key(jwt: &crate::options::JwtOptions) -> Result<jsonwebtoken::En
         }
     }
 }
-#[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+#[cfg(feature = "jwt-aws-lc-rs")]
 fn jwt_decoding_key(jwt: &crate::options::JwtOptions) -> Result<jsonwebtoken::DecodingKey> {
     match jwt.algorithm {
         JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {

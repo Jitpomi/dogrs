@@ -65,8 +65,18 @@ impl PostgresBackend {
                 Ok(client)
             })
         });
-        let client = connect().await?;
-        client.batch_execute("CREATE TABLE IF NOT EXISTS dogrs_queue_state_v1 (tenant TEXT PRIMARY KEY, state JSONB NOT NULL)").await.map_err(error)?;
+        let mut client = connect().await?;
+        let tx = client.transaction().await.map_err(error)?;
+        // IF NOT EXISTS alone can race in PostgreSQL's type catalog during first
+        // startup. Serialize schema initialization across independent processes.
+        tx.query_one(
+            "SELECT pg_advisory_xact_lock(hashtext('dogrs_queue_schema_v1')::bigint)",
+            &[],
+        )
+        .await
+        .map_err(error)?;
+        tx.batch_execute("CREATE TABLE IF NOT EXISTS dogrs_queue_state_v1 (tenant TEXT PRIMARY KEY, state JSONB NOT NULL)").await.map_err(error)?;
+        tx.commit().await.map_err(error)?;
         Ok(Self {
             store: PostgresStore {
                 client: Mutex::new(client),

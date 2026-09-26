@@ -12,7 +12,7 @@ dog-auth-local = { path = "../../dog-auth-local" }
 dog-auth-oauth = { path = "../../dog-auth-oauth", features = ["oauth2-client"] }
 dog-schema = { path = "../../dog-schema" }
 dog-schema-validator = { path = "../../dog-schema-validator" }
-actix-web = "4"
+actix-web = { version = "4", default-features = false, features = ["macros", "cookies"] }
 tokio = { version = "1.52", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

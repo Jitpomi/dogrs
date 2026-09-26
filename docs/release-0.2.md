@@ -37,8 +37,9 @@ it. Deserialization cannot set `authenticated` or `auth_result`. Access verifica
 rejects refresh and identity tokens; use `verify_refresh_token` when appropriate.
 
 HMAC requires a secret. RSA and ECDSA use configured private/public PEM paths;
-`jwt-pem` is enabled by default. Select exactly one JWT crypto backend. For builds
-without PEM support, disable default features and select a crypto backend without
+`jwt-pem` is enabled by default. JWT uses the AWS-LC backend. The `jwt-rust-crypto` feature is removed because
+its RSA dependency has the unresolved RUSTSEC-2023-0071 timing advisory. For builds
+without PEM support, disable default features and select `jwt-aws-lc-rs` without
 `jwt-pem`; the old `jwt-no-pem` flag alone does not disable an additive Cargo feature.
 Keys are cached per authentication instance. Construct a new instance to rotate
 keys. Protect key files through deployment configuration; test fixtures are
@@ -89,7 +90,8 @@ operator requirements, retention and capacity limits.
 These are at-least-once queues. Handlers must make their side effects idempotent.
 The state stores target modest job volume and are not high-throughput sharded
 implementations. Terminal history needs retention; persisted result references are
-bounded. SQLite/UI/workflow placeholders are not implemented products.
+bounded. The unused SQLite/SQLx dependency flags are removed; they never exposed a backend.
+UI/workflow placeholders are not implemented products.
 
 ## Verification scope
 
@@ -102,3 +104,11 @@ cloud IAM, service quotas, backup restoration or cluster failure policy.
 
 No new crate versions are published by merging this change. Update app dependencies
 only after selecting the intended Git revision or publishing the versioned crates.
+
+## Dependency security
+
+The release removes legacy Hyper/rustls connectors from AWS SDK feature selection,
+updates NATS to the maintained client/TLS stack, and disables the Actix demo's
+unused legacy HTTP/2 implementation. Tonic and Axum retain current HTTP/2 support.
+The optional RustCrypto JWT backend is removed rather than exposing the unpatched
+RSA private-key timing path. Use `jwt-aws-lc-rs` for HMAC, RSA and ECDSA support.

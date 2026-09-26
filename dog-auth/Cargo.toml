@@ -12,9 +12,8 @@ categories = ["authentication", "web-programming"]
 default = ["jwt-aws-lc-rs", "jwt-pem"]
 jwt-pem = ["jsonwebtoken?/use_pem"]
 
-# JWT crypto backend features - exactly one must be selected
+# AWS-LC supplies the production JWT implementation.
 jwt-aws-lc-rs = ["dep:jsonwebtoken", "jsonwebtoken/aws_lc_rs"]
-jwt-rust-crypto = ["dep:jsonwebtoken", "jsonwebtoken/rust_crypto"]
 
 # Optional PEM decoding support (enabled by default in jsonwebtoken)
 jwt-no-pem = []

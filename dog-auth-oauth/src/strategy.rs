@@ -324,6 +324,13 @@ where
             }
         }
 
+        if cfg.entity.is_some() && entity_out.is_none() {
+            return Err(DogError::not_authenticated(
+                "OAuth identity has no authorized local entity",
+            )
+            .into_anyhow());
+        }
+
         let mut auth_obj = Map::new();
         auth_obj.insert("strategy".to_string(), Value::String(self.name.clone()));
         auth_obj.insert("provider".to_string(), Value::String(req.provider.clone()));

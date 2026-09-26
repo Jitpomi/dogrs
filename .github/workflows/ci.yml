@@ -39,7 +39,7 @@ jobs:
       - run: cargo test -p dog-transport --features http,grpc,cli,iroh --all-targets --locked
       - run: cargo test -p dog-core --no-default-features --locked
       - run: cargo test -p dog-core --no-default-features --features serde --locked
-      - run: cargo test -p dog-auth --no-default-features --features jwt-rust-crypto,jwt-pem --locked
+      - run: cargo test -p dog-auth --no-default-features --features jwt-aws-lc-rs --locked
   databases:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -146,7 +146,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           version: 563.0.0
-          install_components: pubsub-emulator
+          install_components: pubsub-emulator,beta
       - if: matrix.backend == 'gcp-pubsub'
         run: |
           mkdir -p /tmp/dogrs-pubsub
@@ -159,3 +159,12 @@ jobs:
       - run: cargo test -p dog-queue --features postgres,${{ matrix.backend }} --test broker_backends --locked -- --ignored
       - if: always() && matrix.backend == 'gcp-pubsub'
         run: cat /tmp/pubsub.log
+
+  dependency-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit

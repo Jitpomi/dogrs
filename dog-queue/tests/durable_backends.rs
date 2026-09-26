@@ -174,3 +174,42 @@ async fn nats_capacity_reserves_space_for_completion() {
     let js = async_nats::jetstream::new(async_nats::connect(config.url).await.unwrap());
     js.delete_key_value(config.subject).await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL with database creation permission"]
+async fn postgres_concurrent_first_start_is_safe() {
+    let base = std::env::var("DOGRS_POSTGRES_URL").unwrap();
+    let database = format!("dogrs_init_{}", uuid::Uuid::new_v4().simple());
+    let (admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let task = tokio::spawn(connection);
+    admin
+        .batch_execute(&format!("CREATE DATABASE {database}"))
+        .await
+        .unwrap();
+    let config = PostgresConfig {
+        connection_string: format!("{base} dbname={database}"),
+    };
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..12 {
+        let config = config.clone();
+        tasks.spawn(async move { PostgresBackend::new(config).await.map(|_| ()) });
+    }
+    let mut errors = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok(Ok(())) => {}
+            error => errors.push(format!("{error:?}")),
+        }
+    }
+    admin
+        .batch_execute(&format!("DROP DATABASE {database} WITH (FORCE)"))
+        .await
+        .unwrap();
+    task.abort();
+    assert!(
+        errors.is_empty(),
+        "Concurrent initialization failed: {errors:?}"
+    );
+}
