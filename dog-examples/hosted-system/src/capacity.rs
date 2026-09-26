@@ -44,6 +44,9 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     let errors = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::new(Mutex::new(HashSet::new()));
     let latency = Arc::new(Mutex::new(Vec::new()));
+    let claim_latency = Arc::new(Mutex::new(Vec::new()));
+    let ack_latency = Arc::new(Mutex::new(Vec::new()));
+    let empty_claims = Arc::new(AtomicUsize::new(0));
     let ids = Arc::new(Mutex::new(Vec::new()));
     let started = Instant::now() + Duration::from_secs(1);
     let deadline = started + Duration::from_secs(seconds as u64 + 5);
@@ -55,10 +58,18 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
             let completed = completed.clone();
             let errors = errors.clone();
             let seen = seen.clone();
+            let claim_latency = claim_latency.clone();
+            let ack_latency = ack_latency.clone();
+            let empty_claims = empty_claims.clone();
             consumers.spawn(async move {
                 while Instant::now() < deadline {
+                    let claim_started = Instant::now();
                     match backend.dequeue(QueueCtx::new(&tenant), &["capacity"]).await {
                         Ok(Some(job)) => {
+                            claim_latency
+                                .lock()
+                                .unwrap()
+                                .push(claim_started.elapsed().as_secs_f64() * 1000.0);
                             let result: Result<()> = async {
                                 anyhow::ensure!(
                                     job.record.tenant_id == tenant,
@@ -75,14 +86,20 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
                                     seen.lock().unwrap().insert((tenant.clone(), seed)),
                                     "duplicate execution"
                                 );
-                                backend
+                                let ack_started = Instant::now();
+                                let ack = backend
                                     .ack_complete(
                                         QueueCtx::new(&tenant),
                                         job.record.job_id,
                                         job.lease_token,
                                         None,
                                     )
-                                    .await?;
+                                    .await;
+                                ack_latency
+                                    .lock()
+                                    .unwrap()
+                                    .push(ack_started.elapsed().as_secs_f64() * 1000.0);
+                                ack?;
                                 completed.fetch_add(1, Ordering::SeqCst);
                                 Ok(())
                             }
@@ -91,7 +108,10 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
                                 errors.lock().unwrap().push(format!("execute/ack: {e}"));
                             }
                         }
-                        Ok(None) => tokio::time::sleep(Duration::from_millis(50)).await,
+                        Ok(None) => {
+                            empty_claims.fetch_add(1, Ordering::Relaxed);
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
                         Err(e) => {
                             errors.lock().unwrap().push(format!("dequeue: {e}"));
                             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -212,7 +232,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
         && elapsed <= seconds as f64 + 5.0;
     println!(
         "{}",
-        json!({"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":10,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed.load(Ordering::SeqCst),"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed})
+        json!({"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":10,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed.load(Ordering::SeqCst),"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed})
     );
     anyhow::ensure!(passed, "queue capacity gate failed");
     Ok(())
@@ -228,4 +248,15 @@ fn make_payload(seed: u64, size: usize) -> Vec<u8> {
         *byte = state as u8;
     }
     bytes
+}
+
+fn latency_summary(values: &Mutex<Vec<f64>>) -> serde_json::Value {
+    let mut values = values.lock().unwrap();
+    values.sort_by(f64::total_cmp);
+    let percentile = |p: usize| {
+        values
+            .get((values.len() * p / 100).min(values.len().saturating_sub(1)))
+            .copied()
+    };
+    json!({"count":values.len(),"p50":percentile(50),"p95":percentile(95),"max":values.last(),"total":values.iter().sum::<f64>()})
 }

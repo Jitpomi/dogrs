@@ -4,7 +4,7 @@
 Run with DOGRS_SYSTEM_BINARY pointing to a release build with redis,nats features.
 Only containers/network created by this invocation are killed or removed.
 """
-import argparse,json,os,pathlib,platform,secrets,socket,subprocess,time,urllib.request
+import argparse,json,os,pathlib,platform,re,resource,secrets,socket,subprocess,time,urllib.request
 p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis','nats']);p.add_argument('--report-dir',required=True);p.add_argument('--capacity',action='store_true');p.add_argument('--restore',action='store_true');p.add_argument('--race',action='store_true');p.add_argument('--outage-seconds',type=int,default=3);p.add_argument('--seconds',type=int,default=30);p.add_argument('--bytes',type=int,default=1024);a=p.parse_args()
 root=pathlib.Path(a.report_dir).resolve();root.mkdir(parents=True,exist_ok=True)
 run='dogrs-fault-'+secrets.token_hex(5);folder=root/run;folder.mkdir()
@@ -86,8 +86,22 @@ try:
   raise SystemExit(result.returncode)
  if a.capacity:
   env.update(DOGRS_CAPACITY_TENANTS='100',DOGRS_CAPACITY_SECONDS=str(a.seconds),DOGRS_CAPACITY_BYTES=str(a.bytes))
-  with (folder/'capacity.log').open('w') as output:
-   result=subprocess.run([binary,'capacity-local'],env=env,stdout=output,stderr=subprocess.STDOUT,timeout=300)
+  before=resource.getrusage(resource.RUSAGE_CHILDREN)
+  with (folder/'container-stats.jsonl').open('w') as stats:
+   monitor=subprocess.Popen(['docker','stats','--format','{{json .}}',*containers],stdout=stats,stderr=subprocess.DEVNULL)
+   try:
+    with (folder/'capacity.log').open('w') as output:
+     result=subprocess.run([binary,'capacity-local'],env=env,stdout=output,stderr=subprocess.STDOUT,timeout=300)
+    after=resource.getrusage(resource.RUSAGE_CHILDREN)
+    (folder/'client-cpu.json').write_text(json.dumps({'user_seconds':after.ru_utime-before.ru_utime,'system_seconds':after.ru_stime-before.ru_stime}))
+   finally:
+    monitor.terminate()
+    try:monitor.wait(timeout=5)
+    except subprocess.TimeoutExpired:monitor.kill();monitor.wait()
+  stats_path=folder/'container-stats.jsonl'
+  clean=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', stats_path.read_text())
+  samples=[json.loads(line) for line in clean.splitlines() if line.strip()]
+  stats_path.write_text(''.join(json.dumps(sample)+'\n' for sample in samples))
   if a.backend=='postgres':
    (folder/'io-profile.txt').write_text(command('docker','exec',name,'psql','-U','postgres','-c',"SELECT * FROM pg_stat_io WHERE object='wal'; SELECT * FROM pg_stat_wal;"))
    (folder/'query-profile.txt').write_text(command('docker','exec',name,'psql','-U','postgres','-c',"SELECT left(query,180) AS query,calls,round(mean_exec_time::numeric,3) AS mean_ms,round(total_exec_time::numeric,1) AS total_ms,shared_blks_read,shared_blks_hit,wal_bytes FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 12"))

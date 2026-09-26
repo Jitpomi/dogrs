@@ -136,24 +136,38 @@ impl Index {
             .notifications
             .get(tenant)
             .map(|entry| entry.value().clone());
-        match entries.entry(key) {
-            Entry::Occupied(mut entry) => {
-                if entry.get().0 <= revision {
-                    if deleted {
-                        let _ = entry.remove();
-                    } else {
-                        let _ = entry.insert((revision, parsed()));
-                    }
-                }
-            }
-            Entry::Vacant(entry) => {
-                if !deleted {
-                    let _ = entry.insert((revision, parsed()));
-                }
-            }
+        let runnable = |row: &Result<StoredRecord, String>| {
+            row.as_ref().is_ok_and(|row| {
+                let now = Utc::now();
+                row.record.message.run_at <= now && row.record.status.is_eligible(now)
+            })
         };
-        if let Some(changed) = changed {
-            changed.notify_waiters();
+        let wake = match entries.entry(key) {
+            Entry::Occupied(mut entry) if entry.get().0 < revision => {
+                if deleted {
+                    let _ = entry.remove();
+                    false
+                } else {
+                    let row = parsed();
+                    let wake = runnable(&row);
+                    let _ = entry.insert((revision, row));
+                    wake
+                }
+            }
+            Entry::Vacant(entry) if !deleted => {
+                let row = parsed();
+                let wake = runnable(&row);
+                entry.insert((revision, row));
+                wake
+            }
+            _ => false,
+        };
+        // Re-observing a revision or learning that another worker claimed a job
+        // must not wake idle claimers into a notification/point-read feedback loop.
+        if wake {
+            if let Some(changed) = changed {
+                changed.notify_waiters();
+            }
         }
     }
 }
@@ -711,6 +725,39 @@ impl StateStore for NatsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn discovery_wakes_only_for_new_runnable_revisions() {
+        use futures::FutureExt;
+        let index = Index {
+            entries: Default::default(),
+            notifications: Default::default(),
+            task: Default::default(),
+        };
+        let mut row = StoredRecord {
+            record: crate::JobRecord::new(
+                JobId::new(),
+                "test",
+                crate::JobMessage::new("work", vec![], "bytes", "q"),
+            ),
+            token: None,
+        };
+        let key = cell("test", "slot");
+        let changed = index.notification("test");
+        let first = changed.notified();
+        tokio::pin!(first);
+        first.as_mut().enable();
+        index.observe(key.clone(), 1, serde_json::to_vec(&row).unwrap(), false);
+        assert!(first.now_or_never().is_some());
+        let duplicate = changed.notified();
+        tokio::pin!(duplicate);
+        duplicate.as_mut().enable();
+        index.observe(key.clone(), 1, serde_json::to_vec(&row).unwrap(), false);
+        row.record.status = crate::JobStatus::Processing {
+            lease_until: Utc::now() + chrono::Duration::seconds(30),
+        };
+        index.observe(key, 2, serde_json::to_vec(&row).unwrap(), false);
+        assert!(duplicate.now_or_never().is_none());
+    }
     #[test]
     fn both_protocol_revision_conflicts_are_retryable_but_other_errors_are_not() {
         for code in [10071, 10164] {
