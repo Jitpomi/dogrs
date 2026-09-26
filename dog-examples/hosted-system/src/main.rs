@@ -32,6 +32,8 @@ struct BillingContext {
 struct RecordPayment {
     invoice: String,
     mode: String,
+    #[serde(default)]
+    padding: String,
 }
 #[async_trait::async_trait]
 impl Job for RecordPayment {
@@ -108,6 +110,13 @@ impl<B: QueueBackend + 'static> DogService<Value, ()> for BillingService<B> {
 }
 async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {
     let tenant = tenant()?;
+    let max_payload: usize = std::env::var("DOGRS_TEST_MAX_PAYLOAD")
+        .unwrap_or_else(|_| "4096".into())
+        .parse()?;
+    anyhow::ensure!(
+        (4096..=65536).contains(&max_payload),
+        "payload limit must be 4–64 KiB"
+    );
     let adapter = Arc::new(QueueAdapter::try_with_config(
         backend,
         QueueConfig {
@@ -117,7 +126,7 @@ async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {
             poll_interval: Duration::from_millis(250),
             poll_jitter: Duration::from_millis(25),
             worker_idle_timeout: Duration::from_secs(300),
-            max_payload_size: Some(4096),
+            max_payload_size: Some(max_payload),
             ..Default::default()
         },
     )?);

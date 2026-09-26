@@ -114,3 +114,12 @@ tenant's records. Never put these credentials in public logs or artifacts.
 SQS uses the private `dogrs-validation` queue in the dedicated AWS validation account, region `us-east-2`. Its IAM test identity can only send, receive and delete messages on that queue over TLS. Disable the credential after validation. The workflow includes SQS only when `aws.json` is supplied. Removing that entry after deactivation keeps future runs limited to available credentials.
 
 For `pubsub`, run inside a Google Cloud environment in `us-west1`, using existing Application Default Credentials and `DOGRS_GCP_PROJECT`. Pre-create `dogrs-validation` topic and subscription with message storage restricted to `us-west1`, no topic retention, and subscription retention at most one day. The client uses the regional HTTPS endpoint. This transport is excluded from the external GitHub runner to avoid Pub/Sub internet delivery charges.
+
+## Production gates
+
+The agreed launch workload and outstanding release gates are tracked in
+[production readiness](../../docs/production-readiness.md). Run
+`run_capacity.py` with the same binary/secret/report environment to test an
+open-loop arrival rate and increasing payload sizes. The first hosted 10-job/s
+single-tenant gate failed. Passing this acceptance suite does not override that
+failed capacity gate.
