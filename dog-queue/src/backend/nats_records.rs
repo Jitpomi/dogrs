@@ -599,6 +599,12 @@ impl NatsStore {
                 }
                 return Ok(outcome);
             }
+            if matches!(op, Operation::Dequeue(..)) {
+                // Another worker won this revision. Do not keep selecting the
+                // same advisory head while its watch update is in flight.
+                // No ownership was acquired; other candidates remain eligible.
+                skipped_hints.insert(id);
+            }
         }
         if matches!(op, Operation::Dequeue(..)) && !skipped_hints.is_empty() {
             return Ok(Outcome::Lease(None));
