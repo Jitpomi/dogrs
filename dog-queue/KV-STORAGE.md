@@ -17,7 +17,10 @@ constructor targets a single Redis endpoint, not a Redis Cluster router.
 `new` retains compatibility/development behavior: it does not certify persistence.
 Use `new_with_durability(config, RedisDurability::RequireAofAlways)` to fail startup
 unless AOF is enabled, appendfsync is `always`, and maxmemory-policy is `noeviction`.
-This needs permission for INFO and CONFIG GET. `verify_persistence()` can repeat
+Reconnect cycles are bounded below the 30-second operation deadline (up to four
+five-second connection attempts with bounded backoff). This avoids a dead
+connection keeping recovery pending beyond an operation budget.
+The durability guard needs permission for INFO and CONFIG GET. `verify_persistence()` can repeat
 those checks after configuration changes. It does not verify replica catch-up,
 failover policy, disk reliability, or a managed provider's guarantees. A service
 with AOF disabled cannot pass this guard.

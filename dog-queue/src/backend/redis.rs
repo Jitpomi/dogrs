@@ -104,7 +104,11 @@ impl RedisBackend {
                 manager: client
                     .get_connection_manager_with_config(
                         redis::aio::ConnectionManagerConfig::new()
-                            .set_connection_timeout(std::time::Duration::from_secs(10))
+                            // A single reconnect cycle must fit inside the queue's
+                            // 30-second operation budget, even with black-holed TCP.
+                            .set_number_of_retries(3)
+                            .set_max_delay(500)
+                            .set_connection_timeout(std::time::Duration::from_secs(5))
                             .set_response_timeout(std::time::Duration::from_secs(10)),
                     )
                     .await

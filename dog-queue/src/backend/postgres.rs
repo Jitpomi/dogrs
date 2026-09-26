@@ -5,6 +5,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::{sync::Arc, time::Duration};
 use tokio_postgres::{types::Type, Client, NoTls, Transaction};
+#[path = "postgres_batch.rs"]
+mod batching;
+pub use batching::PostgresBatchOptions;
 
 #[derive(Clone)]
 pub struct PostgresConfig {
@@ -18,6 +21,8 @@ pub struct PostgresOptions {
     /// Optional producer concurrency cap. Leave below max_connections to reserve
     /// pool capacity for workers; tune against the actual server and latency.
     pub enqueue_concurrency: Option<u32>,
+    /// Optional bounded coalescing; successful enqueues still wait for COMMIT.
+    pub enqueue_batch: Option<PostgresBatchOptions>,
     /// Explicit offline v1 -> v2 migration. Stop every old worker/API first.
     pub migrate_legacy: bool,
 }
@@ -27,6 +32,7 @@ impl Default for PostgresOptions {
             max_connections: 4,
             operation_timeout: Duration::from_secs(10),
             enqueue_concurrency: None,
+            enqueue_batch: None,
             migrate_legacy: false,
         }
     }
@@ -56,6 +62,7 @@ pub struct PostgresStore {
     pool: bb8::Pool<Manager>,
     timeout: Duration,
     enqueue_slots: Option<tokio::sync::Semaphore>,
+    batcher: Option<batching::Batcher>,
 }
 pub type PostgresBackend = DurableBackend<PostgresStore>;
 fn error(e: impl std::fmt::Display + 'static) -> QueueError {
@@ -111,6 +118,9 @@ impl PostgresBackend {
                 "positive pool size and timeout required; enqueue concurrency must be within pool size".into(),
             ));
         }
+        if let Some(batch) = &options.enqueue_batch {
+            batch.validate(options.max_connections)?;
+        }
         let statement_timeout = options
             .operation_timeout
             .as_millis()
@@ -146,7 +156,8 @@ impl PostgresBackend {
             .build(Manager(connect))
             .await
             .map_err(error)?;
-        let store = PostgresStore {
+        let mut store = PostgresStore {
+            batcher: None,
             pool,
             timeout: options.operation_timeout,
             enqueue_slots: options
@@ -156,6 +167,13 @@ impl PostgresBackend {
         tokio::time::timeout(store.timeout, store.initialize(options.migrate_legacy))
             .await
             .map_err(|_| error("PostgreSQL schema initialization timed out"))??;
+        if let Some(batch) = options.enqueue_batch {
+            store.batcher = Some(batching::Batcher::new(
+                store.pool.clone(),
+                store.timeout,
+                batch,
+            ));
+        }
         Ok(Self {
             store,
             lease_duration: Duration::from_secs(300),
@@ -246,34 +264,17 @@ impl PostgresStore {
             (Some(slots), Operation::Enqueue(_)) => Some(slots.acquire().await.map_err(error)?),
             _ => None,
         };
-        let mut client = self.pool.get().await.map_err(error)?;
-        if let Operation::Enqueue(message) = op {
-            let mut state = TenantState::default();
-            state.apply_at(tenant, op, Utc::now())?;
-            let stored = state.jobs.values().next().unwrap();
-            let r = &stored.record;
-            let value = metadata(stored)?;
-            // One atomic statement: database timestamps replace temporary local
-            // constructor timestamps before anything becomes visible.
-            let row = client
-                .query_typed_one(
-                    include_str!("postgres_enqueue.sql"),
-                    &[
-                        (&tenant, Type::TEXT),
-                        (&r.job_id.as_str(), Type::TEXT),
-                        (&value, Type::JSONB),
-                        (&message.queue, Type::TEXT),
-                        (&message.job_type, Type::TEXT),
-                        (&message.idempotency_key, Type::TEXT),
-                        (&i32::from(message.priority.as_u8()), Type::INT4),
-                        (&message.run_at, Type::TIMESTAMPTZ),
-                        (&message.payload_bytes, Type::BYTEA),
-                    ],
-                )
-                .await
-                .map_err(error)?;
-            return Ok(Outcome::Id(row.get::<_, String>(0).into()));
+        if let Operation::Enqueue(_) = op {
+            let prepared = PreparedEnqueue::new(tenant, op)?;
+            let id = if let Some(batcher) = &self.batcher {
+                batcher.enqueue(prepared).await?
+            } else {
+                let client = self.pool.get().await.map_err(error)?;
+                enqueue_one(&*client, &prepared).await?
+            };
+            return Ok(Outcome::Id(id));
         }
+        let mut client = self.pool.get().await.map_err(error)?;
         if let Operation::Dequeue(queues, duration) = op {
             if duration.is_zero() || chrono::Duration::from_std(*duration).is_err() {
                 return Err(QueueError::InvalidConfig(
@@ -460,6 +461,59 @@ impl PostgresStore {
         Ok(outcome)
     }
 }
+struct PreparedEnqueue {
+    stored: StoredRecord,
+    metadata: serde_json::Value,
+}
+impl PreparedEnqueue {
+    fn new(tenant: &str, op: &Operation) -> QueueResult<Self> {
+        let mut state = TenantState::default();
+        state.apply_at(tenant, op, Utc::now())?;
+        let stored = state.jobs.into_values().next().unwrap();
+        Ok(Self {
+            metadata: metadata(&stored)?,
+            stored,
+        })
+    }
+    fn lock_order(&self) -> (&str, &str, &str, &str) {
+        let r = &self.stored.record;
+        (
+            &r.tenant_id,
+            &r.message.queue,
+            &r.message.job_type,
+            r.message
+                .idempotency_key
+                .as_deref()
+                .unwrap_or(r.job_id.as_str()),
+        )
+    }
+}
+async fn enqueue_one(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    prepared: &PreparedEnqueue,
+) -> QueueResult<crate::JobId> {
+    let r = &prepared.stored.record;
+    let message = &r.message;
+    let row = client
+        .query_typed_one(
+            include_str!("postgres_enqueue.sql"),
+            &[
+                (&r.tenant_id, Type::TEXT),
+                (&r.job_id.as_str(), Type::TEXT),
+                (&prepared.metadata, Type::JSONB),
+                (&message.queue, Type::TEXT),
+                (&message.job_type, Type::TEXT),
+                (&message.idempotency_key, Type::TEXT),
+                (&i32::from(message.priority.as_u8()), Type::INT4),
+                (&message.run_at, Type::TIMESTAMPTZ),
+                (&message.payload_bytes, Type::BYTEA),
+            ],
+        )
+        .await
+        .map_err(error)?;
+    Ok(row.get::<_, String>(0).into())
+}
+
 fn metadata(stored: &StoredRecord) -> QueueResult<serde_json::Value> {
     let mut record = stored.record.clone();
     record.message.payload_bytes.clear();

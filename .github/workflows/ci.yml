@@ -196,8 +196,11 @@ jobs:
           python3 dog-examples/hosted-system/run_recovery.py redis --restore --outage-seconds 300 --report-dir provider-recovery
         env:
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
+          DOGRS_PG_BATCH: 1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: provider-recovery
-          path: provider-recovery
+          path: |
+            provider-recovery
+            !provider-recovery/**/cold-backup/**

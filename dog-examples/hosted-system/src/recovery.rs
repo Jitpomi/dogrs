@@ -137,12 +137,12 @@ pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()
     // The original backend remains alive in recovery-live, exercising reconnect.
     tokio::time::timeout(Duration::from_secs(45), async {
         loop {
-            if backend
+            match backend
                 .get_record(ctx.clone(), manifest.jobs[0].0.clone())
                 .await
-                .is_ok()
             {
-                return;
+                Ok(_) => return,
+                Err(error) => eprintln!("RECOVERY_RECONNECT_RETRY {error}"),
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }

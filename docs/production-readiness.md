@@ -88,7 +88,8 @@ not a sustained soak or a certification of the hosted Aiven service.
 
 PostgreSQL and replicated JetStream have **not passed** that combined gate.
 PostgreSQL experiments with larger shared buffers and uncompressed TOAST storage
-did not close the gap and were not adopted. Producer admission is now explicitly
+did not close the gap. The later capacity fixture records an explicit 1 GiB
+shared-buffer / 4 GiB WAL profile, leaving durability enabled. Producer admission is explicitly
 tunable instead of hard-coding a pool fraction. On local NATS 2.15.0 with 16 buckets,
 three replicas and sync-always, the corrected hint handling eliminated the earlier
 lookup errors, but only 7,451 jobs were admitted and 1,915 completed by the deadline.
@@ -142,3 +143,21 @@ See [KV storage](../dog-queue/KV-STORAGE.md) for limits and reproduction.
   See https://docs.mercury.com/reference/webhooks and
   https://docs.mercury.com/docs/invoicing. Do not infer invoice API entitlement
   from the free banking account, and do not upgrade a plan to run these tests.
+
+### Latest correctness checks
+
+A later hosted PostgreSQL 64 KiB run passed 300/300 jobs over 30 seconds, verified
+all 300 business effects and completions by 30.744 seconds, and recorded no
+overload or duplicate attempts (enqueue p95 447.71 ms). The optional enqueue
+batcher is independently tested for immediate cross-connection visibility after
+acknowledgement, cross-tenant deduplication, whole-batch rollback, and subsequent
+successful admission. It returns no successful response before COMMIT.
+
+CI exposed a Redis reconnect timeout after restart. The retry cycle is now
+bounded to fit below the queue operation deadline; the same-client controlled
+restart passed locally after this change. CI recovery remains a required gate,
+including the five-minute Redis outage and fresh-container AOF restoration.
+
+The capacity fixture records host/Docker resources and PostgreSQL WAL I/O
+statistics. These separate the observed deployment profile from the portable
+backend API; they do not turn failing capacity measurements into passes.

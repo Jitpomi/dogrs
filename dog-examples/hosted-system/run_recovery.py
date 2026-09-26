@@ -4,7 +4,7 @@
 Run with DOGRS_SYSTEM_BINARY pointing to a release build with redis,nats features.
 Only containers/network created by this invocation are killed or removed.
 """
-import argparse,json,os,pathlib,secrets,socket,subprocess,time,urllib.request
+import argparse,json,os,pathlib,platform,secrets,socket,subprocess,time,urllib.request
 p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis','nats']);p.add_argument('--report-dir',required=True);p.add_argument('--capacity',action='store_true');p.add_argument('--restore',action='store_true');p.add_argument('--race',action='store_true');p.add_argument('--outage-seconds',type=int,default=3);p.add_argument('--seconds',type=int,default=30);p.add_argument('--bytes',type=int,default=1024);a=p.parse_args()
 root=pathlib.Path(a.report_dir).resolve();root.mkdir(parents=True,exist_ok=True)
 run='dogrs-fault-'+secrets.token_hex(5);folder=root/run;folder.mkdir()
@@ -24,11 +24,22 @@ def wait_port(number):
    if time.monotonic()>deadline:raise TimeoutError('service readiness')
    time.sleep(.2)
 try:
+ (folder/'environment.json').write_text(json.dumps({
+  'host_architecture':platform.machine(),'host_logical_cpus':os.cpu_count(),
+  'docker':json.loads(command('docker','info','--format','{"cpus":{{.NCPU}},"memory_bytes":{{.MemTotal}},"architecture":"{{.Architecture}}"}')),
+  'postgres_batch':os.environ.get('DOGRS_PG_BATCH')=='1',
+  'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
+  'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
+  'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),
+ },indent=2))
  env={**os.environ,'DOGRS_BACKEND':a.backend,'DOGRS_TEST_TENANT':run.replace('dogrs-fault-','dogrs-test-fault-'),'DOGRS_RECOVERY_MANIFEST':str(folder/'manifest.json')}
  monitors={}
  if a.backend=='postgres':
   number=port();name=run+'-pg'
-  launch(name,'-p',f'127.0.0.1:{number}:5432','-e','POSTGRES_PASSWORD=disposable-only','postgres:18-alpine','postgres','-c','shared_preload_libraries=pg_stat_statements','-c','track_io_timing=on')
+  pg_tuning=['-c','shared_buffers=1GB','-c','max_wal_size=4GB','-c','checkpoint_timeout=15min'] if a.capacity else []
+  delay=int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0'));assert 0<=delay<=10000
+  pg_tuning+=['-c',f'commit_delay={delay}','-c','commit_siblings=1','-c','track_wal_io_timing=on']
+  launch(name,'-p',f'127.0.0.1:{number}:5432','-e','POSTGRES_PASSWORD=disposable-only','postgres:18-alpine','postgres','-c','shared_preload_libraries=pg_stat_statements','-c','track_io_timing=on',*pg_tuning)
   env['DOGRS_POSTGRES_URL']=f'host=127.0.0.1 port={number} user=postgres password=disposable-only dbname=postgres'
   wait_port(number)
   deadline=time.monotonic()+60
@@ -74,6 +85,7 @@ try:
   with (folder/'capacity.log').open('w') as output:
    result=subprocess.run([binary,'capacity-local'],env=env,stdout=output,stderr=subprocess.STDOUT,timeout=300)
   if a.backend=='postgres':
+   (folder/'io-profile.txt').write_text(command('docker','exec',name,'psql','-U','postgres','-c',"SELECT * FROM pg_stat_io WHERE object='wal'; SELECT * FROM pg_stat_wal;"))
    (folder/'query-profile.txt').write_text(command('docker','exec',name,'psql','-U','postgres','-c',"SELECT left(query,180) AS query,calls,round(mean_exec_time::numeric,3) AS mean_ms,round(total_exec_time::numeric,1) AS total_ms,shared_blks_read,shared_blks_hit,wal_bytes FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 12"))
   print(json.dumps({'backend':a.backend,'restored_to_fresh_container':a.restore,'outage_seconds':a.outage_seconds,'replicas':3 if a.backend=='nats' else 1,'sync_policy':'always' if a.backend in ('redis','nats') else 'PostgreSQL default fsync/synchronous_commit','passed':result.returncode==0,'capacity_log':str(folder/'capacity.log')}))
   raise SystemExit(result.returncode)

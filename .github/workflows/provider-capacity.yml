@@ -37,7 +37,7 @@ jobs:
           PAYLOAD_BYTES: ${{ inputs.payload_bytes || '65536' }}
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
           DOGRS_CAPACITY_WORKERS: 1
-          DOGRS_PG_ENQUEUE_CONCURRENCY: 32
+          DOGRS_PG_BATCH: 1
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
           DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && '16' || '1' }}
       - uses: actions/upload-artifact@v4
