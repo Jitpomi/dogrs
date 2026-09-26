@@ -288,7 +288,7 @@ dog-schema-validator extends the DogRS ecosystem:
 
 See `dog-examples/` for complete applications:
 
-- **blog-axum** - REST API with comprehensive validation
+- **blog** - REST API with comprehensive validation
 - **social-typedb** - Social network with user data validation
 
 ## License

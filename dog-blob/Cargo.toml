@@ -1,6 +1,6 @@
 [package]
 name = "dog-blob"
-version = "0.1.7"
+version = "0.2.0"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "Production-ready blob storage infrastructure with streaming, multipart uploads, and range requests"
@@ -33,7 +33,7 @@ uuid = { version = "1.23.2", features = ["v4", "serde"] }
 # AWS SDK dependencies for S3-compatible storage
 aws-config = "1.8"
 aws-credential-types = "1.2"
-aws-sdk-s3 = "1.135"
+aws-sdk-s3 = { version = "1.150", default-features = false, features = ["default-https-client", "rt-tokio", "http-1x", "sigv4a"] }
 futures = "0.3"
 
 [features]

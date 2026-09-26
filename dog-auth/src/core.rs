@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::options::{AuthOptions, TokenType};
 
-#[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+#[cfg(feature = "jwt-aws-lc-rs")]
 use crate::options::JwtAlgorithm;
 
 pub type AuthenticationResult = Value;
@@ -79,10 +79,10 @@ pub trait JwtProvider: Send + Sync {
     ) -> Result<Value>;
 }
 
-#[cfg(not(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto")))]
+#[cfg(not(feature = "jwt-aws-lc-rs"))]
 struct NoJwtProvider;
 
-#[cfg(not(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto")))]
+#[cfg(not(feature = "jwt-aws-lc-rs"))]
 impl JwtProvider for NoJwtProvider {
     fn sign(
         &self,
@@ -91,7 +91,7 @@ impl JwtProvider for NoJwtProvider {
         _token_type: TokenType,
     ) -> Result<String> {
         Err(anyhow::anyhow!(
-            "JWT support is disabled (enable one of: jwt-aws-lc-rs, jwt-rust-crypto)"
+            "JWT support is disabled (enable jwt-aws-lc-rs)"
         ))
     }
 
@@ -102,15 +102,19 @@ impl JwtProvider for NoJwtProvider {
         _overrides: Option<&JwtOverrides>,
     ) -> Result<Value> {
         Err(anyhow::anyhow!(
-            "JWT support is disabled (enable one of: jwt-aws-lc-rs, jwt-rust-crypto)"
+            "JWT support is disabled (enable jwt-aws-lc-rs)"
         ))
     }
 }
 
-#[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
-struct JsonwebtokenProvider;
+#[cfg(feature = "jwt-aws-lc-rs")]
+#[derive(Default)]
+struct JsonwebtokenProvider {
+    encoding: std::sync::OnceLock<std::result::Result<jsonwebtoken::EncodingKey, String>>,
+    decoding: std::sync::OnceLock<std::result::Result<jsonwebtoken::DecodingKey, String>>,
+}
 
-#[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+#[cfg(feature = "jwt-aws-lc-rs")]
 impl JsonwebtokenProvider {
     fn algorithm(alg: JwtAlgorithm) -> jsonwebtoken::Algorithm {
         match alg {
@@ -126,7 +130,7 @@ impl JsonwebtokenProvider {
     }
 }
 
-#[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+#[cfg(feature = "jwt-aws-lc-rs")]
 impl JwtProvider for JsonwebtokenProvider {
     fn sign(
         &self,
@@ -134,13 +138,13 @@ impl JwtProvider for JsonwebtokenProvider {
         claims: Map<String, Value>,
         token_type: TokenType,
     ) -> Result<String> {
-        use jsonwebtoken::{encode, EncodingKey, Header};
+        use jsonwebtoken::{encode, Header};
 
-        // Minimal implementation: sign using HMAC secret.
-        // Key-based algorithms can be added later without changing the public API.
-        let secret = jwt.secret.as_ref().ok_or_else(|| {
-            DogError::not_authenticated("JWT secret is not configured").into_anyhow()
-        })?;
+        let key = self
+            .encoding
+            .get_or_init(|| jwt_encoding_key(jwt).map_err(|e| e.to_string()))
+            .as_ref()
+            .map_err(|e| DogError::general_error(e).into_anyhow())?;
 
         let mut header = Header::new(Self::algorithm(jwt.algorithm.clone()));
         header.typ = Some(
@@ -152,12 +156,8 @@ impl JwtProvider for JsonwebtokenProvider {
             .to_string(),
         );
 
-        encode(
-            &header,
-            &claims,
-            &EncodingKey::from_secret(secret.as_bytes()),
-        )
-        .map_err(|e| DogError::not_authenticated(e.to_string()).into_anyhow())
+        encode(&header, &claims, key)
+            .map_err(|e| DogError::not_authenticated(e.to_string()).into_anyhow())
     }
 
     fn verify(
@@ -166,11 +166,13 @@ impl JwtProvider for JsonwebtokenProvider {
         token: &str,
         overrides: Option<&JwtOverrides>,
     ) -> Result<Value> {
-        use jsonwebtoken::{decode, DecodingKey, Validation};
+        use jsonwebtoken::{decode, Validation};
 
-        let secret = jwt.secret.as_ref().ok_or_else(|| {
-            DogError::not_authenticated("JWT secret is not configured").into_anyhow()
-        })?;
+        let key = self
+            .decoding
+            .get_or_init(|| jwt_decoding_key(jwt).map_err(|e| e.to_string()))
+            .as_ref()
+            .map_err(|e| DogError::general_error(e).into_anyhow())?;
 
         let issuer = overrides
             .and_then(|o| o.issuer.clone())
@@ -185,13 +187,20 @@ impl JwtProvider for JsonwebtokenProvider {
         validation.set_issuer(&[issuer.as_str()]);
         validation.set_audience(&audience.iter().map(|s| s.as_str()).collect::<Vec<_>>());
 
-        let decoded = decode::<Value>(
-            token,
-            &DecodingKey::from_secret(secret.as_bytes()),
-            &validation,
-        )
-        .map_err(|e| DogError::not_authenticated(e.to_string()).into_anyhow())?;
+        let decoded = decode::<Value>(token, key, &validation)
+            .map_err(|e| DogError::not_authenticated(e.to_string()).into_anyhow())?;
 
+        let expected_type = match overrides
+            .and_then(|o| o.token_type.as_ref())
+            .unwrap_or(&TokenType::Access)
+        {
+            TokenType::Access => "access",
+            TokenType::Refresh => "refresh",
+            TokenType::Identity => "identity",
+        };
+        if decoded.header.typ.as_deref() != Some(expected_type) {
+            return Err(DogError::not_authenticated("Invalid token type").into_anyhow());
+        }
         Ok(decoded.claims)
     }
 }
@@ -233,11 +242,11 @@ where
         builder.set(config_key.into(), opts.clone());
 
         let jwt: Arc<dyn JwtProvider> = {
-            #[cfg(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto"))]
+            #[cfg(feature = "jwt-aws-lc-rs")]
             {
-                Arc::new(JsonwebtokenProvider)
+                Arc::new(JsonwebtokenProvider::default())
             }
-            #[cfg(not(any(feature = "jwt-aws-lc-rs", feature = "jwt-rust-crypto")))]
+            #[cfg(not(feature = "jwt-aws-lc-rs"))]
             {
                 Arc::new(NoJwtProvider)
             }
@@ -362,6 +371,18 @@ where
         self.verify_token(token, None).await
     }
 
+    /// Verify a refresh token for an explicit refresh endpoint. Does not rotate or revoke it.
+    pub async fn verify_refresh_token(&self, token: &str) -> Result<Value> {
+        self.verify_token(
+            token,
+            Some(JwtOverrides {
+                token_type: Some(TokenType::Refresh),
+                ..Default::default()
+            }),
+        )
+        .await
+    }
+
     async fn create_token(
         &self,
         payload: Value,
@@ -425,5 +446,68 @@ where
         let cfg = self.configuration();
         let jwt = cfg.jwt;
         self.jwt.verify(&jwt, token, overrides.as_ref())
+    }
+}
+
+#[cfg(feature = "jwt-aws-lc-rs")]
+fn jwt_encoding_key(jwt: &crate::options::JwtOptions) -> Result<jsonwebtoken::EncodingKey> {
+    match jwt.algorithm {
+        JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
+            let secret = jwt
+                .secret
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("JWT secret is not configured"))?;
+            Ok(jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()))
+        }
+        _ => {
+            #[cfg(feature = "jwt-pem")]
+            {
+                let path = jwt
+                    .private_key_path
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("JWT private key is not configured"))?;
+                let pem = std::fs::read(path)?;
+                match jwt.algorithm {
+                    JwtAlgorithm::RS256 | JwtAlgorithm::RS384 | JwtAlgorithm::RS512 => {
+                        Ok(jsonwebtoken::EncodingKey::from_rsa_pem(&pem)?)
+                    }
+                    _ => Ok(jsonwebtoken::EncodingKey::from_ec_pem(&pem)?),
+                }
+            }
+            #[cfg(not(feature = "jwt-pem"))]
+            anyhow::bail!("Enable jwt-pem for RSA/ECDSA keys")
+        }
+    }
+}
+#[cfg(feature = "jwt-aws-lc-rs")]
+fn jwt_decoding_key(jwt: &crate::options::JwtOptions) -> Result<jsonwebtoken::DecodingKey> {
+    match jwt.algorithm {
+        JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
+            let secret = jwt
+                .secret
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("JWT secret is not configured"))?;
+            Ok(jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()))
+        }
+        _ => {
+            #[cfg(feature = "jwt-pem")]
+            {
+                let path = jwt
+                    .public_key_path
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("JWT public key is not configured"))?;
+                let pem = std::fs::read(path)?;
+                match jwt.algorithm {
+                    JwtAlgorithm::RS256 | JwtAlgorithm::RS384 | JwtAlgorithm::RS512 => {
+                        Ok(jsonwebtoken::DecodingKey::from_rsa_pem(&pem)?)
+                    }
+                    _ => Ok(jsonwebtoken::DecodingKey::from_ec_pem(&pem)?),
+                }
+            }
+            #[cfg(not(feature = "jwt-pem"))]
+            anyhow::bail!("Enable jwt-pem for RSA/ECDSA keys")
+        }
     }
 }

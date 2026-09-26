@@ -1,6 +1,6 @@
 # Auth Demo (`auth-demo`)
 
-A complete, production-ready example demonstrating how to implement authentication in DogRS using `dog-auth` and `dog-axum`.
+A complete, production-ready example demonstrating how to implement authentication in DogRS using `dog-auth` and `dog-transport`.
 
 This demo showcases how to set up an immutable `DogAppBuilder`, configure multiple authentication strategies (Local, JWT, and Google OAuth2), and decouple your HTTP routing from your internal service registry.
 
@@ -96,19 +96,22 @@ The framework will handle the redirect to Google, process the callback, create t
 
 ## Architectural Highlights
 
-### Decoupled Routing (`use_service_as`)
+### Decoupled Routing
 
-In `src/app.rs`, you'll notice we mount the authentication service like this:
+In `src/app.rs`, the router is configured natively with Axum:
 
 ```rust
-ax = ax
-    .use_service("/messages", svcs.messages)
-    .use_service("/users", svcs.users)
-    .use_service_as("/auth", "authentication", svcs.auth_svc)
-    .use_service("/oauth", svcs.oauth);
+    let http_service = dog_app.clone().into_service(
+        HttpOptions::default()
+            .tenant_header("x-tenant-id")
+            .enable_cors(true)
+    );
+
+    let router = Router::new()
+        .fallback_service(http_service);
 ```
 
-By default, `dog-auth` registers the internal service as `"authentication"` (following the FeathersJS convention). Using `use_service_as` allows us to decouple the external HTTP path (`/auth`) from the internal core registry (`"authentication"`), giving us beautiful URLs without compromising the core architecture.
+By default, the HTTP service automatically maps external paths directly to their corresponding registered services, routing `/authentication` (or `/auth` if registered as such) to the authentication backend. We use standard Axum routing and fallbacks to pass incoming HTTP requests directly to our core service engine.
 
 ### No Duplicate Adapters
 

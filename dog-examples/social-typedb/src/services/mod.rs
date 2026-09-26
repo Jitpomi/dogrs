@@ -12,18 +12,10 @@ pub mod organizations;
 pub mod persons;
 pub mod posts;
 
-pub struct SocialServices {
-    pub persons: Arc<dyn DogService<serde_json::Value, SocialParams>>,
-    pub organizations: Arc<dyn DogService<serde_json::Value, SocialParams>>,
-    pub groups: Arc<dyn DogService<serde_json::Value, SocialParams>>,
-    pub posts: Arc<dyn DogService<serde_json::Value, SocialParams>>,
-    pub comments: Arc<dyn DogService<serde_json::Value, SocialParams>>,
-}
-
 pub fn configure(
     app: &mut dog_core::DogAppBuilder<serde_json::Value, SocialParams>,
     state: Arc<TypeDBState>,
-) -> anyhow::Result<SocialServices> {
+) -> anyhow::Result<()> {
     let persons: Arc<dyn DogService<serde_json::Value, SocialParams>> =
         Arc::new(persons::PersonsService::new(Arc::clone(&state)));
     app.register_service("persons", Arc::clone(&persons));
@@ -45,11 +37,5 @@ pub fn configure(
         Arc::new(comments::CommentsService::new(Arc::clone(&state)));
     app.register_service("comments", Arc::clone(&comments));
 
-    Ok(SocialServices {
-        persons,
-        organizations,
-        groups,
-        posts,
-        comments,
-    })
+    Ok(())
 }

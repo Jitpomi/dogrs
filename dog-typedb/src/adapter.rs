@@ -1,4 +1,3 @@
-use crate::execute_typedb_query;
 use anyhow::Result;
 use serde_json::Value;
 use std::sync::Arc;
@@ -32,7 +31,7 @@ impl TypeDBAdapter {
             .and_then(|q| q.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
 
-        execute_typedb_query(&self.driver, &self.database, query).await
+        crate::transactions::execute_write_query(&self.driver, &self.database, query).await
     }
 
     /// Execute a read query (match operations)
@@ -53,6 +52,6 @@ impl TypeDBAdapter {
             .and_then(|q| q.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
 
-        execute_typedb_query(&self.driver, &self.database, query).await
+        crate::transactions::execute_schema_query(&self.driver, &self.database, query).await
     }
 }

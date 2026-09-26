@@ -1,6 +1,6 @@
 [package]
 name = "dog-typedb"
-version = "0.1.7"
+version = "0.2.0"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "TypeDB database integration for DogRS - adapters, utilities, and TypeQL query builders"
@@ -19,13 +19,16 @@ component_type = "library"
 [dependencies]
 anyhow = "1.0.102"
 async-trait = "0.1.89"
-dog-core = { path = "../dog-core", version = "0.1.5" }
+dog-core = { path = "../dog-core", version = "0.2.0" }
 serde_json = "1.0.150"
-typedb-driver = "3.11.5"
+typedb-driver = "=3.13.6"
 futures = "0.3"
 tokio = { version = "1.52", features = ["sync"] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+uuid = { version = "1", features = ["v4"] }
 
 [lib]
 name = "dog_typedb"

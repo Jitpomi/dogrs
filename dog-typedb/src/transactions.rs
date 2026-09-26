@@ -201,7 +201,11 @@ pub async fn execute_read_transaction(
     typedb_answer_to_http_ok(answer, "read", query, 10_000).await
 }
 
-async fn execute_write_query(driver: &TypeDBDriver, database: &str, query: &str) -> Result<Value> {
+pub async fn execute_write_query(
+    driver: &TypeDBDriver,
+    database: &str,
+    query: &str,
+) -> Result<Value> {
     let tx = driver
         .transaction(database, typedb_driver::TransactionType::Write)
         .await
@@ -222,7 +226,11 @@ async fn execute_write_query(driver: &TypeDBDriver, database: &str, query: &str)
     Ok(res)
 }
 
-async fn execute_schema_query(driver: &TypeDBDriver, database: &str, query: &str) -> Result<Value> {
+pub async fn execute_schema_query(
+    driver: &TypeDBDriver,
+    database: &str,
+    query: &str,
+) -> Result<Value> {
     let tx = driver
         .transaction(database, typedb_driver::TransactionType::Schema)
         .await
@@ -269,11 +277,10 @@ async fn typedb_answer_to_http_ok(
             while let Some(document_result) = stream.next().await {
                 let document = document_result
                     .map_err(|e| anyhow::anyhow!("Failed to get concept document: {}", e))?;
-                answers.push(json!({"data": document.into_json(), "involvedBlocks": [0]}));
-
-                if answers.len() >= max_answers {
+                if answers.len() < max_answers {
+                    answers.push(json!({"data": document.into_json(), "involvedBlocks": [0]}));
+                } else {
                     truncated = true;
-                    break;
                 }
             }
 
@@ -302,11 +309,10 @@ async fn typedb_answer_to_http_ok(
                     }
                 }
 
-                answers.push(json!({"data": data_map, "involvedBlocks": [0]}));
-
-                if answers.len() >= max_answers {
+                if answers.len() < max_answers {
+                    answers.push(json!({"data": data_map, "involvedBlocks": [0]}));
+                } else {
                     truncated = true;
-                    break;
                 }
             }
 
@@ -390,59 +396,49 @@ fn format_concept(concept: &typedb_driver::concept::Concept) -> Result<Value> {
     }
 }
 
+/// Load all discovered schema files in one schema transaction. Any execution
+/// failure rolls the entire migration back; callers must explicitly version migrations.
 pub async fn load_schema_from_file(
     driver: &TypeDBDriver,
     database: &str,
     schema_paths: &[&str],
 ) -> Result<Value> {
-    let schema_files = ["schema.tql", "functions.tql"];
-    let mut loaded_files = Vec::new();
-    let mut responses = Vec::new();
-
-    for file_name in &schema_files {
-        let mut file_content = None;
-
-        for base_path in schema_paths {
-            let full_path = if base_path.ends_with(file_name) {
-                base_path.to_string()
+    let mut sources = Vec::new();
+    for name in ["schema.tql", "functions.tql"] {
+        for base in schema_paths {
+            let path = if base.ends_with(name) {
+                std::path::PathBuf::from(base)
             } else {
-                format!("{}/{}", base_path.trim_end_matches('/'), file_name)
+                std::path::Path::new(base).join(name)
             };
-
-            if let Ok(content) = fs::read_to_string(&full_path) {
-                file_content = Some(content);
-                break;
-            }
-        }
-
-        if let Some(content) = file_content {
-            match execute_typedb_query(driver, database, &content).await {
-                Ok(response) => {
-                    loaded_files.push(file_name.to_string());
-                    responses.push(response);
+            match fs::read_to_string(&path) {
+                Ok(content) => {
+                    sources.push((name, content));
+                    break;
                 }
-                Err(e) => {
-                    let msg = e.to_string();
-                    if !msg.contains("already exists") {
-                        eprintln!("Warning: Failed to load {}: {}", file_name, e);
-                    }
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(anyhow::anyhow!("Cannot read {}: {}", path.display(), e)),
             }
         }
     }
-
-    if loaded_files.is_empty() {
-        return Err(anyhow::anyhow!(
-            "No schema files (schema.tql, functions.tql) found in any expected locations: {:?}",
-            schema_paths
-        ));
+    anyhow::ensure!(
+        !sources.is_empty(),
+        "No schema files found in {:?}",
+        schema_paths
+    );
+    let tx = driver
+        .transaction(database, typedb_driver::TransactionType::Schema)
+        .await?;
+    let mut responses = Vec::new();
+    for (name, content) in &sources {
+        let answer = tx
+            .query(content)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to load {name}: {e}"))?;
+        responses.push(typedb_answer_to_http_ok(answer, "schema", content, 10_000).await?);
     }
-
-    Ok(json!({
-        "ok": {
-            "message": format!("Successfully loaded {} schema files: {}", loaded_files.len(), loaded_files.join(", ")),
-            "loadedFiles": loaded_files,
-            "responses": responses
-        }
-    }))
+    tx.commit().await?;
+    Ok(
+        json!({"ok": {"loadedFiles": sources.iter().map(|(n,_)| *n).collect::<Vec<_>>(), "responses": responses}}),
+    )
 }

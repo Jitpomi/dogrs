@@ -1,6 +1,6 @@
 class FleetCommandPro {
     constructor() {
-        this.apiBaseUrl = 'http://127.0.0.1:3036';
+        this.apiBaseUrl = window.location.origin;
         this.tomtomApiKey = null;
         this.map = null;
         this.vehicleMarkers = new Map();
@@ -3638,7 +3638,22 @@ class FleetCommandPro {
     }
     
     startRealTimeUpdates() {
-        // Polling disabled - will use dog-realtime when implemented
+        console.log("Starting real-time updates via SSE...");
+        const eventSource = new EventSource('/events');
+        eventSource.onmessage = async (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                console.log('Real-time event received:', data);
+                await this.loadAllData();
+                await this.addVehicleMarkers();
+                this.updateUI();
+            } catch (err) {
+                console.error('Error processing real-time update:', err);
+            }
+        };
+        eventSource.onerror = (err) => {
+            console.error('Real-time event source error:', err);
+        };
     }
     
     setupDeliveryDetailsButton() {
@@ -4093,10 +4108,6 @@ async assignDeliveryToDriver(deliveryId, driverId) {
         console.error('Assignment failed:', error);
         this.showNotification('Assignment failed', 'error');
     }
-}
-
-startRealTimeUpdates() {
-    // Polling disabled - will use dog-realtime when implemented
 }
 
     updateDriversView() {

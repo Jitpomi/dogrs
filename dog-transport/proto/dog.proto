@@ -1,0 +1,10 @@
+syntax = "proto3";
+package dog.v1;
+
+// Versioned transport for the framework's dynamic service registry.
+// JSON bytes contain DogRequest / DogResponse, not an arbitrary Rust type.
+service DogTransport {
+  rpc Call (CallRequest) returns (CallResponse);
+}
+message CallRequest { bytes request_json = 1; }
+message CallResponse { bytes response_json = 1; }

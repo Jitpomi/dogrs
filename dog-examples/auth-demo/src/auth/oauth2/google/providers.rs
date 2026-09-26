@@ -23,27 +23,114 @@ fn google_provider_with_redirect(
         .get_string("oauth.google.client_secret")
         .ok_or_else(|| anyhow::anyhow!("Missing oauth.google.client_secret"))?;
 
-    GoogleOAuthProvider::new(dog_auth_oauth::oauth2_client::OAuth2ClientConfig {
-        name: name.to_string(),
-        client_id,
-        client_secret,
-        auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
-        token_url: "https://oauth2.googleapis.com/token".to_string(),
-        redirect_uri: redirect_uri.to_string(),
-        scopes: vec![
-            "openid".to_string(),
-            "email".to_string(),
-            "profile".to_string(),
-        ],
-        userinfo_url: Some("https://openidconnect.googleapis.com/v1/userinfo".to_string()),
-    })
+    GoogleOAuthProvider::new(
+        dog_auth_oauth::oauth2_client::OAuth2ClientConfig {
+            name: name.to_string(),
+            client_id,
+            client_secret,
+            auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
+            token_url: "https://oauth2.googleapis.com/token".to_string(),
+            redirect_uri: redirect_uri.to_string(),
+            scopes: vec![
+                "openid".to_string(),
+                "email".to_string(),
+                "profile".to_string(),
+            ],
+            userinfo_url: Some("https://openidconnect.googleapis.com/v1/userinfo".to_string()),
+        },
+        Arc::new(BrowserCallbackVerifier {
+            redirect_uri: redirect_uri.to_string(),
+        }),
+    )
 }
 
+struct PendingLogin {
+    expires: std::time::Instant,
+    verifier: String,
+    redirect_uri: String,
+}
+fn pending_logins() -> &'static std::sync::Mutex<std::collections::HashMap<String, PendingLogin>> {
+    static PENDING: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, PendingLogin>>,
+    > = std::sync::OnceLock::new();
+    PENDING.get_or_init(Default::default)
+}
+struct BrowserCallbackVerifier {
+    redirect_uri: String,
+}
+#[async_trait::async_trait]
+impl dog_auth_oauth::OAuthCallbackVerifier<AuthDemoParams> for BrowserCallbackVerifier {
+    async fn consume(
+        &self,
+        state: &str,
+        ctx: &mut HookContext<Value, AuthDemoParams>,
+    ) -> anyhow::Result<String> {
+        let cookies = ctx
+            .params
+            .headers
+            .get("cookie")
+            .map(String::as_str)
+            .unwrap_or("");
+        let cookie = cookies
+            .split(';')
+            .filter_map(|s| s.trim().split_once('='))
+            .find(|(name, _)| *name == "dogrs_oauth_state")
+            .map(|(_, value)| value);
+        if cookie != Some(state) {
+            return Err(
+                dog_core::DogError::not_authenticated("OAuth browser state mismatch").into_anyhow(),
+            );
+        }
+        let mut pending = pending_logins()
+            .lock()
+            .map_err(|_| anyhow::anyhow!("OAuth state lock failed"))?;
+        let login = pending.remove(state).ok_or_else(|| {
+            dog_core::DogError::not_authenticated("Unknown or consumed OAuth state").into_anyhow()
+        })?;
+        if login.expires <= std::time::Instant::now() || login.redirect_uri != self.redirect_uri {
+            return Err(
+                dog_core::DogError::not_authenticated("Expired or mismatched OAuth state")
+                    .into_anyhow(),
+            );
+        }
+        Ok(login.verifier)
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct Login {
+    pub location: String,
+    pub state: String,
+    pub secure_cookie: bool,
+}
+/// Demo-only bounded state store. Multi-instance deployments need shared session storage.
 pub fn authorize_url_for_redirect(
     config: &dog_core::DogConfigSnapshot,
     redirect_uri: &str,
-) -> anyhow::Result<String> {
-    Ok(google_provider_with_redirect(config, "google", redirect_uri)?.authorize_url())
+) -> anyhow::Result<Login> {
+    let authorization =
+        google_provider_with_redirect(config, "google", redirect_uri)?.authorize_url();
+    let mut pending = pending_logins()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("OAuth state lock failed"))?;
+    let now = std::time::Instant::now();
+    pending.retain(|_, login| login.expires > now);
+    if pending.len() >= 1024 {
+        return Err(anyhow::anyhow!("Too many pending OAuth logins"));
+    }
+    pending.insert(
+        authorization.state.clone(),
+        PendingLogin {
+            expires: now + std::time::Duration::from_secs(600),
+            verifier: authorization.code_verifier,
+            redirect_uri: redirect_uri.to_string(),
+        },
+    );
+    Ok(Login {
+        location: authorization.url,
+        state: authorization.state,
+        secure_cookie: redirect_uri.starts_with("https://"),
+    })
 }
 
 struct GoogleEntityResolver;
@@ -99,7 +186,7 @@ impl OAuthEntityResolver<AuthDemoParams> for GoogleEntityResolver {
 pub fn register_google_oauth(
     builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>,
     auth: &mut dog_auth::core::AuthenticationBuilder<AuthDemoParams>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<()> {
     let config = builder.config_snapshot();
     let redirect_uri = config
         .get_string("oauth.google.redirect_uri")
@@ -110,7 +197,6 @@ pub fn register_google_oauth(
         "google",
         &redirect_uri,
     )?);
-    let authorize_url = provider.authorize_url();
 
     let redirect_service = if redirect_uri.ends_with("/oauth/google/callback") {
         format!("{redirect_uri}/service")
@@ -136,5 +222,43 @@ pub fn register_google_oauth(
 
     let strategy = OAuthStrategy::new().with_options(opts);
     auth.register("oauth", Arc::new(strategy));
-    Ok(authorize_url)
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dog_auth_oauth::OAuthCallbackVerifier;
+    #[tokio::test]
+    async fn callback_state_is_bound_to_browser_and_consumed_once() {
+        let state = uuid::Uuid::new_v4().to_string();
+        pending_logins().lock().unwrap().insert(
+            state.clone(),
+            PendingLogin {
+                expires: std::time::Instant::now() + std::time::Duration::from_secs(60),
+                verifier: "test-verifier".into(),
+                redirect_uri: "https://example.invalid/callback".into(),
+            },
+        );
+        let app = dog_core::DogAppBuilder::<Value, AuthDemoParams>::new().build();
+        let mut ctx = HookContext::new(
+            dog_core::TenantContext::new("test"),
+            dog_core::ServiceMethodKind::Create,
+            AuthDemoParams::default(),
+            dog_core::ServiceCaller::new(app.clone()),
+            app.config_snapshot(),
+        );
+        let guard = BrowserCallbackVerifier {
+            redirect_uri: "https://example.invalid/callback".into(),
+        };
+        assert!(guard.consume(&state, &mut ctx).await.is_err());
+        ctx.params
+            .headers
+            .insert("cookie".into(), format!("dogrs_oauth_state={state}"));
+        assert_eq!(
+            guard.consume(&state, &mut ctx).await.unwrap(),
+            "test-verifier"
+        );
+        assert!(guard.consume(&state, &mut ctx).await.is_err());
+    }
 }

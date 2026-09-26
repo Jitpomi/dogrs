@@ -9,19 +9,15 @@ pub use types::MusicParams;
 pub mod adapters;
 pub mod music;
 
-pub struct MusicServices {
-    pub music: Arc<dyn DogService<serde_json::Value, MusicParams>>,
-}
-
 pub fn configure(
     app: &mut dog_core::DogAppBuilder<serde_json::Value, MusicParams>,
     state: Arc<RustFsState>,
-) -> anyhow::Result<MusicServices> {
+) -> anyhow::Result<()> {
     let music: Arc<dyn DogService<serde_json::Value, MusicParams>> =
         Arc::new(music::MusicService::new(Arc::clone(&state)));
     app.register_service("music", Arc::clone(&music));
 
     music::music_shared::register_hooks(app, state)?;
 
-    Ok(MusicServices { music })
+    Ok(())
 }

@@ -154,7 +154,7 @@ dog-core works with these adapters:
 See the `dog-examples/` directory for complete applications:
 
 - **music-blobs** - Media streaming service
-- **blog-axum** - REST API with CRUD operations  
+- **blog** - REST API with CRUD operations  
 - **social-typedb** - Social network with TypeDB
 - **fleet-queue** - Fleet management with background jobs
 

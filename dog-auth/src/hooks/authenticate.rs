@@ -25,14 +25,17 @@ pub trait AuthenticateHookParams: Clone + Send + Sync {
     fn set_auth_result(&mut self, v: AuthenticationResult);
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct AuthParams<P> {
     pub inner: P,
     pub provider: Option<String>,
     pub headers: HashMap<String, String>,
     pub authentication: Option<AuthenticationRequest>,
+    #[serde(skip_deserializing, default)]
     pub authenticated: bool,
+    #[serde(skip_deserializing, default)]
     pub auth_result: Option<AuthenticationResult>,
+    #[serde(skip)]
     pub connection: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 

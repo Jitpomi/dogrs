@@ -1,4 +1,28 @@
+pub mod broker;
+#[cfg(any(feature = "postgres", feature = "redis", feature = "nats-async"))]
+pub mod durable;
 pub mod memory;
+
+#[cfg(feature = "redis")]
+pub mod redis;
+
+#[cfg(feature = "postgres")]
+pub mod postgres;
+
+#[cfg(feature = "rabbitmq-lapin")]
+pub mod rabbitmq;
+
+#[cfg(any(feature = "kafka-rdkafka", feature = "kafka-rskafka"))]
+pub mod kafka;
+
+#[cfg(feature = "aws-sqs")]
+pub mod aws_sqs;
+
+#[cfg(feature = "gcp-pubsub")]
+pub mod gcp_pubsub;
+
+#[cfg(feature = "nats-async")]
+pub mod nats;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -109,8 +133,8 @@ pub trait QueueBackend: Send + Sync {
     ///
     /// Backends that manage lease expiry internally (e.g. [`MemoryBackend`]) should
     /// override this.  The default is a no-op (`Ok(vec![])`) for backends that rely on an
-    /// external TTL mechanism (Redis `EXPIRE`, Postgres `pg_cron`) which handles
-    /// reclamation outside the Rust process.
+    /// external lease mechanism. The PostgreSQL, Redis and JetStream ledgers
+    /// implement this method directly and require a running reaper.
     ///
     /// Called periodically by `QueueAdapter::start_workers` at `lease_duration / 2`
     /// intervals.  Returns one [`ReapOutcome`] per reclaimed lease — the adapter uses

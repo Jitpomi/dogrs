@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "fleet-queue"
 version = "0.1.0"
 edition = "2021"
@@ -10,12 +11,14 @@ anyhow = "1.0"
 tokio = { version = "1.52", features = ["full"] }
 tower-http = { version = "0.6.11", features = ["cors", "fs"] }
 async-trait = "0.1"
-typedb-driver = "3.11.5"
+typedb-driver = "=3.13.6"
 dotenvy = "0.15"
 reqwest = { version = "0.13", features = ["json"] }
 chrono = { version = "0.4", features = ["serde"] }
 urlencoding = "2.1"
-dog-axum = { path = "../../dog-axum" }
+dog-transport = { path = "../../dog-transport", features = ["http"] }
+axum = { version = "0.8.9", features = ["macros", "json"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 dog-core = { path = "../../dog-core" }
 dog-typedb = { path = "../../dog-typedb" }
 dog-queue = { path = "../../dog-queue" }

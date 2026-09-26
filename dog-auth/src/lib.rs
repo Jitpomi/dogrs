@@ -1,4 +1,4 @@
-// Empty authentication crate - ready for implementation
+//! Authentication strategies and hooks for DogRS.
 
 pub mod core;
 pub mod hooks;

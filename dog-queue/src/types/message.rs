@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::JobPriority;
 
 /// Job message - immutable submission data
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JobMessage {
     /// Job type identifier for dispatch
     pub job_type: String,

@@ -242,7 +242,7 @@ dog-schema integrates with the DogRS ecosystem:
 
 See `dog-examples/` for complete applications using schema validation:
 
-- **blog-axum** - REST API with request/response validation
+- **blog** - REST API with request/response validation
 
 ## License
 

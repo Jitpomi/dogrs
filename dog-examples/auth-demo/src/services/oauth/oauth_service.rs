@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use dog_core::tenant::TenantContext;
 use dog_core::{DogService, ServiceCapabilities};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 use std::sync::Arc;
 
 use crate::services::AuthDemoParams;
@@ -39,12 +39,15 @@ impl DogService<Value, AuthDemoParams> for OauthService {
                     .app
                     .get()
                     .ok_or_else(|| anyhow::anyhow!("DogApp not setup"))?;
-                let url = app
-                    .get::<String>("oauth.google.authorize_url")
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("Missing oauth.google.authorize_url in app config")
-                    })?;
-                Ok(json!({ "location": url }))
+                let config = app.config_snapshot();
+                let redirect = config
+                    .get_string("oauth.google.redirect_uri")
+                    .ok_or_else(|| anyhow::anyhow!("Missing Google redirect URI"))?;
+                Ok(serde_json::to_value(
+                    crate::auth::oauth2::google::providers::authorize_url_for_redirect(
+                        &config, &redirect,
+                    )?,
+                )?)
             }
             "google_callback" => {
                 let app = self
@@ -89,6 +92,9 @@ impl DogService<Value, AuthDemoParams> for OauthService {
                 let mut payload: Map<String, Value> = Map::new();
                 payload.insert("provider".to_string(), Value::String(provider.to_string()));
                 payload.insert("code".to_string(), Value::String(code.to_string()));
+                if let Some(state) = data.as_ref().and_then(|v| v.get("state")) {
+                    payload.insert("state".into(), state.clone());
+                }
 
                 let res = OAuthService::new(auth)
                     .authenticate_callback("oauth", payload, &auth_params, &mut hook_ctx, None)
