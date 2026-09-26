@@ -99,6 +99,9 @@ async fn history_and_reuse(a: Arc<dyn QueueBackend>, b: Arc<dyn QueueBackend>) {
         dog_queue::JobPriority::Normal,
     ] {
         order.push(a.enqueue(ctx.clone(), make(priority)).await.unwrap());
+        // Redis transition timestamps have millisecond resolution; equal-time
+        // records use the job ID tie-breaker rather than insertion order.
+        tokio::time::sleep(Duration::from_millis(2)).await;
     }
     for position in [2, 1, 3, 0] {
         let job = a.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
