@@ -285,6 +285,14 @@ impl NatsStore {
         }
     }
     async fn cas(&self, key: &str, value: Vec<u8>, revision: u64) -> QueueResult<bool> {
+        Ok(self.cas_revision(key, value, revision).await?.is_some())
+    }
+    async fn cas_revision(
+        &self,
+        key: &str,
+        value: Vec<u8>,
+        revision: u64,
+    ) -> QueueResult<Option<u64>> {
         match self
             .bucket
             .update(key, value.clone().into(), revision)
@@ -294,13 +302,13 @@ impl NatsStore {
                 self.index()
                     .await?
                     .observe(key.into(), revision, value, false);
-                Ok(true)
+                Ok(Some(revision))
             }
             Err(err)
                 if err.kind() == kv::UpdateErrorKind::WrongLastRevision
                     || revision_conflict(&err) =>
             {
-                Ok(false)
+                Ok(None)
             }
             Err(err) => Err(error(err)),
         }
@@ -311,24 +319,31 @@ impl NatsStore {
                 return Ok(());
             }
             let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
-            if row.record.status.is_terminal() {
-                self.archive(tenant, &row).await?;
-                // Deleting only this revision cannot remove a concurrent replacement.
-                if let Err(err) = self
+            self.retire_revision(tenant, key, &row, entry.revision)
+                .await?;
+        }
+        Ok(())
+    }
+    async fn retire_revision(
+        &self,
+        tenant: &str,
+        key: &str,
+        row: &StoredRecord,
+        revision: u64,
+    ) -> QueueResult<()> {
+        if row.record.status.is_terminal() {
+            self.archive(tenant, row).await?;
+            // Archive the acknowledged terminal revision before deleting it.
+            // A concurrent replacement is protected by the expected revision.
+            if let Err(err) = self.bucket.purge_expect_revision(key, Some(revision)).await {
+                if self
                     .bucket
-                    .purge_expect_revision(key, Some(entry.revision))
+                    .entry(key)
                     .await
+                    .map_err(error)?
+                    .is_some_and(|e| e.revision == revision)
                 {
-                    // A replacement is benign; outages and other errors remain visible.
-                    if self
-                        .bucket
-                        .entry(key)
-                        .await
-                        .map_err(error)?
-                        .is_some_and(|e| e.revision == entry.revision)
-                    {
-                        return Err(error(err));
-                    }
+                    return Err(error(err));
                 }
             }
         }
@@ -371,6 +386,13 @@ impl NatsStore {
                 .create(payload(tenant, &id), message.payload_bytes.clone().into())
                 .await
                 .map_err(error)?;
+            // Optimistically create a new scope with revision zero, avoiding a
+            // leader read on the common first enqueue. Existing scopes (including
+            // tombstones) conflict and use the dedupe/reuse path below. Only an
+            // acknowledged CAS makes the persisted payload discoverable.
+            if self.cas(&key, value.clone(), 0).await? {
+                return Ok(Outcome::Id(id));
+            }
             for _ in 0..64 {
                 let previous = self.bucket.entry(&key).await.map_err(error)?;
                 let revision = previous.as_ref().map(|e| e.revision).unwrap_or(0);
@@ -583,8 +605,8 @@ impl NatsStore {
                 _ => {}
             }
             let row = &state.jobs[&id];
-            if self
-                .cas(
+            if let Some(revision) = self
+                .cas_revision(
                     &key,
                     serde_json::to_vec(row).map_err(error)?,
                     entry.revision,
@@ -592,7 +614,7 @@ impl NatsStore {
                 .await?
             {
                 if row.record.status.is_terminal() {
-                    self.retire(tenant, &key).await?;
+                    self.retire_revision(tenant, &key, row, revision).await?;
                 }
                 if let Outcome::Lease(Some(job)) = &mut outcome {
                     job.record.message.payload_bytes = self.bytes(tenant, &id).await?;
@@ -720,7 +742,50 @@ mod tests {
         }
         // An acknowledged completed record remains available through history.
         assert!(backend
-            .get_record(ctx, first)
+            .get_record(ctx.clone(), first)
+            .await
+            .unwrap()
+            .status
+            .is_terminal());
+        // Retiring an acknowledged terminal revision must not delete a newer
+        // job that reused the same idempotency slot while archival was delayed.
+        let reusable = message().with_idempotency_key("retirement-race");
+        let old = backend
+            .enqueue(ctx.clone(), reusable.clone())
+            .await
+            .unwrap();
+        let lease = backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+        assert_eq!(lease.record.job_id, old);
+        let (key, entry) = backend.store.read("hint-race", &old).await.unwrap();
+        let mut state = TenantState::default();
+        state
+            .jobs
+            .insert(old.clone(), serde_json::from_slice(&entry.value).unwrap());
+        state
+            .apply_at(
+                "hint-race",
+                &Operation::Complete(old.clone(), lease.lease_token, None),
+                Utc::now(),
+            )
+            .unwrap();
+        let terminal = &state.jobs[&old];
+        let revision = backend
+            .store
+            .cas_revision(&key, serde_json::to_vec(terminal).unwrap(), entry.revision)
+            .await
+            .unwrap()
+            .unwrap();
+        let replacement = backend.enqueue(ctx.clone(), reusable).await.unwrap();
+        assert_ne!(old, replacement);
+        backend
+            .store
+            .retire_revision("hint-race", &key, terminal, revision)
+            .await
+            .unwrap();
+        let next = backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+        assert_eq!(next.record.job_id, replacement);
+        assert!(backend
+            .get_record(ctx, old)
             .await
             .unwrap()
             .status
