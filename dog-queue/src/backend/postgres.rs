@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::{sync::Arc, time::Duration};
 use tokio_postgres::{types::Type, Client, NoTls, Transaction};
+#[path = "postgres_completions.rs"]
+mod completions;
 
 #[derive(Clone)]
 pub struct PostgresConfig {
@@ -19,6 +21,9 @@ pub struct PostgresOptions {
     /// one connection when possible) for worker operations. An explicit cap may
     /// use the full pool for producer-only deployments.
     pub enqueue_concurrency: Option<u32>,
+    /// Maximum acknowledgments coalesced into one durable SQL statement (1..=64).
+    /// Set to 1 for independent commits without cross-job row-lock coupling.
+    pub completion_batch_size: usize,
     /// Explicit offline v1 -> v2 migration. Stop every old worker/API first.
     pub migrate_legacy: bool,
 }
@@ -28,6 +33,7 @@ impl Default for PostgresOptions {
             max_connections: 4,
             operation_timeout: Duration::from_secs(10),
             enqueue_concurrency: None,
+            completion_batch_size: 64,
             migrate_legacy: false,
         }
     }
@@ -57,6 +63,7 @@ pub struct PostgresStore {
     pool: bb8::Pool<Manager>,
     timeout: Duration,
     enqueue_slots: tokio::sync::Semaphore,
+    completions: Option<completions::Completions>,
 }
 pub type PostgresBackend = DurableBackend<PostgresStore>;
 fn error(e: impl std::fmt::Display + 'static) -> QueueError {
@@ -104,12 +111,13 @@ impl PostgresBackend {
     {
         if options.max_connections == 0
             || options.operation_timeout.is_zero()
+            || !(1..=64).contains(&options.completion_batch_size)
             || options
                 .enqueue_concurrency
                 .is_some_and(|n| n == 0 || n > options.max_connections)
         {
             return Err(QueueError::InvalidConfig(
-                "positive pool size and timeout required; enqueue concurrency must be within pool size".into(),
+                "positive pool size and timeout required; enqueue concurrency must be within pool size; completion batch size must be 1..=64".into(),
             ));
         }
         let statement_timeout = options
@@ -147,8 +155,17 @@ impl PostgresBackend {
             .build(Manager(connect))
             .await
             .map_err(error)?;
+        let completions = (options.completion_batch_size > 1).then(|| {
+            completions::Completions::start(
+                pool.clone(),
+                ((options.max_connections as usize) / 4).clamp(1, 4),
+                options.completion_batch_size,
+                options.operation_timeout,
+            )
+        });
         let store = PostgresStore {
             pool,
+            completions,
             timeout: options.operation_timeout,
             enqueue_slots: tokio::sync::Semaphore::new(options.enqueue_concurrency.unwrap_or_else(
                 || {
@@ -245,6 +262,17 @@ impl PostgresStore {
         tx.commit().await.map_err(error)
     }
     async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        if let Operation::Complete(id, token, result) = op {
+            if serde_json::to_vec(result).map_err(error)?.len() > 4096 {
+                return Err(QueueError::InvalidConfig(
+                    "Persisted result must fit in 4 KiB; store large results by reference".into(),
+                ));
+            }
+            if let Some(completions) = &self.completions {
+                completions.submit(tenant, id, token, result).await?;
+                return Ok(Outcome::Done);
+            }
+        }
         // Bound producers before they enter the shared pool queue. A burst of
         // admissions must not strand already leased jobs behind thousands of
         // waiting INSERTs; worker claims/acks retain connection capacity.
@@ -319,11 +347,6 @@ impl PostgresStore {
             ))));
         }
         if let Operation::Complete(id, token, result) = op {
-            if serde_json::to_vec(result).map_err(error)?.len() > 4096 {
-                return Err(QueueError::InvalidConfig(
-                    "Persisted result must fit in 4 KiB; store large results by reference".into(),
-                ));
-            }
             let row = client
                 .query_typed_one(
                     include_str!("postgres_complete.sql"),

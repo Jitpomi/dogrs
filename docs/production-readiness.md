@@ -221,3 +221,23 @@ claim attempts lose compare-and-swap races. It returns an empty poll, with no
 lease acquired. A 64-worker / 512-job live regression reproduced the error before
 the fix and passed afterward with each job completed once. Other operation
 errors are unchanged.
+
+
+### Completion-path throughput fixes
+
+PostgreSQL now coalesces concurrent completions into bounded SQL batches with
+independent tenant/token/lease validation and commit-gated responses. Duplicate
+requests cannot both succeed. The configurable batch size may be set to one for
+independent commits. Live regressions cover mixed valid/invalid/duplicate requests
+and the unbatched path. Redis returns claim payloads with the successful atomic
+CAS response. JetStream completion can use observed metadata only when an exact
+server revision CAS succeeds; stale metadata falls back to an authoritative read.
+
+A local 30-second PostgreSQL run passed all 30,000 incompressible 64 KiB jobs at
+100 tenants / 1,000 jobs/sec in 32.09 seconds. Its 60-second extension still failed
+(50,511 admitted, 38,447 completed of 60,000; 9,489 drops, no operation errors).
+A WAL checkpoint began around 40 seconds. This remains a failed capacity gate.
+Before the latest Redis/NATS request reductions, Redis passed its Linux 60-second
+run (60,000/60,000 in 60.063 seconds); replicated NATS failed its 60-second run
+(31,900 admitted, 21,400 completed; 28,100 drops). Short and long results must not
+be conflated; a complete sustained production target remains unproven.

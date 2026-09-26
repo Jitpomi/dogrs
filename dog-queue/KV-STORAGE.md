@@ -127,3 +127,14 @@ fixture; JetStream uses its separate actual-leader failure test.
 640 full-size jobs. `DOGRS_NATS_IMAGE` selects the disposable server image; the
 compatibility fixture defaults to NATS 2.11, while the capacity workflow pins
 2.15.0 with three replicas and disk synchronization enabled.
+
+
+Redis successful claims return the binary payload from the same atomic CAS script
+response; losing claims return no payload. This removes a separate payload GET
+without changing ownership checks or the stored format.
+
+JetStream completion may apply its transition to cached metadata, but success
+still requires CAS of that exact server revision. A stale validation result or a
+revision conflict falls back to an authoritative read, preserving remote
+cancellation and heartbeat behavior. Claims and explicit reads continue to read
+the server. This is an optional-backend optimization, not a portable API change.

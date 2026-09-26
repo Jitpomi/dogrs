@@ -481,3 +481,145 @@ async fn blocked_producers_do_not_starve_completion_on_default_pool() {
     assert!(backend.get_status(ctx, work).await.unwrap().is_terminal());
     driver.abort();
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn concurrent_completions_isolate_invalid_tokens_and_duplicate_requests() {
+    let backend = Arc::new(backend().await);
+    let ctx = QueueCtx::new(format!("completion-batch-{}", uuid::Uuid::new_v4()));
+    let mut leases = Vec::new();
+    for _ in 0..96 {
+        backend
+            .enqueue(
+                ctx.clone(),
+                JobMessage::new("batch", vec![7; 65536], "bytes", "q"),
+            )
+            .await
+            .unwrap();
+        leases.push(backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap());
+    }
+    let barrier = Arc::new(tokio::sync::Barrier::new(128));
+    let mut tasks = tokio::task::JoinSet::new();
+    for (n, job) in leases.iter().enumerate() {
+        let copies = if n % 3 == 0 { 2 } else { 1 };
+        for _ in 0..copies {
+            let (backend, ctx, barrier, job) =
+                (backend.clone(), ctx.clone(), barrier.clone(), job.clone());
+            tasks.spawn(async move {
+                barrier.wait().await;
+                let token = if n % 3 == 1 {
+                    LeaseToken::new()
+                } else {
+                    job.lease_token
+                };
+                (
+                    n,
+                    backend
+                        .ack_complete(ctx, job.record.job_id, token, Some(n.to_string()))
+                        .await,
+                )
+            });
+        }
+    }
+    let mut successes = vec![0; 96];
+    while let Some(result) = tasks.join_next().await {
+        let (n, outcome) = result.unwrap();
+        match outcome {
+            Ok(()) => successes[n] += 1,
+            Err(dog_queue::QueueError::JobAlreadyTerminal) => assert_eq!(n % 3, 0),
+            Err(dog_queue::QueueError::InvalidLeaseToken { .. }) => assert_eq!(n % 3, 1),
+            Err(e) => panic!("unexpected completion result: {e}"),
+        }
+    }
+    for (n, job) in leases.iter().enumerate() {
+        let row = backend
+            .get_record(ctx.clone(), job.record.job_id.clone())
+            .await
+            .unwrap();
+        assert_eq!(row.message.payload_bytes, vec![7; 65536]);
+        if n % 3 == 1 {
+            assert_eq!(successes[n], 0);
+            assert!(row.status.is_processing());
+            assert_eq!(row.result, None);
+        } else {
+            assert_eq!(successes[n], 1);
+            assert!(matches!(row.status, JobStatus::Completed { .. }));
+            assert_eq!(row.result, Some(n.to_string()));
+        }
+    }
+}
+
+#[tokio::test]
+async fn completion_batch_size_must_be_bounded() {
+    for completion_batch_size in [0, 65] {
+        let result = PostgresBackend::new_with_tls_options(
+            PostgresConfig {
+                connection_string: "host=127.0.0.1 port=1".into(),
+            },
+            tokio_postgres::NoTls,
+            PostgresOptions {
+                completion_batch_size,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(dog_queue::QueueError::InvalidConfig(_))
+        ));
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn independent_completion_mode_preserves_tokens_and_results() {
+    let backend = PostgresBackend::new_with_tls_options(
+        PostgresConfig {
+            connection_string: std::env::var("DOGRS_POSTGRES_URL").unwrap(),
+        },
+        tokio_postgres::NoTls,
+        PostgresOptions {
+            completion_batch_size: 1,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let ctx = QueueCtx::new(format!("completion-direct-{}", uuid::Uuid::new_v4()));
+    let id = backend
+        .enqueue(
+            ctx.clone(),
+            JobMessage::new("direct", vec![1], "bytes", "q"),
+        )
+        .await
+        .unwrap();
+    let job = backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+    assert!(matches!(
+        backend
+            .ack_complete(ctx.clone(), id.clone(), LeaseToken::new(), None)
+            .await,
+        Err(dog_queue::QueueError::InvalidLeaseToken { .. })
+    ));
+    backend
+        .ack_complete(
+            ctx.clone(),
+            id.clone(),
+            job.lease_token.clone(),
+            Some("committed".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        backend
+            .get_record(ctx.clone(), id.clone())
+            .await
+            .unwrap()
+            .result
+            .as_deref(),
+        Some("committed")
+    );
+    assert!(matches!(
+        backend.ack_complete(ctx, id, job.lease_token, None).await,
+        Err(dog_queue::QueueError::JobAlreadyTerminal)
+    ));
+}

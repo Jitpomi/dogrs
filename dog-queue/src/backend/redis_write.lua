@@ -3,10 +3,10 @@ local t=redis.call('TIME')
 local now=t[1]*1000+math.floor(t[2]/1000)
 if ARGV[3]=='enqueue' and ARGV[5]~='' then
   local existing=redis.call('HGET',KEYS[7],ARGV[5])
-  if existing then return existing end
+  if existing then return {existing,false} end
 end
-if (redis.call('HGET',KEYS[1],ARGV[1]) or '')~=ARGV[2] then return '' end
-if tonumber(ARGV[6])>0 and tonumber(ARGV[6])<=now then return '' end
+if (redis.call('HGET',KEYS[1],ARGV[1]) or '')~=ARGV[2] then return {'',false} end
+if tonumber(ARGV[6])>0 and tonumber(ARGV[6])<=now then return {'',false} end
 local row=cjson.decode(ARGV[4])
 redis.call('HSET',KEYS[1],ARGV[1],ARGV[4])
 if ARGV[3]=='enqueue' then redis.call('HSET',KEYS[2],ARGV[1],ARGV[7]) end
@@ -26,4 +26,9 @@ if ARGV[5]~='' then
     if redis.call('HGET',KEYS[7],ARGV[5])==ARGV[1] then redis.call('HDEL',KEYS[7],ARGV[5]) end
   else redis.call('HSET',KEYS[7],ARGV[5],ARGV[1]) end
 end
-return ARGV[1]
+-- A successful claim can return its immutable payload in the same response.
+-- The CAS and the read are atomic; a losing claimant receives no payload.
+if ARGV[11]=='payload' then
+  return {ARGV[1],redis.call('HGET',KEYS[2],ARGV[1]) or false}
+end
+return {ARGV[1],false}

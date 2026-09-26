@@ -143,7 +143,8 @@ impl RedisStore {
         enqueue: bool,
         lease: i64,
         payload: &[u8],
-    ) -> QueueResult<String> {
+        return_payload: bool,
+    ) -> QueueResult<(String, Option<Vec<u8>>)> {
         let p = prefix(tenant);
         let r = &stored.record;
         // Do not build a JSON number array for the binary payload only to discard
@@ -185,6 +186,7 @@ impl RedisStore {
             .arg(kind)
             .arg(r.lease_until().map(|d| d.timestamp_millis()).unwrap_or(0))
             .arg(r.updated_at.timestamp_millis())
+            .arg(if return_payload { "payload" } else { "" })
             .invoke_async(&mut self.manager.clone())
             .await
             .map_err(error)
@@ -288,6 +290,7 @@ impl RedisStore {
                 _ => None,
             };
             let mut conflict = false;
+            let mut claimed_payload = None;
             let mut committed = std::collections::HashSet::new();
             for (id, row) in &state.jobs {
                 if selected.as_ref().is_some_and(|selected| selected != id) {
@@ -318,14 +321,18 @@ impl RedisStore {
                         matches!(op, Operation::Enqueue(_)),
                         lease,
                         payload,
+                        selected.is_some(),
                     )
                     .await?;
-                if changed.is_empty() {
+                if changed.0.is_empty() {
                     conflict = true;
                     break;
                 }
                 if matches!(op, Operation::Enqueue(_)) {
-                    return Ok(Outcome::Id(changed.into()));
+                    return Ok(Outcome::Id(changed.0.into()));
+                }
+                if selected.is_some() {
+                    claimed_payload = changed.1;
                 }
                 committed.insert(id.clone());
             }
@@ -337,7 +344,9 @@ impl RedisStore {
                 continue;
             }
             if let Outcome::Lease(Some(job)) = &mut outcome {
-                job.record.message.payload_bytes = self.payload(tenant, &job.record.job_id).await?;
+                job.record.message.payload_bytes = claimed_payload.ok_or_else(|| {
+                    error("Redis job payload missing; storage was evicted or lost")
+                })?;
             }
             if matches!(op, Operation::Reap) {
                 return Ok(Outcome::Reaped(reaped));

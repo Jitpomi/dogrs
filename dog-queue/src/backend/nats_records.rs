@@ -693,6 +693,38 @@ impl NatsStore {
             }
             return Ok(Outcome::Reaped(outcomes));
         }
+        if let Operation::Complete(id, ..) = op {
+            let key = cell(tenant, slot(id)?);
+            let cached = index.tenant(tenant).and_then(|entries| {
+                entries.get(&key).and_then(|entry| {
+                    let (revision, row) = entry.value();
+                    row.as_ref()
+                        .ok()
+                        .filter(|row| row.record.job_id == *id)
+                        .map(|row| (*revision, row.clone()))
+                })
+            });
+            if let Some((revision, row)) = cached {
+                let mut state = TenantState::default();
+                state.jobs.insert(id.clone(), row);
+                // The cache grants no authority. A valid transition must still
+                // CAS the exact server revision. Stale errors (for example a
+                // remotely extended lease) and CAS conflicts fall through to
+                // the authoritative read below instead of escaping to callers.
+                if let Ok(Outcome::Done) = state.apply_at(tenant, op, Utc::now()) {
+                    if self
+                        .cas(
+                            &key,
+                            serde_json::to_vec(&state.jobs[id]).map_err(error)?,
+                            revision,
+                        )
+                        .await?
+                    {
+                        return Ok(Outcome::Done);
+                    }
+                }
+            }
+        }
         let mut skipped_hints = std::collections::HashSet::new();
         let discovery_deadline = tokio::time::Instant::now() + Duration::from_millis(50);
         for _ in 0..64 {
@@ -1127,6 +1159,82 @@ mod tests {
                 .len(),
             2
         );
+        let js = async_nats::jetstream::new(async_nats::connect(url).await.unwrap());
+        js.delete_key_value(name).await.unwrap();
+    }
+    #[tokio::test]
+    #[ignore = "requires disposable JetStream"]
+    async fn cached_completion_rechecks_remote_cancel_and_extended_lease() {
+        use crate::{
+            backend::nats::{NatsBackend, NatsConfig},
+            JobMessage, QueueBackend, QueueCtx,
+        };
+        let url = std::env::var("DOGRS_NATS_URL").unwrap();
+        let name = format!("cached_complete_{}", uuid::Uuid::new_v4().simple());
+        let config = NatsConfig {
+            url: url.clone(),
+            subject: name.clone(),
+        };
+        let backend = NatsBackend::new(config.clone())
+            .await
+            .unwrap()
+            .with_lease_duration(Duration::from_secs(1));
+        let remote = NatsBackend::new(config).await.unwrap();
+        let ctx = QueueCtx::new("cached-completion");
+        let index = backend.store.index().await.unwrap();
+        if let Some(task) = index.task.lock().unwrap().take() {
+            task.abort();
+        }
+        let id = backend
+            .enqueue(
+                ctx.clone(),
+                JobMessage::new("cancel", vec![7], "bytes", "q"),
+            )
+            .await
+            .unwrap();
+        let job = backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+        assert!(remote.cancel(ctx.clone(), id.clone()).await.unwrap());
+        assert!(matches!(
+            backend
+                .ack_complete(ctx.clone(), id.clone(), job.lease_token, None)
+                .await,
+            Err(QueueError::JobCanceled)
+        ));
+        assert!(matches!(
+            remote.get_record(ctx.clone(), id).await.unwrap().status,
+            crate::JobStatus::Canceled { .. }
+        ));
+        let id = backend
+            .enqueue(
+                ctx.clone(),
+                JobMessage::new("extended", vec![8; 65536], "bytes", "q"),
+            )
+            .await
+            .unwrap();
+        let job = backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+        remote
+            .heartbeat_extend(
+                ctx.clone(),
+                id.clone(),
+                job.lease_token.clone(),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        backend
+            .ack_complete(
+                ctx.clone(),
+                id.clone(),
+                job.lease_token,
+                Some("fresh lease".into()),
+            )
+            .await
+            .unwrap();
+        let row = remote.get_record(ctx.clone(), id).await.unwrap();
+        assert!(matches!(row.status, crate::JobStatus::Completed { .. }));
+        assert_eq!(row.result.as_deref(), Some("fresh lease"));
+        assert_eq!(row.message.payload_bytes, vec![8; 65536]);
         let js = async_nats::jetstream::new(async_nats::connect(url).await.unwrap());
         js.delete_key_value(name).await.unwrap();
     }

@@ -71,3 +71,18 @@ A 64-connection pool therefore admits at most 48 concurrent submissions. Explici
 limits from 1 through `max_connections` override this policy; using the full pool
 is appropriate for a producer-only backend. Tune explicit limits against measured
 latency. A small cap on a high-latency connection can reduce throughput.
+
+
+Concurrent completions are coalesced into bounded SQL batches (at most 64 requests,
+256 waiting requests, and at most four executing statements per backend). There
+is no collection timer on a quiet queue. Each request independently checks its
+tenant, token, status and lease after row locking; responses are sent only after
+the statement commits. Duplicate requests for the same tenant/job are placed in
+separate statements so they cannot both succeed from one pre-update snapshot.
+Invalid leases do not roll back valid requests in the same batch. Only explicitly
+aborted deadlock/serialization failures may be retried; network failures retain
+unknown-commit semantics.
+
+`PostgresOptions.completion_batch_size` accepts 1 through 64 and defaults to 64.
+Set it to 1 to use independent commits, avoiding cross-job row-lock waiting within
+a batch. Batching is a throughput/latency choice, not a change to durability.
