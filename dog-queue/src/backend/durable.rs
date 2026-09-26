@@ -14,7 +14,7 @@ use std::{collections::HashMap, time::Duration};
 pub(crate) struct TenantState {
     pub(crate) jobs: HashMap<JobId, StoredRecord>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct StoredRecord {
     pub(crate) record: JobRecord,
     pub(crate) token: Option<LeaseToken>,

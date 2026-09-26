@@ -60,7 +60,7 @@ fn slot(id: &JobId) -> QueueResult<&str> {
     Ok(part)
 }
 pub(super) struct Index {
-    entries: dashmap::DashMap<String, (u64, Vec<u8>)>,
+    entries: dashmap::DashMap<String, (u64, Result<StoredRecord, String>)>,
     task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 impl Drop for Index {
@@ -73,19 +73,22 @@ impl Drop for Index {
 impl Index {
     fn observe(&self, key: String, revision: u64, value: Vec<u8>, deleted: bool) {
         use dashmap::mapref::entry::Entry;
+        // Decode once per observed revision, not on every poll by every worker.
+        // Keep malformed metadata as an error so it cannot silently hide jobs.
+        let parsed = || serde_json::from_slice(&value).map_err(|e| e.to_string());
         match self.entries.entry(key) {
             Entry::Occupied(mut entry) => {
                 if entry.get().0 <= revision {
                     if deleted {
-                        entry.remove();
+                        let _ = entry.remove();
                     } else {
-                        entry.insert((revision, value));
+                        let _ = entry.insert((revision, parsed()));
                     }
                 }
             }
             Entry::Vacant(entry) => {
                 if !deleted {
-                    entry.insert((revision, value));
+                    let _ = entry.insert((revision, parsed()));
                 }
             }
         }
@@ -481,14 +484,13 @@ impl NatsStore {
                     let mut candidates = Vec::new();
                     for entry in &index.entries {
                         if entry.key().starts_with(&prefix) {
-                            let row: StoredRecord =
-                                serde_json::from_slice(&entry.value().1).map_err(error)?;
+                            let row = entry.value().1.as_ref().map_err(|e| error(e.clone()))?;
                             if !skipped_hints.contains(&row.record.job_id)
                                 && queues.contains(&row.record.message.queue)
                                 && row.record.message.run_at <= now
                                 && row.record.status.is_eligible(now)
                             {
-                                candidates.push(row.record);
+                                candidates.push(row.record.clone());
                             }
                         }
                     }
@@ -588,8 +590,8 @@ impl NatsStore {
         let index = self.index().await?;
         let mut tenants = std::collections::HashSet::new();
         for entry in &index.entries {
-            let row: StoredRecord = serde_json::from_slice(&entry.value().1).map_err(error)?;
-            tenants.insert(row.record.tenant_id);
+            let row = entry.value().1.as_ref().map_err(|e| error(e.clone()))?;
+            tenants.insert(row.record.tenant_id.clone());
         }
         Ok(tenants.into_iter().collect())
     }
@@ -660,14 +662,13 @@ mod tests {
             .unwrap();
         for missing in [false, true] {
             let mut stale = original.clone();
-            let mut row: StoredRecord = serde_json::from_slice(&stale.1).unwrap();
+            let row = stale.1.as_mut().unwrap();
             if missing {
                 row.record.job_id = JobId::from(format!(
                     "{}_{}",
                     slot(&first).unwrap(),
                     uuid::Uuid::new_v4()
                 ));
-                stale.1 = serde_json::to_vec(&row).unwrap();
                 assert!(matches!(
                     backend
                         .get_record(ctx.clone(), row.record.job_id.clone())
