@@ -26,6 +26,16 @@ on:
         type: choice
         options: ['0', '1000', '3000', '5000']
         default: '0'
+      workers_per_tenant:
+        description: Worker concurrency (auto preserves the baseline)
+        type: choice
+        options: ['auto', '1', '2', '4', '8']
+        default: 'auto'
+      postgres_enqueue_concurrency:
+        description: Producer connection cap (none preserves the baseline)
+        type: choice
+        options: ['none', '16', '32', '48']
+        default: 'none'
 permissions:
   contents: read
 jobs:
@@ -40,13 +50,18 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build -p hosted-system --release --features redis,nats --locked
-      - run: python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
+      - run: |
+          if [ "$PRODUCER_CAP" != none ]; then
+            export DOGRS_PG_ENQUEUE_CONCURRENCY="$PRODUCER_CAP"
+          fi
+          python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
         env:
           BACKEND: ${{ matrix.backend }}
           DURATION_SECONDS: ${{ inputs.seconds || '10' }}
           PAYLOAD_BYTES: ${{ inputs.payload_bytes || '65536' }}
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
-          DOGRS_CAPACITY_WORKERS: ${{ matrix.backend == 'nats' && '2' || '1' }}
+          DOGRS_CAPACITY_WORKERS: ${{ inputs.workers_per_tenant && inputs.workers_per_tenant != 'auto' && inputs.workers_per_tenant || (matrix.backend == 'nats' && '2' || '1') }}
+          PRODUCER_CAP: ${{ inputs.postgres_enqueue_concurrency || 'none' }}
           DOGRS_CAPACITY_INFLIGHT: 32
           DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
