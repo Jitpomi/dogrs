@@ -51,6 +51,7 @@ impl bb8::ManageConnection for Manager {
 pub struct PostgresStore {
     pool: bb8::Pool<Manager>,
     timeout: Duration,
+    enqueue_slots: tokio::sync::Semaphore,
 }
 pub type PostgresBackend = DurableBackend<PostgresStore>;
 fn error(e: impl std::fmt::Display + 'static) -> QueueError {
@@ -139,6 +140,9 @@ impl PostgresBackend {
         let store = PostgresStore {
             pool,
             timeout: options.operation_timeout,
+            enqueue_slots: tokio::sync::Semaphore::new(
+                (options.max_connections / 4).max(1) as usize
+            ),
         };
         tokio::time::timeout(store.timeout, store.initialize(options.migrate_legacy))
             .await
@@ -226,6 +230,14 @@ impl PostgresStore {
         tx.commit().await.map_err(error)
     }
     async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        // Bound producers before they enter the shared pool queue. A burst of
+        // admissions must not strand already leased jobs behind thousands of
+        // waiting INSERTs; worker claims/acks retain connection capacity.
+        let _admission = if matches!(op, Operation::Enqueue(_)) {
+            Some(self.enqueue_slots.acquire().await.map_err(error)?)
+        } else {
+            None
+        };
         let mut client = self.pool.get().await.map_err(error)?;
         if let Operation::Enqueue(message) = op {
             let mut state = TenantState::default();
@@ -287,6 +299,34 @@ impl PostgresStore {
                 token,
                 until,
             ))));
+        }
+        if let Operation::Complete(id, token, result) = op {
+            if serde_json::to_vec(result).map_err(error)?.len() > 4096 {
+                return Err(QueueError::InvalidConfig(
+                    "Persisted result must fit in 4 KiB; store large results by reference".into(),
+                ));
+            }
+            let row = client
+                .query_typed_one(
+                    include_str!("postgres_complete.sql"),
+                    &[
+                        (&tenant, Type::TEXT),
+                        (&id.as_str(), Type::TEXT),
+                        (&token.as_str(), Type::TEXT),
+                        (result, Type::TEXT),
+                    ],
+                )
+                .await
+                .map_err(error)?;
+            return match row.get::<_, i32>(0) {
+                0 => Ok(Outcome::Done),
+                1 => Err(QueueError::JobNotFound(id.clone())),
+                2 => Err(QueueError::JobCanceled),
+                3 => Err(QueueError::JobAlreadyTerminal),
+                4 => Err(QueueError::InvalidLeaseToken { job_id: id.clone() }),
+                5 => Err(QueueError::LeaseExpired),
+                _ => Err(error("Unexpected completion outcome")),
+            };
         }
         if let Operation::Snapshots(ids) = op {
             let keys: Vec<&str> = ids.iter().map(|id| id.as_str()).collect();

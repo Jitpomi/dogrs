@@ -12,12 +12,28 @@ use async_nats::jetstream::{
 };
 use async_trait::async_trait;
 use chrono::Utc;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 
 fn error(e: impl std::fmt::Display) -> QueueError {
     QueueError::Internal(e.to_string())
+}
+// NATS 2.11 may use code 10164; async-nats 0.50 only maps 10071 to
+// WrongLastRevision. Inspect structured causes rather than matching error text.
+fn revision_conflict(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cause = Some(error);
+    while let Some(error) = cause {
+        if let Some(server) = error.downcast_ref::<async_nats::jetstream::Error>() {
+            return matches!(
+                server.error_code(),
+                async_nats::jetstream::ErrorCode::STREAM_WRONG_LAST_SEQUENCE
+                    | async_nats::jetstream::ErrorCode::STREAM_WRONG_LAST_SEQUENCE_CONSTANT
+            );
+        }
+        cause = error.source();
+    }
+    false
 }
 fn hex(s: &str) -> String {
     s.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
@@ -205,7 +221,9 @@ impl NatsStore {
     }
     async fn read(&self, tenant: &str, id: &JobId) -> QueueResult<(String, kv::Entry)> {
         let key = cell(tenant, slot(id)?);
+        let mut observed = String::from("absent");
         if let Some(entry) = self.bucket.entry(&key).await.map_err(error)? {
+            observed = format!("{:?} revision={}", entry.operation, entry.revision);
             self.index().await?.observe(
                 key.clone(),
                 entry.revision,
@@ -214,19 +232,28 @@ impl NatsStore {
             );
             if entry.operation == kv::Operation::Put {
                 let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
+                observed.push_str(&format!(
+                    " id={} status={}",
+                    row.record.job_id,
+                    row.record.status.name()
+                ));
                 if row.record.job_id == *id {
                     return Ok((key, entry));
                 }
             }
         }
         let key = history(tenant, id);
-        self.bucket
+        let entry = self
+            .bucket
             .entry(&key)
             .await
             .map_err(error)?
-            .filter(|e| e.operation == kv::Operation::Put)
-            .map(|e| (key, e))
-            .ok_or_else(|| QueueError::JobNotFound(id.clone()))
+            .filter(|e| e.operation == kv::Operation::Put);
+        if let Some(entry) = entry {
+            return Ok((key, entry));
+        }
+        tracing::warn!(tenant,job=%id,active=%observed,"JetStream job lookup missing from active and history");
+        Err(QueueError::JobNotFound(id.clone()))
     }
     async fn bytes(&self, tenant: &str, id: &JobId) -> QueueResult<Vec<u8>> {
         self.bucket
@@ -259,7 +286,12 @@ impl NatsStore {
                     .observe(key.into(), revision, value, false);
                 Ok(true)
             }
-            Err(err) if err.kind() == kv::UpdateErrorKind::WrongLastRevision => Ok(false),
+            Err(err)
+                if err.kind() == kv::UpdateErrorKind::WrongLastRevision
+                    || revision_conflict(&err) =>
+            {
+                Ok(false)
+            }
             Err(err) => Err(error(err)),
         }
     }
@@ -293,9 +325,8 @@ impl NatsStore {
         Ok(())
     }
 }
-#[async_trait]
-impl StateStore for NatsStore {
-    async fn update(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+impl NatsStore {
+    async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
         self.legacy(tenant).await?;
         let index = self.index().await?;
         if let Operation::Enqueue(message) = op {
@@ -353,12 +384,14 @@ impl StateStore for NatsStore {
             return Err(error("JetStream enqueue contention"));
         }
         if let Operation::Snapshots(ids) = op {
-            let mut result = Vec::with_capacity(ids.len());
-            for id in ids {
-                let (_, entry) = self.read(tenant, id).await?;
+            let result = futures::stream::iter(ids.clone().into_iter().map(|id| async move {
+                let (_, entry) = self.read(tenant, &id).await?;
                 let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
-                result.push(crate::JobSnapshot::from(&row.record));
-            }
+                Ok::<_, QueueError>(crate::JobSnapshot::from(&row.record))
+            }))
+            .buffered(16)
+            .try_collect::<Vec<_>>()
+            .await?;
             return Ok(Outcome::Snapshots(result));
         }
         if let Operation::Purge(before) = op {
@@ -535,5 +568,36 @@ impl StateStore for NatsStore {
             tenants.insert(row.record.tenant_id);
         }
         Ok(tenants.into_iter().collect())
+    }
+}
+
+#[async_trait]
+impl StateStore for NatsStore {
+    async fn update(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        tokio::time::timeout(Duration::from_secs(30),self.update_inner(tenant,op)).await.map_err(|_|error("JetStream queue operation timed out; commit outcome may be unknown; use idempotency keys"))?
+    }
+    async fn tenants(&self) -> QueueResult<Vec<String>> {
+        tokio::time::timeout(Duration::from_secs(30), NatsStore::tenants(self))
+            .await
+            .map_err(|_| error("JetStream tenant lookup timed out"))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn both_protocol_revision_conflicts_are_retryable_but_other_errors_are_not() {
+        for code in [10071, 10164] {
+            let server: async_nats::jetstream::Error = serde_json::from_value(
+                serde_json::json!({"code":400,"err_code":code,"description":"conflict"}),
+            )
+            .unwrap();
+            let error = kv::UpdateError::with_source(kv::UpdateErrorKind::Other, server);
+            assert!(revision_conflict(&error));
+        }
+        let server: async_nats::jetstream::Error =
+            serde_json::from_value(serde_json::json!({"code":400,"err_code":10002})).unwrap();
+        assert!(!revision_conflict(&server));
     }
 }

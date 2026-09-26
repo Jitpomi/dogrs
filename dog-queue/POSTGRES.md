@@ -59,3 +59,10 @@ The backend shares the cross-connection queue contract with Redis and JetStream.
 skipping, explicit migration and old-writer fencing. `tests/production_faults.rs`
 checks controlled local connection loss and restoration. Hosted benchmarks are
 separate evidence; connection pooling alone does not guarantee a throughput level.
+
+Completion uses one atomic SQL statement. It locks the row before reading database
+time, validates status/token/expiry, and commits the result in that statement.
+Retry, heartbeat and cancellation use metadata compare-and-swap with a database
+clock check after the row lock. Producer concurrency is bounded before entering
+the pool so a burst of INSERT requests cannot fill every queued connection slot
+and indefinitely delay already leased workers.

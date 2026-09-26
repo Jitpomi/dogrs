@@ -257,7 +257,9 @@ async fn main() -> Result<()> {
                     },
                     tokio_postgres::NoTls,
                     dog_queue::backend::postgres::PostgresOptions {
-                        max_connections: 64,
+                        max_connections: std::env::var("DOGRS_PG_POOL_SIZE")
+                            .unwrap_or_else(|_| "64".into())
+                            .parse()?,
                         operation_timeout: Duration::from_secs(10),
                         ..Default::default()
                     },
@@ -304,6 +306,41 @@ async fn main() -> Result<()> {
                 let name = env("DOGRS_NATS_BUCKET")?;
                 let client = async_nats::connect(uri.split(',').collect::<Vec<_>>()).await?;
                 let js = async_nats::jetstream::new(client);
+                let shards: usize = std::env::var("DOGRS_CAPACITY_SHARDS")
+                    .unwrap_or_else(|_| "1".into())
+                    .parse()?;
+                anyhow::ensure!((1..=32).contains(&shards), "shards must be 1–32");
+                if shards > 1 {
+                    anyhow::ensure!(
+                        role == "capacity-local",
+                        "sharded topology is for the capacity fixture"
+                    );
+                    let mut backends = Vec::new();
+                    for shard in 0..shards {
+                        let name = format!("{name}_{shard}");
+                        let bucket = js
+                            .create_key_value(async_nats::jetstream::kv::Config {
+                                bucket: name.clone(),
+                                num_replicas: std::env::var("DOGRS_NATS_REPLICAS")
+                                    .unwrap_or_else(|_| "3".into())
+                                    .parse()?,
+                                storage: async_nats::jetstream::stream::StorageType::File,
+                                history: 1,
+                                ..Default::default()
+                            })
+                            .await?;
+                        let mut config = bucket.stream.cached_info().config.clone();
+                        config.allow_direct = false;
+                        js.update_stream(config).await?;
+                        backends.push(Arc::new(dog_queue::backend::nats::NatsBackend::from_store(
+                            js.get_key_value(name).await?,
+                        )?));
+                    }
+                    return capacity::run(dog_queue::backend::sharded::ShardedBackend::new(
+                        backends,
+                    )?)
+                    .await;
+                }
                 let bucket = match js.get_key_value(&name).await {
                     Ok(bucket) => bucket,
                     Err(_) => {

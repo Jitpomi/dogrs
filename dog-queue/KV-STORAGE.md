@@ -75,3 +75,18 @@ regional outages, clock jumps, or undocumented managed-service behavior.
 
 Persistence references: [Redis persistence](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)
 and [JetStream durability](https://docs.nats.io/nats-concepts/jetstream).
+
+## Horizontal scaling without a fixed stack
+
+`backend::sharded::ShardedBackend` routes each tenant over caller-provisioned
+backends using documented FNV-1a-64/UTF-8 modulo a fixed shard count. It works with
+PostgreSQL, Redis, JetStream, or custom backends, including trait objects. Ownership,
+idempotency, status reads and events use the same tenant route; maintenance visits
+all shards. Only shards that implement `JobLedger` produce a durable sharded ledger.
+The advertised capabilities are the intersection of all shards.
+
+The ordered shard list is persistent configuration. Changing its size or order
+requires an offline tenant migration; never use it as a live autoscaling switch.
+Sharding creates no hosted resources. Provision independent stores yourself, and
+benchmark their actual hardware, replica count and fsync settings. A routing
+wrapper does not turn one physical disk into independent failure domains.

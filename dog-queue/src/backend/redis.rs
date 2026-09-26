@@ -101,7 +101,14 @@ impl RedisBackend {
         let client = redis::Client::open(config.connection_string).map_err(error)?;
         Ok(Self {
             store: RedisStore {
-                manager: client.get_connection_manager().await.map_err(error)?,
+                manager: client
+                    .get_connection_manager_with_config(
+                        redis::aio::ConnectionManagerConfig::new()
+                            .set_connection_timeout(std::time::Duration::from_secs(10))
+                            .set_response_timeout(std::time::Duration::from_secs(10)),
+                    )
+                    .await
+                    .map_err(error)?,
                 checked: Default::default(),
             },
             lease_duration: std::time::Duration::from_secs(300),
@@ -187,9 +194,8 @@ impl RedisStore {
             .ok_or_else(|| error("Redis job payload missing; storage was evicted or lost"))
     }
 }
-#[async_trait]
-impl StateStore for RedisStore {
-    async fn update(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+impl RedisStore {
+    async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
         self.check_legacy(tenant).await?;
         let p = prefix(tenant);
         if let Operation::Purge(before) = op {
@@ -331,5 +337,20 @@ impl StateStore for RedisStore {
     }
     async fn tenants(&self) -> QueueResult<Vec<String>> {
         self.manager.clone().smembers(TENANTS).await.map_err(error)
+    }
+}
+
+#[async_trait]
+impl StateStore for RedisStore {
+    async fn update(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        tokio::time::timeout(std::time::Duration::from_secs(30),self.update_inner(tenant,op)).await.map_err(|_|error("Redis queue operation timed out; commit outcome may be unknown; use idempotency keys"))?
+    }
+    async fn tenants(&self) -> QueueResult<Vec<String>> {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            RedisStore::tenants(self),
+        )
+        .await
+        .map_err(|_| error("Redis tenant lookup timed out"))?
     }
 }

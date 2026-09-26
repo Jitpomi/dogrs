@@ -2,6 +2,7 @@ pub mod broker;
 #[cfg(any(feature = "postgres", feature = "redis", feature = "nats-async"))]
 pub mod durable;
 pub mod memory;
+pub mod sharded;
 
 #[cfg(feature = "redis")]
 pub mod redis;

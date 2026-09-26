@@ -84,12 +84,12 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
                             }
                             .await;
                             if let Err(e) = result {
-                                errors.lock().unwrap().push(e.to_string());
+                                errors.lock().unwrap().push(format!("execute/ack: {e}"));
                             }
                         }
                         Ok(None) => tokio::time::sleep(Duration::from_millis(50)).await,
                         Err(e) => {
-                            errors.lock().unwrap().push(e.to_string());
+                            errors.lock().unwrap().push(format!("dequeue: {e}"));
                             tokio::time::sleep(Duration::from_millis(50)).await;
                         }
                     }
@@ -142,7 +142,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
                             accepted.fetch_add(1, Ordering::SeqCst);
                             ids.lock().unwrap().push((tenant, id));
                         }
-                        Err(e) => errors.lock().unwrap().push(e.to_string()),
+                        Err(e) => errors.lock().unwrap().push(format!("enqueue: {e}")),
                     }
                     latency
                         .lock()
@@ -186,7 +186,10 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
                         })
                         .count()
                 }
-                Err(e) => errors.lock().unwrap().push(e.to_string()),
+                Err(e) => errors
+                    .lock()
+                    .unwrap()
+                    .push(format!("snapshot {tenant}: {e}")),
             }
         }
     }
@@ -205,7 +208,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
         && elapsed <= seconds as f64 + 5.0;
     println!(
         "{}",
-        json!({"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":10,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed.load(Ordering::SeqCst),"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed})
+        json!({"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":10,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed.load(Ordering::SeqCst),"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed})
     );
     anyhow::ensure!(passed, "queue capacity gate failed");
     Ok(())

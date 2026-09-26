@@ -339,3 +339,57 @@ async fn opening_pools_does_not_lock_out_running_jobs() {
         result.unwrap();
     }
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn completion_waiting_on_row_lock_cannot_cross_lease_deadline() {
+    let backend = Arc::new(
+        backend()
+            .await
+            .with_lease_duration(Duration::from_millis(200)),
+    );
+    let tenant = QueueCtx::new(format!("commit-fence-{}", uuid::Uuid::new_v4()));
+    let id = backend
+        .enqueue(
+            tenant.clone(),
+            JobMessage::new("fence", vec![7; 65536], "bytes", "q")
+                .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1)),
+        )
+        .await
+        .unwrap();
+    let job = backend
+        .dequeue(tenant.clone(), &["q"])
+        .await
+        .unwrap()
+        .unwrap();
+    let (mut client, connection) = tokio_postgres::connect(
+        &std::env::var("DOGRS_POSTGRES_URL").unwrap(),
+        tokio_postgres::NoTls,
+    )
+    .await
+    .unwrap();
+    let driver = tokio::spawn(connection);
+    let tx = client.transaction().await.unwrap();
+    tx.query_one(
+        "SELECT id FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND id=$2 FOR UPDATE",
+        &[&tenant.tenant_id, &id.as_str()],
+    )
+    .await
+    .unwrap();
+    let worker = backend.clone();
+    let ctx = tenant.clone();
+    let key = id.clone();
+    let completion =
+        tokio::spawn(async move { worker.ack_complete(ctx, key, job.lease_token, None).await });
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    tx.commit().await.unwrap();
+    assert!(matches!(
+        completion.await.unwrap(),
+        Err(dog_queue::QueueError::LeaseExpired)
+    ));
+    assert!(matches!(
+        backend.get_status(tenant, id).await.unwrap(),
+        JobStatus::Processing { .. }
+    ));
+    driver.abort();
+}
