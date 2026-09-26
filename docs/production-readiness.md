@@ -175,3 +175,12 @@ The ordinary single-statement path and optional producer cap remain. A separate
 replicated-NATS 1 KiB run failed in fixture setup due to a repeated host port;
 the allocator now ensures uniqueness and tracks containers before starting them.
 That setup failure is not a backend capacity measurement.
+
+The final native fixture makes admission concurrency explicit:
+`DOGRS_CAPACITY_INFLIGHT` defaults to 32 outstanding requests per tenant (bounded
+1–64), versus the earlier 16. At the offered 10 jobs/second per tenant this
+provides 3.2 seconds of bounded in-flight capacity; the five-second drain deadline
+is unchanged. The selected value is included in every result. Replicated-NATS
+capacity runs use two workers per tenant to overlap independent jobs; PostgreSQL
+and Redis use one. Offered rate, payload size, expected count and all correctness
+checks remain unchanged. Earlier failed profiles remain separate evidence.
