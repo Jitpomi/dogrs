@@ -15,7 +15,57 @@ fn bytes(seed: u64) -> Vec<u8> {
     }
     bytes
 }
-pub async fn run<B: QueueBackend>(backend: B, role: &str) -> Result<()> {
+pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {
+    if role == "recovery-race" {
+        let backend = Arc::new(backend);
+        let prefix = tenant()?;
+        let mut tasks = tokio::task::JoinSet::new();
+        for t in 0..32 {
+            let backend = backend.clone();
+            let ctx = QueueCtx::new(format!("{prefix}-{t}"));
+            tasks.spawn(async move {
+                for n in 0..20 {
+                    let id = backend
+                        .enqueue(
+                            ctx.clone(),
+                            JobMessage::new("race", bytes(n), "bytes", "race")
+                                .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1))
+                                .with_idempotency_key(n.to_string()),
+                        )
+                        .await?;
+                    let (reads, completion) = tokio::join!(
+                        async {
+                            for _ in 0..10 {
+                                backend.get_snapshot(ctx.clone(), id.clone()).await?;
+                                tokio::task::yield_now().await;
+                            }
+                            Ok::<_, dog_queue::QueueError>(())
+                        },
+                        async {
+                            let job = loop {
+                                if let Some(job) = backend.dequeue(ctx.clone(), &["race"]).await? {
+                                    break job;
+                                }
+                                tokio::time::sleep(Duration::from_millis(10)).await;
+                            };
+                            backend
+                                .ack_complete(ctx.clone(), job.record.job_id, job.lease_token, None)
+                                .await
+                        }
+                    );
+                    reads?;
+                    completion?;
+                    backend.get_record(ctx.clone(), id).await?;
+                }
+                Ok::<_, dog_queue::QueueError>(())
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result??;
+        }
+        println!("RECORD_ARCHIVE_RACE_PASSED jobs=640 readers_per_job=10");
+        return Ok(());
+    }
     let path = PathBuf::from(env("DOGRS_RECOVERY_MANIFEST")?);
     if role == "recovery-seed" || role == "recovery-live" {
         anyhow::ensure!(!path.exists(), "manifest already exists");
@@ -63,12 +113,24 @@ pub async fn run<B: QueueBackend>(backend: B, role: &str) -> Result<()> {
             return Ok(());
         }
         let resume = path.with_extension("resume");
-        tokio::time::timeout(Duration::from_secs(180), async {
+        let mut unavailable = 0usize;
+        tokio::time::timeout(Duration::from_secs(600), async {
             while !resume.exists() {
+                if !matches!(
+                    tokio::time::timeout(
+                        Duration::from_secs(3),
+                        backend.get_record(ctx.clone(), manifest.jobs[0].0.clone())
+                    )
+                    .await,
+                    Ok(Ok(_))
+                ) {
+                    unavailable += 1;
+                }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         })
         .await?;
+        println!("RECOVERY_OUTAGE_PROBES_FAILED {unavailable}");
     }
     let manifest: Manifest = serde_json::from_slice(&std::fs::read(&path)?)?;
     let ctx = QueueCtx::new(&manifest.tenant);

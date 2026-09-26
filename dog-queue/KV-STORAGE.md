@@ -37,7 +37,8 @@ maintenance can finish retirement. Old tokens never authorize a replacement job.
 An ordered, replayable watch supplies discovery hints without transferring
 payloads or completed history on every poll. Claims always re-read and CAS the
 actual cell. Watch end/errors trigger reconstruction. The watch is not ownership
-authority. Results remain limited to 4 KiB; admission reserves 8 KiB of metadata
+authority. Dequeue skips stale or not-yet-visible hints and considers other jobs;
+explicit ID reads still report missing records. Results remain limited to 4 KiB; admission reserves 8 KiB of metadata
 space for status updates and checks binary payloads against the account limit.
 Maintain account/bucket headroom: per-message checks cannot reserve total provider
 quota. An enqueue whose outcome is unknown can leave an unreferenced payload;
@@ -90,3 +91,19 @@ requires an offline tenant migration; never use it as a live autoscaling switch.
 Sharding creates no hosted resources. Provision independent stores yourself, and
 benchmark their actual hardware, replica count and fsync settings. A routing
 wrapper does not turn one physical disk into independent failure domains.
+
+## Extended recovery fixture
+
+`run_recovery.py redis --restore --outage-seconds 300 --report-dir /absolute/results`
+keeps the same client alive during five minutes of failed connectivity, copies
+crash-persisted AOF files, removes the original container, and restores those files
+into a fresh container. The observed run preserved all 200 acknowledged 64 KiB
+jobs (98 failed connectivity probes), rejected 50 expired owners, and finished the
+150 remaining jobs. This verifies restoration of the latest crash image, not
+zero-loss recovery from an older backup. PostgreSQL supports the same cold-file
+fixture; JetStream uses its separate actual-leader failure test.
+
+`--race` runs concurrent metadata reads against claims/completions/retirement on
+640 full-size jobs. `DOGRS_NATS_IMAGE` selects the disposable server image; the
+compatibility fixture defaults to NATS 2.11, while the capacity workflow pins
+2.15.0 with three replicas and disk synchronization enabled.

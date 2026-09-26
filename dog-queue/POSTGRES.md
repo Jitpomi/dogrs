@@ -63,6 +63,8 @@ separate evidence; connection pooling alone does not guarantee a throughput leve
 Completion uses one atomic SQL statement. It locks the row before reading database
 time, validates status/token/expiry, and commits the result in that statement.
 Retry, heartbeat and cancellation use metadata compare-and-swap with a database
-clock check after the row lock. Producer concurrency is bounded before entering
-the pool so a burst of INSERT requests cannot fill every queued connection slot
-and indefinitely delay already leased workers.
+clock check after the row lock. `PostgresOptions.enqueue_concurrency` optionally
+bounds producers before they enter the pool. Keep it below `max_connections` to
+reserve worker capacity during a producer burst. It defaults to `None`; choose a
+limit using measured database/network latency rather than a fixed pool fraction.
+A small cap on a high-latency connection can reduce throughput.

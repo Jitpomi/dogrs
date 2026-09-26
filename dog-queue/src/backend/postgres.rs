@@ -15,6 +15,9 @@ pub struct PostgresConfig {
 pub struct PostgresOptions {
     pub max_connections: u32,
     pub operation_timeout: Duration,
+    /// Optional producer concurrency cap. Leave below max_connections to reserve
+    /// pool capacity for workers; tune against the actual server and latency.
+    pub enqueue_concurrency: Option<u32>,
     /// Explicit offline v1 -> v2 migration. Stop every old worker/API first.
     pub migrate_legacy: bool,
 }
@@ -23,6 +26,7 @@ impl Default for PostgresOptions {
         Self {
             max_connections: 4,
             operation_timeout: Duration::from_secs(10),
+            enqueue_concurrency: None,
             migrate_legacy: false,
         }
     }
@@ -51,7 +55,7 @@ impl bb8::ManageConnection for Manager {
 pub struct PostgresStore {
     pool: bb8::Pool<Manager>,
     timeout: Duration,
-    enqueue_slots: tokio::sync::Semaphore,
+    enqueue_slots: Option<tokio::sync::Semaphore>,
 }
 pub type PostgresBackend = DurableBackend<PostgresStore>;
 fn error(e: impl std::fmt::Display + 'static) -> QueueError {
@@ -97,9 +101,14 @@ impl PostgresBackend {
         T::TlsConnect: Send,
         <T::TlsConnect as tokio_postgres::tls::TlsConnect<tokio_postgres::Socket>>::Future: Send,
     {
-        if options.max_connections == 0 || options.operation_timeout.is_zero() {
+        if options.max_connections == 0
+            || options.operation_timeout.is_zero()
+            || options
+                .enqueue_concurrency
+                .is_some_and(|n| n == 0 || n > options.max_connections)
+        {
             return Err(QueueError::InvalidConfig(
-                "positive pool size and operation timeout required".into(),
+                "positive pool size and timeout required; enqueue concurrency must be within pool size".into(),
             ));
         }
         let statement_timeout = options
@@ -140,9 +149,9 @@ impl PostgresBackend {
         let store = PostgresStore {
             pool,
             timeout: options.operation_timeout,
-            enqueue_slots: tokio::sync::Semaphore::new(
-                (options.max_connections / 4).max(1) as usize
-            ),
+            enqueue_slots: options
+                .enqueue_concurrency
+                .map(|n| tokio::sync::Semaphore::new(n as usize)),
         };
         tokio::time::timeout(store.timeout, store.initialize(options.migrate_legacy))
             .await
@@ -233,10 +242,9 @@ impl PostgresStore {
         // Bound producers before they enter the shared pool queue. A burst of
         // admissions must not strand already leased jobs behind thousands of
         // waiting INSERTs; worker claims/acks retain connection capacity.
-        let _admission = if matches!(op, Operation::Enqueue(_)) {
-            Some(self.enqueue_slots.acquire().await.map_err(error)?)
-        } else {
-            None
+        let _admission = match (&self.enqueue_slots, op) {
+            (Some(slots), Operation::Enqueue(_)) => Some(slots.acquire().await.map_err(error)?),
+            _ => None,
         };
         let mut client = self.pool.get().await.map_err(error)?;
         if let Operation::Enqueue(message) = op {

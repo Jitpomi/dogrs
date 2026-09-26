@@ -260,6 +260,10 @@ async fn main() -> Result<()> {
                         max_connections: std::env::var("DOGRS_PG_POOL_SIZE")
                             .unwrap_or_else(|_| "64".into())
                             .parse()?,
+                        enqueue_concurrency: std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY")
+                            .ok()
+                            .map(|n| n.parse())
+                            .transpose()?,
                         operation_timeout: Duration::from_secs(10),
                         ..Default::default()
                     },
@@ -318,8 +322,9 @@ async fn main() -> Result<()> {
                     let mut backends = Vec::new();
                     for shard in 0..shards {
                         let name = format!("{name}_{shard}");
-                        let bucket = js
-                            .create_key_value(async_nats::jetstream::kv::Config {
+                        let bucket = create_fixture_bucket(
+                            &js,
+                            async_nats::jetstream::kv::Config {
                                 bucket: name.clone(),
                                 num_replicas: std::env::var("DOGRS_NATS_REPLICAS")
                                     .unwrap_or_else(|_| "3".into())
@@ -327,8 +332,9 @@ async fn main() -> Result<()> {
                                 storage: async_nats::jetstream::stream::StorageType::File,
                                 history: 1,
                                 ..Default::default()
-                            })
-                            .await?;
+                            },
+                        )
+                        .await?;
                         let mut config = bucket.stream.cached_info().config.clone();
                         config.allow_direct = false;
                         js.update_stream(config).await?;
@@ -344,15 +350,18 @@ async fn main() -> Result<()> {
                 let bucket = match js.get_key_value(&name).await {
                     Ok(bucket) => bucket,
                     Err(_) => {
-                        js.create_key_value(async_nats::jetstream::kv::Config {
-                            bucket: name.clone(),
-                            num_replicas: std::env::var("DOGRS_NATS_REPLICAS")
-                                .unwrap_or_else(|_| "1".into())
-                                .parse()?,
-                            storage: async_nats::jetstream::stream::StorageType::File,
-                            history: 1,
-                            ..Default::default()
-                        })
+                        create_fixture_bucket(
+                            &js,
+                            async_nats::jetstream::kv::Config {
+                                bucket: name.clone(),
+                                num_replicas: std::env::var("DOGRS_NATS_REPLICAS")
+                                    .unwrap_or_else(|_| "1".into())
+                                    .parse()?,
+                                storage: async_nats::jetstream::stream::StorageType::File,
+                                history: 1,
+                                ..Default::default()
+                            },
+                        )
                         .await?
                     }
                 };
@@ -424,6 +433,36 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     connections::dispatch(&role).await
+}
+
+// Cluster discovery can elect a leader before peer placement becomes available.
+// Retry only that structured transient error; quota/auth/config failures stay fatal.
+#[cfg(feature = "nats")]
+async fn create_fixture_bucket(
+    js: &async_nats::jetstream::Context,
+    config: async_nats::jetstream::kv::Config,
+) -> Result<async_nats::jetstream::kv::Store> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        match js.create_key_value(config.clone()).await {
+            Ok(bucket) => return Ok(bucket),
+            Err(error) => {
+                let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+                let mut placement_pending = false;
+                while let Some(current) = cause {
+                    if let Some(server) = current.downcast_ref::<async_nats::jetstream::Error>() {
+                        placement_pending = server.error_code()
+                            == async_nats::jetstream::ErrorCode::CLUSTER_NO_PEERS;
+                    }
+                    cause = current.source();
+                }
+                if !placement_pending || tokio::time::Instant::now() >= deadline {
+                    return Err(error.into());
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
 }
 
 async fn run_local<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {

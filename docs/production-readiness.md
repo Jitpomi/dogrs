@@ -79,6 +79,22 @@ DOGRS_CAPACITY_WORKERS=1 python3 dog-examples/hosted-system/run_recovery.py post
   --capacity --seconds 30 --bytes 65536 --report-dir /absolute/results
 ```
 
+### Combined durable-profile results
+
+On the Linux CI runner, Redis AOF/always/noeviction completed and verified all
+10,000 full 64 KiB jobs across 100 tenants over ten seconds (including zero
+admission drops or duplicate attempts). This is a short controlled load pass,
+not a sustained soak or a certification of the hosted Aiven service.
+
+PostgreSQL and replicated JetStream have **not passed** that combined gate.
+PostgreSQL experiments with larger shared buffers and uncompressed TOAST storage
+did not close the gap and were not adopted. Producer admission is now explicitly
+tunable instead of hard-coding a pool fraction. On local NATS 2.15.0 with 16 buckets,
+three replicas and sync-always, the corrected hint handling eliminated the earlier
+lookup errors, but only 7,451 jobs were admitted and 1,915 completed by the deadline.
+The sustained throughput target remains a release blocker; failed runs must stay
+visible alongside passing unit/contract/recovery tests.
+
 ## Controlled recovery tests
 
 `dog-queue/tests/production_faults.rs` is explicitly restricted to loopback

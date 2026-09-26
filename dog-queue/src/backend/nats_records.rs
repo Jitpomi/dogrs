@@ -221,9 +221,7 @@ impl NatsStore {
     }
     async fn read(&self, tenant: &str, id: &JobId) -> QueueResult<(String, kv::Entry)> {
         let key = cell(tenant, slot(id)?);
-        let mut observed = String::from("absent");
         if let Some(entry) = self.bucket.entry(&key).await.map_err(error)? {
-            observed = format!("{:?} revision={}", entry.operation, entry.revision);
             self.index().await?.observe(
                 key.clone(),
                 entry.revision,
@@ -232,11 +230,6 @@ impl NatsStore {
             );
             if entry.operation == kv::Operation::Put {
                 let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
-                observed.push_str(&format!(
-                    " id={} status={}",
-                    row.record.job_id,
-                    row.record.status.name()
-                ));
                 if row.record.job_id == *id {
                     return Ok((key, entry));
                 }
@@ -252,7 +245,6 @@ impl NatsStore {
         if let Some(entry) = entry {
             return Ok((key, entry));
         }
-        tracing::warn!(tenant,job=%id,active=%observed,"JetStream job lookup missing from active and history");
         Err(QueueError::JobNotFound(id.clone()))
     }
     async fn bytes(&self, tenant: &str, id: &JobId) -> QueueResult<Vec<u8>> {
@@ -480,6 +472,7 @@ impl NatsStore {
             }
             return Ok(Outcome::Reaped(outcomes));
         }
+        let mut skipped_hints = std::collections::HashSet::new();
         for _ in 0..64 {
             let id = match op {
                 Operation::Dequeue(queues, _) => {
@@ -490,7 +483,8 @@ impl NatsStore {
                         if entry.key().starts_with(&prefix) {
                             let row: StoredRecord =
                                 serde_json::from_slice(&entry.value().1).map_err(error)?;
-                            if queues.contains(&row.record.message.queue)
+                            if !skipped_hints.contains(&row.record.job_id)
+                                && queues.contains(&row.record.message.queue)
                                 && row.record.message.run_at <= now
                                 && row.record.status.is_eligible(now)
                             {
@@ -518,11 +512,35 @@ impl NatsStore {
                 | Operation::Heartbeat(id, ..) => id.clone(),
                 _ => unreachable!(),
             };
-            let (key, entry) = match self.read(tenant, &id).await {
-                Err(QueueError::JobNotFound(_)) if matches!(op, Operation::Cancel(_)) => {
-                    return Ok(Outcome::Canceled(false))
+            let (key, entry) = if matches!(op, Operation::Dequeue(..)) {
+                // Watch hints can precede point-read visibility or outlive a
+                // concurrent completion/purge. Neither condition is a failed
+                // lookup of an acknowledged job: no owner exists until CAS.
+                let key = cell(tenant, slot(&id)?);
+                match self.bucket.entry(&key).await.map_err(error)? {
+                    Some(entry) if entry.operation == kv::Operation::Put => {
+                        let row: StoredRecord =
+                            serde_json::from_slice(&entry.value).map_err(error)?;
+                        if row.record.job_id != id {
+                            skipped_hints.insert(id);
+                            continue;
+                        }
+                        (key, entry)
+                    }
+                    _ => {
+                        // Keep the hint: a remote producer's write may still
+                        // become visible without another watch notification.
+                        skipped_hints.insert(id);
+                        continue;
+                    }
                 }
-                other => other?,
+            } else {
+                match self.read(tenant, &id).await {
+                    Err(QueueError::JobNotFound(_)) if matches!(op, Operation::Cancel(_)) => {
+                        return Ok(Outcome::Canceled(false))
+                    }
+                    other => other?,
+                }
             };
             let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
             if key.starts_with("a.") {
@@ -537,7 +555,10 @@ impl NatsStore {
                     return Ok(outcome);
                 }
                 Outcome::Snapshot(_) | Outcome::Canceled(false) => return Ok(outcome),
-                Outcome::Lease(None) => continue,
+                Outcome::Lease(None) => {
+                    skipped_hints.insert(id);
+                    continue;
+                }
                 _ => {}
             }
             let row = &state.jobs[&id];
@@ -557,6 +578,9 @@ impl NatsStore {
                 }
                 return Ok(outcome);
             }
+        }
+        if matches!(op, Operation::Dequeue(..)) && !skipped_hints.is_empty() {
+            return Ok(Outcome::Lease(None));
         }
         Err(error("JetStream job contention: retry operation"))
     }
@@ -599,5 +623,80 @@ mod tests {
         let server: async_nats::jetstream::Error =
             serde_json::from_value(serde_json::json!({"code":400,"err_code":10002})).unwrap();
         assert!(!revision_conflict(&server));
+    }
+    #[tokio::test]
+    #[ignore = "requires disposable JetStream"]
+    async fn stale_and_not_yet_visible_watch_hints_do_not_block_other_jobs() {
+        use crate::{
+            backend::nats::{NatsBackend, NatsConfig},
+            JobMessage, QueueBackend, QueueCtx,
+        };
+        let url = std::env::var("DOGRS_NATS_URL").unwrap();
+        let name = format!("hints_{}", uuid::Uuid::new_v4().simple());
+        let backend = NatsBackend::new(NatsConfig {
+            url: url.clone(),
+            subject: name.clone(),
+        })
+        .await
+        .unwrap();
+        let ctx = QueueCtx::new("hint-race");
+        let message = || {
+            JobMessage::new("hint", vec![1; 65536], "bytes", "q")
+                .with_run_at(Utc::now() - chrono::Duration::seconds(1))
+        };
+        let first = backend.enqueue(ctx.clone(), message()).await.unwrap();
+        let index = backend.store.index().await.unwrap();
+        // Deterministically delay watch processing; successful local CAS writes
+        // still install hints, as in a separate producer racing the watch replay.
+        if let Some(task) = index.task.lock().unwrap().take() {
+            task.abort();
+        }
+        let key = cell("hint-race", slot(&first).unwrap());
+        let original = index.entries.get(&key).unwrap().value().clone();
+        let leased = backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+        backend
+            .ack_complete(ctx.clone(), first.clone(), leased.lease_token, None)
+            .await
+            .unwrap();
+        for missing in [false, true] {
+            let mut stale = original.clone();
+            let mut row: StoredRecord = serde_json::from_slice(&stale.1).unwrap();
+            if missing {
+                row.record.job_id = JobId::from(format!(
+                    "{}_{}",
+                    slot(&first).unwrap(),
+                    uuid::Uuid::new_v4()
+                ));
+                stale.1 = serde_json::to_vec(&row).unwrap();
+                assert!(matches!(
+                    backend
+                        .get_record(ctx.clone(), row.record.job_id.clone())
+                        .await,
+                    Err(QueueError::JobNotFound(_))
+                ));
+            }
+            index.entries.insert(key.clone(), stale);
+            let next = backend.enqueue(ctx.clone(), message()).await.unwrap();
+            let lease = backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+            assert_eq!(lease.record.job_id, next);
+            backend
+                .ack_complete(ctx.clone(), next, lease.lease_token, None)
+                .await
+                .unwrap();
+            assert!(backend
+                .dequeue(ctx.clone(), &["q"])
+                .await
+                .unwrap()
+                .is_none());
+        }
+        // An acknowledged completed record remains available through history.
+        assert!(backend
+            .get_record(ctx, first)
+            .await
+            .unwrap()
+            .status
+            .is_terminal());
+        let js = async_nats::jetstream::new(async_nats::connect(url).await.unwrap());
+        js.delete_key_value(name).await.unwrap();
     }
 }
