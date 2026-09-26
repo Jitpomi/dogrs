@@ -98,8 +98,10 @@ state; a successful small test does not remove that throughput limit.
 
 These tests do not certify provider failover, backup restore, long outages,
 clock skew, large payloads, sustained load, cloud IAM policies or an always-on
-production deployment. SQS and Google Pub/Sub are not covered by this hosted
-workflow. Their emulator coverage remains separate evidence.
+production deployment. SQS is covered by the hosted Linux workflow when its
+restricted test credential is supplied. Google Pub/Sub is exercised separately
+inside Google Cloud Shell in the same region as its message storage. Their
+emulator coverage remains separate evidence.
 
 ## Cleanup
 
