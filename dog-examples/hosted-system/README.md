@@ -75,7 +75,7 @@ small acceptance workloads, not capacity certifications or comparative benchmark
 The `Hosted system acceptance` workflow repeats the application on a standard
 GitHub Linux runner. Credentials live in the restricted `dogrs-hosted-validation`
 environment and are never made available to arbitrary pull-request code. The
-workflow uses the test branch or manual dispatch, not a schedule. It creates no
+workflow uses manual dispatch, not a schedule or automatic push trigger. It creates no
 cloud services and uses only the pre-provisioned free services.
 
 ## Findings and limits
@@ -110,3 +110,5 @@ only matching test-tenant rows from the business tables. Do not delete another
 tenant's records. Never put these credentials in public logs or artifacts.
 
 SQS uses the private `dogrs-validation` queue in the dedicated AWS validation account, region `us-east-2`. Its IAM test identity can only send, receive and delete messages on that queue over TLS. Disable the credential after validation. The workflow includes SQS only when `aws.json` is supplied. Removing that entry after deactivation keeps future runs limited to available credentials.
+
+For `pubsub`, run inside a Google Cloud environment in `us-west1`, using existing Application Default Credentials and `DOGRS_GCP_PROJECT`. Pre-create `dogrs-validation` topic and subscription with message storage restricted to `us-west1`, no topic retention, and subscription retention at most one day. The client uses the regional HTTPS endpoint. This transport is excluded from the external GitHub runner to avoid Pub/Sub internet delivery charges.

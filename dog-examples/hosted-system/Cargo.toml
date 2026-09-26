@@ -28,6 +28,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 aws-sdk-sqs = { version = "1.113", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 
+google-cloud-pubsub = { version = "1.5", optional = true }
+
 [features]
 redis = ["dog-queue/redis", "dep:redis"]
 nats = ["dog-queue/nats", "dep:async-nats"]
@@ -36,3 +38,4 @@ kafka = ["dog-queue/kafka-rdkafka", "dep:rdkafka"]
 kafka-rust = ["dog-queue/kafka-rskafka", "dep:rskafka"]
 
 sqs = ["dog-queue/aws-sqs", "dep:aws-sdk-sqs"]
+pubsub = ["dog-queue/gcp-pubsub", "dep:google-cloud-pubsub"]

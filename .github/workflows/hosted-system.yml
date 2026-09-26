@@ -1,8 +1,6 @@
 name: Hosted system acceptance
 on:
   workflow_dispatch:
-  push:
-    branches: [codex/dogrs-hosted-validation]
 permissions:
   contents: read
 concurrency:

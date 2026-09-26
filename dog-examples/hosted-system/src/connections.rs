@@ -3,7 +3,8 @@ use super::*;
     feature = "rabbitmq",
     feature = "kafka",
     feature = "kafka-rust",
-    feature = "sqs"
+    feature = "sqs",
+    feature = "pubsub"
 ))]
 use dog_queue::backend::broker::Notifications;
 #[cfg(feature = "kafka")]
@@ -64,7 +65,8 @@ async fn postgres() -> Result<PostgresBackend> {
     feature = "rabbitmq",
     feature = "kafka",
     feature = "kafka-rust",
-    feature = "sqs"
+    feature = "sqs",
+    feature = "pubsub"
 ))]
 async fn notification_probe(n: &impl Notifications) -> Result<()> {
     // A broker outage intentionally does not fail enqueue; prove the broker really works
@@ -85,6 +87,32 @@ pub async fn dispatch(role: &str) -> Result<()> {
     let kind = env("DOGRS_BACKEND")?;
     match kind.as_str() {
         "postgres" => run(postgres().await?, role).await,
+        #[cfg(feature = "pubsub")]
+        "pubsub" => {
+            use dog_queue::backend::gcp_pubsub::GcpPubSubBackend;
+            use google_cloud_pubsub::client::{Publisher, Subscriber};
+            let project = env("DOGRS_GCP_PROJECT")?;
+            let endpoint = "https://us-west1-pubsub.googleapis.com";
+            let publisher =
+                Publisher::builder(format!("projects/{project}/topics/dogrs-validation"))
+                    .with_endpoint(endpoint)
+                    .build()
+                    .await?;
+            let subscriber = Subscriber::builder()
+                .with_endpoint(endpoint)
+                .build()
+                .await?;
+            let backend = GcpPubSubBackend::new(
+                publisher,
+                subscriber,
+                format!("projects/{project}/subscriptions/dogrs-validation"),
+                Arc::new(postgres().await?),
+            )?;
+            if role == "probe" {
+                return notification_probe(backend.notifications()).await;
+            }
+            run(backend, role).await
+        }
         #[cfg(feature = "sqs")]
         "sqs" => {
             use aws_sdk_sqs::config::{BehaviorVersion, Credentials, Region};
