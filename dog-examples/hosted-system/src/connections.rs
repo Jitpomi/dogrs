@@ -1,5 +1,10 @@
 use super::*;
-#[cfg(any(feature = "rabbitmq", feature = "kafka", feature = "kafka-rust"))]
+#[cfg(any(
+    feature = "rabbitmq",
+    feature = "kafka",
+    feature = "kafka-rust",
+    feature = "sqs"
+))]
 use dog_queue::backend::broker::Notifications;
 #[cfg(feature = "kafka")]
 use dog_queue::backend::kafka::RdKafkaBackend;
@@ -55,7 +60,12 @@ async fn postgres() -> Result<PostgresBackend> {
     .await?
     .with_lease_duration(LEASE))
 }
-#[cfg(any(feature = "rabbitmq", feature = "kafka", feature = "kafka-rust"))]
+#[cfg(any(
+    feature = "rabbitmq",
+    feature = "kafka",
+    feature = "kafka-rust",
+    feature = "sqs"
+))]
 async fn notification_probe(n: &impl Notifications) -> Result<()> {
     // A broker outage intentionally does not fail enqueue; prove the broker really works
     // separately so ledger polling cannot mask broken TLS, auth, permissions or routing.
@@ -75,6 +85,33 @@ pub async fn dispatch(role: &str) -> Result<()> {
     let kind = env("DOGRS_BACKEND")?;
     match kind.as_str() {
         "postgres" => run(postgres().await?, role).await,
+        #[cfg(feature = "sqs")]
+        "sqs" => {
+            use aws_sdk_sqs::config::{BehaviorVersion, Credentials, Region};
+            use dog_queue::backend::aws_sqs::AwsSqsBackend;
+            let credentials: serde_json::Value = serde_json::from_str(&secret("aws.json")?)?;
+            let access = credentials["access_key_id"]
+                .as_str()
+                .context("missing AWS access key")?;
+            let private = credentials["secret_access_key"]
+                .as_str()
+                .context("missing AWS secret key")?;
+            let token = credentials["session_token"].as_str().map(str::to_owned);
+            let config = aws_sdk_sqs::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .region(Region::new("us-east-2"))
+                .credentials_provider(Credentials::new(access, private, token, None, "dogrs-test"))
+                .build();
+            let backend = AwsSqsBackend::new(
+                aws_sdk_sqs::Client::from_conf(config),
+                "https://sqs.us-east-2.amazonaws.com/713005938483/dogrs-validation".into(),
+                Arc::new(postgres().await?),
+            )?;
+            if role == "probe" {
+                return notification_probe(backend.notifications()).await;
+            }
+            run(backend, role).await
+        }
         #[cfg(feature = "redis")]
         "redis" => {
             let uri = secret("redis.uri")?;

@@ -54,9 +54,12 @@ jobs:
           DOGRS_REPORT_DIR: hosted-results
         run: |
           python3 - <<'PY'
-          import subprocess
+          import os, pathlib, subprocess
           failures = []
-          for backend in ['postgres', 'nats', 'redis', 'rabbitmq', 'kafka', 'kafka-rust']:
+          backends = ['postgres', 'nats', 'redis', 'rabbitmq', 'kafka', 'kafka-rust']
+          if (pathlib.Path(os.environ['DOGRS_SECRETS_DIR']) / 'aws.json').exists():
+              backends.append('sqs')
+          for backend in backends:
               result = subprocess.run(['python3', 'dog-examples/hosted-system/run_system.py', backend], timeout=420)
               if result.returncode: failures.append(backend)
           if failures: raise SystemExit('Failed hosted backends: ' + ', '.join(failures))

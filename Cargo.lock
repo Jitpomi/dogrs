@@ -3642,6 +3642,7 @@ dependencies = [
  "anyhow",
  "async-nats",
  "async-trait",
+ "aws-sdk-sqs",
  "axum 0.8.9",
  "chrono",
  "dog-core",

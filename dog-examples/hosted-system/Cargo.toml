@@ -26,9 +26,13 @@ rskafka = { version = "0.6", optional = true, features = ["transport-tls"] }
 chrono = "0.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+aws-sdk-sqs = { version = "1.113", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
+
 [features]
 redis = ["dog-queue/redis", "dep:redis"]
 nats = ["dog-queue/nats", "dep:async-nats"]
 rabbitmq = ["dog-queue/rabbitmq", "dep:lapin"]
 kafka = ["dog-queue/kafka-rdkafka", "dep:rdkafka"]
 kafka-rust = ["dog-queue/kafka-rskafka", "dep:rskafka"]
+
+sqs = ["dog-queue/aws-sqs", "dep:aws-sdk-sqs"]

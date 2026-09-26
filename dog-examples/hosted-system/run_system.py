@@ -71,7 +71,7 @@ def check(name):
 report={'backend':backend,'tenant':tenant,'started_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
 try:
     command('init')
-    if backend in ('kafka','kafka-rust','rabbitmq'):
+    if backend in ('kafka','kafka-rust','rabbitmq','sqs'):
         assert 'BROKER_NOTIFICATION_VERIFIED' in command('probe')
         check('broker notification round trip over verified TLS')
     api=launch('serve');ready();check('unauthenticated HTTP rejected')

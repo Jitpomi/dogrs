@@ -22,7 +22,7 @@ export DOGRS_REPORT_DIR=/absolute/results/directory
 python3 dog-examples/hosted-system/run_system.py postgres
 ```
 
-Repeat with `nats`, `redis`, `rabbitmq`, `kafka` (librdkafka) and `kafka-rust` (rskafka). Run them sequentially: the test
+Repeat with `nats`, `redis`, `rabbitmq`, `kafka` (librdkafka) `kafka-rust` (rskafka), and `sqs`. Run them sequentially: the test
 API uses port 38171. Each run creates its own `dogrs-test-…` tenant, submits 46
 synthetic jobs and kills only processes that the controller starts. Failed runs
 remain in the results directory as evidence; later success does not erase them.
@@ -31,6 +31,7 @@ The secret directory contains these files (never commit it):
 
 | File | Purpose |
 |---|---|
+| `aws.json` | Optional queue-only AWS credentials: `access_key_id`, `secret_access_key`, optional `session_token` |
 | `postgres.uri` | Dedicated Aiven PostgreSQL URI requiring TLS |
 | `aiven-ca.pem` | Aiven project CA, used with certificate/hostname verification |
 | `redis.uri` | `rediss://` URI for the dedicated Valkey test service |
@@ -63,7 +64,7 @@ Do not copy these tight test deadlines into a deployment without measuring laten
 - Keep a long-running job leased through delayed backend round trips.
 - Complete a 40-job batch submitted by four concurrent clients, using both worker processes.
 - Preserve terminal results across complete process restart.
-- For RabbitMQ/Kafka, independently verify a real broker round trip. Ledger polling
+- For RabbitMQ/Kafka/SQS, independently verify a real broker round trip. Ledger polling
   must not hide broken TLS, authentication or broker permissions.
 
 `hosted-system probe` with `DOGRS_BACKEND=nats` checks admission against the hosted
@@ -107,3 +108,5 @@ runs can be repeated; remove them explicitly through the provider consoles when
 finished. Purge terminal test history using the ledger's retention API and delete
 only matching test-tenant rows from the business tables. Do not delete another
 tenant's records. Never put these credentials in public logs or artifacts.
+
+SQS uses the private `dogrs-validation` queue in the dedicated AWS validation account, region `us-east-2`. Its IAM test identity can only send, receive and delete messages on that queue over TLS. Disable the credential after validation. The workflow includes SQS only when `aws.json` is supplied. Removing that entry after deactivation keeps future runs limited to available credentials.
