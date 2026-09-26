@@ -344,6 +344,49 @@ impl PostgresStore {
             let count = client.execute("DELETE FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND NOT active AND updated_at < $2", &[&tenant,before]).await.map_err(error)?;
             return Ok(Outcome::Purged(count as usize));
         }
+        // A metadata read followed by a fenced compare-and-swap needs two round
+        // trips rather than BEGIN/lock/time/update/COMMIT. The write checks the
+        // database clock again: a lease that expired in transit cannot commit.
+        if let Operation::Complete(id, ..)
+        | Operation::Fail(id, ..)
+        | Operation::Heartbeat(id, ..)
+        | Operation::Cancel(id) = op
+        {
+            for _ in 0..32 {
+                let row = client.query_typed_opt(
+                    "SELECT state,clock_timestamp() FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND id=$2",
+                    &[(&tenant,Type::TEXT),(&id.as_str(),Type::TEXT)]).await.map_err(error)?;
+                let Some(row) = row else {
+                    return if matches!(op, Operation::Cancel(_)) {
+                        Ok(Outcome::Canceled(false))
+                    } else {
+                        Err(QueueError::JobNotFound(id.clone()))
+                    };
+                };
+                let previous: serde_json::Value = row.get(0);
+                let stored: StoredRecord =
+                    serde_json::from_value(previous.clone()).map_err(error)?;
+                let mut state = TenantState::default();
+                state.jobs.insert(id.clone(), stored);
+                let outcome = state.apply_at(tenant, op, row.get(1))?;
+                if matches!(outcome, Outcome::Canceled(false)) {
+                    return Ok(outcome);
+                }
+                let stored = &state.jobs[id];
+                let r = &stored.record;
+                let value = metadata(stored)?;
+                let require_lease = !matches!(op, Operation::Cancel(_));
+                let changed = client.query_typed_opt(
+                    "WITH locked AS MATERIALIZED (SELECT id FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND id=$2 FOR UPDATE), stamped AS MATERIALIZED (SELECT id,clock_timestamp() AS now FROM locked) UPDATE dogrs_queue_jobs_v2 j SET state=$3,updated_at=$4,eligible_at=$5,lease_until=$6,status=$7,active=$8,payload=COALESCE(payload,$9) FROM stamped WHERE j.tenant=$1 AND j.id=stamped.id AND j.state=$10 AND (NOT $11 OR j.lease_until > stamped.now) RETURNING j.id",
+                    &[(&tenant,Type::TEXT),(&id.as_str(),Type::TEXT),(&value,Type::JSONB),(&r.updated_at,Type::TIMESTAMPTZ),(&eligible(stored),Type::TIMESTAMPTZ),(&r.lease_until(),Type::TIMESTAMPTZ),(&r.status.name(),Type::TEXT),(&!r.status.is_terminal(),Type::BOOL),(&r.message.payload_bytes,Type::BYTEA),(&previous,Type::JSONB),(&require_lease,Type::BOOL)]
+                ).await.map_err(error)?;
+                if changed.is_some() {
+                    return Ok(outcome);
+                }
+                tokio::task::yield_now().await;
+            }
+            return Err(error("PostgreSQL job contention: retry operation"));
+        }
         let tx = client.transaction().await.map_err(error)?;
         let rows = match op {
             Operation::Reap => tx.query_typed("SELECT state FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND lease_until < statement_timestamp() ORDER BY lease_until LIMIT 256 FOR UPDATE SKIP LOCKED", &[(&tenant,Type::TEXT)]).await.map_err(error)?,

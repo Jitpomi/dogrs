@@ -1,5 +1,7 @@
 //! A synthetic billing system for hosted infrastructure validation. No real payments or email.
+mod capacity;
 mod connections;
+mod recovery;
 use anyhow::{bail, Context, Result};
 use dog_core::{DogAppBuilder, DogService, TenantContext};
 use dog_queue::{Job, JobError, JobId, QueueAdapter, QueueBackend, QueueConfig, QueueCtx};
@@ -124,6 +126,9 @@ impl<B: QueueBackend + 'static> DogService<Value, ()> for BillingService<B> {
     }
 }
 async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {
+    if role == "capacity" {
+        return capacity::run(backend).await;
+    }
     let tenant = tenant()?;
     let max_payload: usize = std::env::var("DOGRS_TEST_MAX_PAYLOAD")
         .unwrap_or_else(|_| "4096".into())
@@ -237,6 +242,97 @@ async fn main() -> Result<()> {
     let role = std::env::args()
         .nth(1)
         .context("usage: hosted-system init|inspect|serve|worker")?;
+    if role == "capacity-local" || role.starts_with("recovery-") {
+        let backend = env("DOGRS_BACKEND")?;
+        match backend.as_str() {
+            "postgres" => {
+                let uri = env("DOGRS_POSTGRES_URL")?;
+                anyhow::ensure!(
+                    uri.contains("127.0.0.1") || uri.contains("localhost"),
+                    "local capacity requires loopback"
+                );
+                let backend = dog_queue::backend::postgres::PostgresBackend::new_with_tls_options(
+                    dog_queue::backend::postgres::PostgresConfig {
+                        connection_string: uri,
+                    },
+                    tokio_postgres::NoTls,
+                    dog_queue::backend::postgres::PostgresOptions {
+                        max_connections: 64,
+                        operation_timeout: Duration::from_secs(10),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+                return run_local(
+                    backend.with_lease_duration(Duration::from_secs(if role == "capacity-local" {
+                        300
+                    } else {
+                        2
+                    })),
+                    &role,
+                )
+                .await;
+            }
+            #[cfg(feature = "redis")]
+            "redis" => {
+                let uri = env("DOGRS_REDIS_URL")?;
+                anyhow::ensure!(
+                    uri.contains("127.0.0.1") || uri.contains("localhost"),
+                    "local capacity requires loopback"
+                );
+                let backend = dog_queue::backend::redis::RedisBackend::new(
+                    dog_queue::backend::redis::RedisConfig {
+                        connection_string: uri,
+                    },
+                )
+                .await?
+                .with_lease_duration(Duration::from_secs(
+                    if role == "capacity-local" { 300 } else { 2 },
+                ));
+                if std::env::var("DOGRS_REDIS_REQUIRE_AOF").as_deref() == Ok("1") {
+                    backend.verify_persistence().await?;
+                }
+                return run_local(backend, &role).await;
+            }
+            #[cfg(feature = "nats")]
+            "nats" => {
+                let uri = env("DOGRS_NATS_URL")?;
+                anyhow::ensure!(
+                    uri.contains("127.0.0.1") || uri.contains("localhost"),
+                    "local recovery requires loopback"
+                );
+                let name = env("DOGRS_NATS_BUCKET")?;
+                let client = async_nats::connect(uri.split(',').collect::<Vec<_>>()).await?;
+                let js = async_nats::jetstream::new(client);
+                let bucket = match js.get_key_value(&name).await {
+                    Ok(bucket) => bucket,
+                    Err(_) => {
+                        js.create_key_value(async_nats::jetstream::kv::Config {
+                            bucket: name.clone(),
+                            num_replicas: std::env::var("DOGRS_NATS_REPLICAS")
+                                .unwrap_or_else(|_| "1".into())
+                                .parse()?,
+                            storage: async_nats::jetstream::stream::StorageType::File,
+                            history: 1,
+                            ..Default::default()
+                        })
+                        .await?
+                    }
+                };
+                let mut config = bucket.stream.cached_info().config.clone();
+                config.allow_direct = false;
+                js.update_stream(config).await?;
+                let backend = dog_queue::backend::nats::NatsBackend::from_store(
+                    js.get_key_value(&name).await?,
+                )?
+                .with_lease_duration(Duration::from_secs(
+                    if role == "capacity-local" { 300 } else { 2 },
+                ));
+                return run_local(backend, &role).await;
+            }
+            _ => bail!("unsupported local capacity backend"),
+        }
+    }
     if role == "network-probe" {
         // Isolate PostgreSQL transport latency from queue transactions and workers.
         let db = Arc::new(connections::postgres_client().await?);
@@ -291,4 +387,12 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     connections::dispatch(&role).await
+}
+
+async fn run_local<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {
+    if role.starts_with("recovery-") {
+        recovery::run(backend, role).await
+    } else {
+        capacity::run(backend).await
+    }
 }

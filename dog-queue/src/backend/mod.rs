@@ -23,6 +23,8 @@ pub mod gcp_pubsub;
 
 #[cfg(feature = "nats-async")]
 pub mod nats;
+#[cfg(feature = "nats-async")]
+mod nats_records;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

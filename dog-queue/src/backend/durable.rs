@@ -46,13 +46,7 @@ pub(crate) enum Outcome {
 }
 
 impl TenantState {
-    /// Reserve room for bounded terminal outcomes and lease metadata on every job.
-    #[cfg(feature = "nats-async")]
-    pub(crate) fn reserved_bytes(&self) -> usize {
-        self.jobs.len().saturating_mul(8192)
-    }
-
-    #[cfg(any(feature = "redis", feature = "nats-async", test))]
+    #[cfg(test)]
     pub(crate) fn apply(&mut self, tenant: &str, operation: &Operation) -> QueueResult<Outcome> {
         self.apply_at(tenant, operation, Utc::now())
     }

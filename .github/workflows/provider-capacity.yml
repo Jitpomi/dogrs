@@ -1,0 +1,44 @@
+name: Provider capacity
+on:
+  pull_request:
+    paths: ['.github/workflows/provider-capacity.yml']
+  workflow_dispatch:
+    inputs:
+      backend:
+        type: choice
+        options: [postgres, redis, nats]
+        required: true
+      payload_bytes:
+        type: choice
+        options: ['1024', '65536']
+        required: true
+      seconds:
+        type: choice
+        options: ['10', '30', '60']
+        default: '30'
+permissions:
+  contents: read
+jobs:
+  capacity:
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: ${{ fromJSON(inputs.backend && format('["{0}"]', inputs.backend) || '["postgres","redis","nats"]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build -p hosted-system --release --features redis,nats --locked
+      - run: python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
+        env:
+          BACKEND: ${{ matrix.backend }}
+          DURATION_SECONDS: ${{ inputs.seconds || '10' }}
+          PAYLOAD_BYTES: ${{ inputs.payload_bytes || '65536' }}
+          DOGRS_SYSTEM_BINARY: target/release/hosted-system
+          DOGRS_CAPACITY_WORKERS: 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: provider-capacity-${{ matrix.backend }}
+          path: provider-capacity

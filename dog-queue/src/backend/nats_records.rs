@@ -1,0 +1,539 @@
+//! One CAS cell per active idempotency scope; immutable payload and terminal history
+//! live outside the cell. A replayable watch is only a discovery hint: every claim
+//! re-reads the authoritative cell and CAS-fences ownership.
+use super::{
+    durable::{Operation, Outcome, StateStore, StoredRecord, TenantState},
+    nats::NatsStore,
+};
+use crate::{JobId, QueueError, QueueResult};
+use async_nats::jetstream::{
+    consumer::{push::OrderedConfig, DeliverPolicy, ReplayPolicy},
+    kv,
+};
+use async_trait::async_trait;
+use chrono::Utc;
+use futures::StreamExt;
+use sha2::{Digest, Sha256};
+use std::{sync::Arc, time::Duration};
+
+fn error(e: impl std::fmt::Display) -> QueueError {
+    QueueError::Internal(e.to_string())
+}
+fn hex(s: &str) -> String {
+    s.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
+}
+fn cell(tenant: &str, slot: &str) -> String {
+    format!("a.{}.{}", hex(tenant), slot)
+}
+fn payload(tenant: &str, id: &JobId) -> String {
+    format!("p.{}.{}", hex(tenant), id)
+}
+fn history(tenant: &str, id: &JobId) -> String {
+    format!("h.{}.{}", hex(tenant), id)
+}
+fn slot(id: &JobId) -> QueueResult<&str> {
+    let Some((part, nonce)) = id.as_str().split_once('_') else {
+        return Err(QueueError::JobNotFound(id.clone()));
+    };
+    if part.len() != 64
+        || !part.bytes().all(|b| b.is_ascii_hexdigit())
+        || uuid::Uuid::parse_str(nonce).is_err()
+    {
+        return Err(QueueError::JobNotFound(id.clone()));
+    }
+    Ok(part)
+}
+pub(super) struct Index {
+    entries: dashmap::DashMap<String, (u64, Vec<u8>)>,
+    task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+impl Drop for Index {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.get_mut().unwrap().take() {
+            task.abort();
+        }
+    }
+}
+impl Index {
+    fn observe(&self, key: String, revision: u64, value: Vec<u8>, deleted: bool) {
+        use dashmap::mapref::entry::Entry;
+        match self.entries.entry(key) {
+            Entry::Occupied(mut entry) => {
+                if entry.get().0 <= revision {
+                    if deleted {
+                        entry.remove();
+                    } else {
+                        entry.insert((revision, value));
+                    }
+                }
+            }
+            Entry::Vacant(entry) => {
+                if !deleted {
+                    entry.insert((revision, value));
+                }
+            }
+        }
+    }
+}
+impl NatsStore {
+    async fn index(&self) -> QueueResult<&Arc<Index>> {
+        self.index
+            .get_or_try_init(|| async {
+                let index = Arc::new(Index {
+                    entries: Default::default(),
+                    task: Default::default(),
+                });
+                // Last-per-subject replay installs the initial snapshot before claims.
+                let consumer = self
+                    .bucket
+                    .stream
+                    .create_consumer(OrderedConfig {
+                        deliver_subject: format!("_INBOX.{}", uuid::Uuid::new_v4().simple()),
+                        filter_subject: format!("$KV.{}.a.>", self.bucket.name),
+                        deliver_policy: DeliverPolicy::LastPerSubject,
+                        replay_policy: ReplayPolicy::Instant,
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(error)?;
+                let mut pending = consumer.cached_info().num_pending;
+                let mut messages = consumer.messages().await.map_err(error)?;
+                let prefix = format!("$KV.{}.", self.bucket.name);
+                while pending > 0 {
+                    let message = tokio::time::timeout(Duration::from_secs(15), messages.next())
+                        .await
+                        .map_err(error)?
+                        .ok_or_else(|| error("JetStream index closed"))?
+                        .map_err(error)?;
+                    let info = message.info().map_err(error)?;
+                    pending = info.pending;
+                    let deleted = message
+                        .headers
+                        .as_ref()
+                        .and_then(|h| h.get("KV-Operation"))
+                        .is_some();
+                    if let Some(key) = message.subject.strip_prefix(&prefix) {
+                        index.observe(
+                            key.into(),
+                            info.stream_sequence,
+                            message.payload.to_vec(),
+                            deleted,
+                        );
+                    }
+                }
+                let weak = Arc::downgrade(&index);
+                let bucket = self.bucket.clone();
+                let task = tokio::spawn(async move {
+                    loop {
+                        match tokio::time::timeout(Duration::from_secs(60), messages.next()).await {
+                            Ok(Some(Ok(message))) => {
+                                let Some(index) = weak.upgrade() else { break };
+                                if let Ok(info) = message.info() {
+                                    let deleted = message
+                                        .headers
+                                        .as_ref()
+                                        .and_then(|h| h.get("KV-Operation"))
+                                        .is_some();
+                                    if let Some(key) = message.subject.strip_prefix(&prefix) {
+                                        index.observe(
+                                            key.into(),
+                                            info.stream_sequence,
+                                            message.payload.to_vec(),
+                                            deleted,
+                                        );
+                                    }
+                                }
+                                continue;
+                            }
+                            _ => {
+                                tracing::debug!("Rebuilding JetStream queue discovery index");
+                            }
+                        }
+                        // Recreate after disconnect/end/error, and periodically during
+                        // idle periods. This is a replayable hint, never lease authority.
+                        loop {
+                            if weak.upgrade().is_none() {
+                                return;
+                            }
+                            let result = async {
+                                let consumer = bucket
+                                    .stream
+                                    .create_consumer(OrderedConfig {
+                                        deliver_subject: format!(
+                                            "_INBOX.{}",
+                                            uuid::Uuid::new_v4().simple()
+                                        ),
+                                        filter_subject: format!("$KV.{}.a.>", bucket.name),
+                                        deliver_policy: DeliverPolicy::LastPerSubject,
+                                        replay_policy: ReplayPolicy::Instant,
+                                        ..Default::default()
+                                    })
+                                    .await
+                                    .map_err(error)?;
+                                consumer.messages().await.map_err(error)
+                            }
+                            .await;
+                            match result {
+                                Ok(replay) => {
+                                    if let Some(index) = weak.upgrade() {
+                                        index.entries.clear();
+                                    }
+                                    messages = replay;
+                                    break;
+                                }
+                                Err(_) => tokio::time::sleep(Duration::from_millis(250)).await,
+                            }
+                        }
+                    }
+                });
+                *index.task.lock().unwrap() = Some(task);
+                Ok(index)
+            })
+            .await
+    }
+    async fn legacy(&self, tenant: &str) -> QueueResult<()> {
+        if self
+            .bucket
+            .entry(format!("tenant_{}", hex(tenant)))
+            .await
+            .map_err(error)?
+            .is_some_and(|e| e.operation == kv::Operation::Put)
+        {
+            return Err(QueueError::InvalidConfig("Legacy JetStream tenant detected: drain/export with the previous release and select a fresh v2 tenant; stop legacy writers first".into()));
+        }
+        Ok(())
+    }
+    async fn read(&self, tenant: &str, id: &JobId) -> QueueResult<(String, kv::Entry)> {
+        let key = cell(tenant, slot(id)?);
+        if let Some(entry) = self.bucket.entry(&key).await.map_err(error)? {
+            self.index().await?.observe(
+                key.clone(),
+                entry.revision,
+                entry.value.to_vec(),
+                entry.operation != kv::Operation::Put,
+            );
+            if entry.operation == kv::Operation::Put {
+                let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
+                if row.record.job_id == *id {
+                    return Ok((key, entry));
+                }
+            }
+        }
+        let key = history(tenant, id);
+        self.bucket
+            .entry(&key)
+            .await
+            .map_err(error)?
+            .filter(|e| e.operation == kv::Operation::Put)
+            .map(|e| (key, e))
+            .ok_or_else(|| QueueError::JobNotFound(id.clone()))
+    }
+    async fn bytes(&self, tenant: &str, id: &JobId) -> QueueResult<Vec<u8>> {
+        self.bucket
+            .get(payload(tenant, id))
+            .await
+            .map_err(error)?
+            .map(|b| b.to_vec())
+            .ok_or_else(|| error("JetStream job payload missing; storage was lost"))
+    }
+    async fn archive(&self, tenant: &str, row: &StoredRecord) -> QueueResult<()> {
+        let key = history(tenant, &row.record.job_id);
+        let value = serde_json::to_vec(row).map_err(error)?;
+        match self.bucket.create(&key, value.clone().into()).await {
+            Ok(_) => Ok(()),
+            Err(err) => match self.bucket.get(&key).await.map_err(error)? {
+                Some(old) if old.as_ref() == value => Ok(()),
+                _ => Err(error(err)),
+            },
+        }
+    }
+    async fn cas(&self, key: &str, value: Vec<u8>, revision: u64) -> QueueResult<bool> {
+        match self
+            .bucket
+            .update(key, value.clone().into(), revision)
+            .await
+        {
+            Ok(revision) => {
+                self.index()
+                    .await?
+                    .observe(key.into(), revision, value, false);
+                Ok(true)
+            }
+            Err(err) if err.kind() == kv::UpdateErrorKind::WrongLastRevision => Ok(false),
+            Err(err) => Err(error(err)),
+        }
+    }
+    async fn retire(&self, tenant: &str, key: &str) -> QueueResult<()> {
+        if let Some(entry) = self.bucket.entry(key).await.map_err(error)? {
+            if entry.operation != kv::Operation::Put {
+                return Ok(());
+            }
+            let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
+            if row.record.status.is_terminal() {
+                self.archive(tenant, &row).await?;
+                // Deleting only this revision cannot remove a concurrent replacement.
+                if let Err(err) = self
+                    .bucket
+                    .purge_expect_revision(key, Some(entry.revision))
+                    .await
+                {
+                    // A replacement is benign; outages and other errors remain visible.
+                    if self
+                        .bucket
+                        .entry(key)
+                        .await
+                        .map_err(error)?
+                        .is_some_and(|e| e.revision == entry.revision)
+                    {
+                        return Err(error(err));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+#[async_trait]
+impl StateStore for NatsStore {
+    async fn update(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        self.legacy(tenant).await?;
+        let index = self.index().await?;
+        if let Operation::Enqueue(message) = op {
+            let hash = if let Some(dedupe) = &message.idempotency_key {
+                format!(
+                    "{:x}",
+                    Sha256::digest(
+                        serde_json::to_vec(&(&message.queue, &message.job_type, dedupe))
+                            .map_err(error)?
+                    )
+                )
+            } else {
+                format!("{:x}", Sha256::digest(uuid::Uuid::new_v4().as_bytes()))
+            };
+            let key = cell(tenant, &hash);
+            let mut state = TenantState::default();
+            state.apply_at(tenant, op, Utc::now())?;
+            let (_, mut row) = state.jobs.into_iter().next().unwrap();
+            let id = JobId::from(format!("{hash}_{}", uuid::Uuid::new_v4()));
+            row.record.job_id = id.clone();
+            row.record.message.payload_bytes.clear();
+            let value = serde_json::to_vec(&row).map_err(error)?;
+            if message.payload_bytes.len() > self.max_state_bytes
+                || value.len() + 8192 > self.max_state_bytes
+            {
+                return Err(QueueError::InvalidConfig(
+                    "JetStream job exceeds payload or metadata limit".into(),
+                ));
+            }
+            // Immutable payload must be durable before a discoverable job is committed.
+            self.bucket
+                .create(payload(tenant, &id), message.payload_bytes.clone().into())
+                .await
+                .map_err(error)?;
+            for _ in 0..64 {
+                let previous = self.bucket.entry(&key).await.map_err(error)?;
+                let revision = previous.as_ref().map(|e| e.revision).unwrap_or(0);
+                if let Some(entry) = previous.filter(|e| e.operation == kv::Operation::Put) {
+                    let existing: StoredRecord =
+                        serde_json::from_slice(&entry.value).map_err(error)?;
+                    if !existing.record.status.is_terminal() {
+                        index.observe(key.clone(), entry.revision, entry.value.to_vec(), false);
+                        self.bucket
+                            .purge(payload(tenant, &id))
+                            .await
+                            .map_err(error)?;
+                        return Ok(Outcome::Id(existing.record.job_id));
+                    }
+                    self.archive(tenant, &existing).await?;
+                }
+                if self.cas(&key, value.clone(), revision).await? {
+                    return Ok(Outcome::Id(id));
+                }
+            }
+            return Err(error("JetStream enqueue contention"));
+        }
+        if let Operation::Snapshots(ids) = op {
+            let mut result = Vec::with_capacity(ids.len());
+            for id in ids {
+                let (_, entry) = self.read(tenant, id).await?;
+                let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
+                result.push(crate::JobSnapshot::from(&row.record));
+            }
+            return Ok(Outcome::Snapshots(result));
+        }
+        if let Operation::Purge(before) = op {
+            let prefix = format!("h.{}.", hex(tenant));
+            let mut keys = self.bucket.keys().await.map_err(error)?;
+            let mut count = 0;
+            while let Some(key) = keys.next().await {
+                let key = key.map_err(error)?;
+                if !key.starts_with(&prefix) {
+                    continue;
+                }
+                if let Some(entry) = self
+                    .bucket
+                    .entry(&key)
+                    .await
+                    .map_err(error)?
+                    .filter(|e| e.operation == kv::Operation::Put)
+                {
+                    let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
+                    if row.record.updated_at < *before {
+                        self.retire(tenant, &cell(tenant, slot(&row.record.job_id)?))
+                            .await?;
+                        self.bucket
+                            .purge_expect_revision(&key, Some(entry.revision))
+                            .await
+                            .map_err(error)?;
+                        self.bucket
+                            .purge(payload(tenant, &row.record.job_id))
+                            .await
+                            .map_err(error)?;
+                        count += 1;
+                    }
+                }
+            }
+            return Ok(Outcome::Purged(count));
+        }
+        if matches!(op, Operation::Reap) {
+            let prefix = format!("a.{}.", hex(tenant));
+            let keys: Vec<String> = index
+                .entries
+                .iter()
+                .filter(|e| e.key().starts_with(&prefix))
+                .map(|e| e.key().clone())
+                .collect();
+            let mut outcomes = Vec::new();
+            for key in keys {
+                for _ in 0..16 {
+                    let Some(entry) = self
+                        .bucket
+                        .entry(&key)
+                        .await
+                        .map_err(error)?
+                        .filter(|e| e.operation == kv::Operation::Put)
+                    else {
+                        break;
+                    };
+                    let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
+                    if row.record.status.is_terminal() {
+                        self.retire(tenant, &key).await?;
+                        break;
+                    }
+                    if !row.record.lease_expired(Utc::now()) {
+                        break;
+                    }
+                    let mut state = TenantState::default();
+                    state.jobs.insert(row.record.job_id.clone(), row);
+                    let Outcome::Reaped(mut rows) = state.apply_at(tenant, op, Utc::now())? else {
+                        unreachable!()
+                    };
+                    let row = state.jobs.values().next().unwrap();
+                    if self
+                        .cas(
+                            &key,
+                            serde_json::to_vec(row).map_err(error)?,
+                            entry.revision,
+                        )
+                        .await?
+                    {
+                        outcomes.append(&mut rows);
+                        if row.record.status.is_terminal() {
+                            self.retire(tenant, &key).await?;
+                        }
+                        break;
+                    }
+                }
+            }
+            return Ok(Outcome::Reaped(outcomes));
+        }
+        for _ in 0..64 {
+            let id = match op {
+                Operation::Dequeue(queues, _) => {
+                    let prefix = format!("a.{}.", hex(tenant));
+                    let now = Utc::now();
+                    let mut candidates = Vec::new();
+                    for entry in &index.entries {
+                        if entry.key().starts_with(&prefix) {
+                            let row: StoredRecord =
+                                serde_json::from_slice(&entry.value().1).map_err(error)?;
+                            if queues.contains(&row.record.message.queue)
+                                && row.record.message.run_at <= now
+                                && row.record.status.is_eligible(now)
+                            {
+                                candidates.push(row.record);
+                            }
+                        }
+                    }
+                    candidates.sort_by_key(|r| {
+                        (
+                            std::cmp::Reverse(r.message.priority),
+                            r.created_at,
+                            r.job_id.clone(),
+                        )
+                    });
+                    let Some(row) = candidates.first() else {
+                        return Ok(Outcome::Lease(None));
+                    };
+                    row.job_id.clone()
+                }
+                Operation::Get(id)
+                | Operation::Snapshot(id)
+                | Operation::Cancel(id)
+                | Operation::Complete(id, ..)
+                | Operation::Fail(id, ..)
+                | Operation::Heartbeat(id, ..) => id.clone(),
+                _ => unreachable!(),
+            };
+            let (key, entry) = match self.read(tenant, &id).await {
+                Err(QueueError::JobNotFound(_)) if matches!(op, Operation::Cancel(_)) => {
+                    return Ok(Outcome::Canceled(false))
+                }
+                other => other?,
+            };
+            let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
+            if key.starts_with("a.") {
+                index.observe(key.clone(), entry.revision, entry.value.to_vec(), false);
+            }
+            let mut state = TenantState::default();
+            state.jobs.insert(id.clone(), row);
+            let mut outcome = state.apply_at(tenant, op, Utc::now())?;
+            match &mut outcome {
+                Outcome::Record(record) => {
+                    record.message.payload_bytes = self.bytes(tenant, &id).await?;
+                    return Ok(outcome);
+                }
+                Outcome::Snapshot(_) | Outcome::Canceled(false) => return Ok(outcome),
+                Outcome::Lease(None) => continue,
+                _ => {}
+            }
+            let row = &state.jobs[&id];
+            if self
+                .cas(
+                    &key,
+                    serde_json::to_vec(row).map_err(error)?,
+                    entry.revision,
+                )
+                .await?
+            {
+                if row.record.status.is_terminal() {
+                    self.retire(tenant, &key).await?;
+                }
+                if let Outcome::Lease(Some(job)) = &mut outcome {
+                    job.record.message.payload_bytes = self.bytes(tenant, &id).await?;
+                }
+                return Ok(outcome);
+            }
+        }
+        Err(error("JetStream job contention: retry operation"))
+    }
+    async fn tenants(&self) -> QueueResult<Vec<String>> {
+        let index = self.index().await?;
+        let mut tenants = std::collections::HashSet::new();
+        for entry in &index.entries {
+            let row: StoredRecord = serde_json::from_slice(&entry.value().1).map_err(error)?;
+            tenants.insert(row.record.tenant_id);
+        }
+        Ok(tenants.into_iter().collect())
+    }
+}

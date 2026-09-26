@@ -1,0 +1,77 @@
+# Redis and JetStream per-job storage
+
+Both adapters are optional. Neither requires PostgreSQL. Applications can also
+supply their own `JobLedger` implementation for broker adapters.
+
+## Redis
+
+V2 stores metadata and binary payloads in separate per-tenant hashes. Ready,
+delayed, leased and terminal jobs have separate sorted-set indexes. Lua scripts
+atomically compare the selected record, change its state, and update its indexes
+and idempotency entry. Unrelated jobs no longer contend on one tenant document.
+Redis TIME supplies transition timestamps; acknowledgement scripts check expiry
+again at commit. Terminal history does not enter the dequeue selection path.
+All atomic record/index keys share a tenant hash tag. The current connection
+constructor targets a single Redis endpoint, not a Redis Cluster router.
+
+`new` retains compatibility/development behavior: it does not certify persistence.
+Use `new_with_durability(config, RedisDurability::RequireAofAlways)` to fail startup
+unless AOF is enabled, appendfsync is `always`, and maxmemory-policy is `noeviction`.
+This needs permission for INFO and CONFIG GET. `verify_persistence()` can repeat
+those checks after configuration changes. It does not verify replica catch-up,
+failover policy, disk reliability, or a managed provider's guarantees. A service
+with AOF disabled cannot pass this guard.
+
+Retention removes up to 1,000 terminal records and their payloads per call; repeat
+`purge_terminal_before` until it returns zero. Active records are never purged.
+
+## JetStream
+
+A revision-fenced active cell contains one record per idempotency scope (queue,
+job type and key), or one independent record for an unkeyed job. Payloads are
+immutable separate binary values, written before enqueue becomes visible.
+Completion history is archived before the active cell is conditionally removed
+or reused. Crashes between those steps retain a terminal active cell; replay and
+maintenance can finish retirement. Old tokens never authorize a replacement job.
+
+An ordered, replayable watch supplies discovery hints without transferring
+payloads or completed history on every poll. Claims always re-read and CAS the
+actual cell. Watch end/errors trigger reconstruction. The watch is not ownership
+authority. Results remain limited to 4 KiB; admission reserves 8 KiB of metadata
+space for status updates and checks binary payloads against the account limit.
+Maintain account/bucket headroom: per-message checks cannot reserve total provider
+quota. An enqueue whose outcome is unknown can leave an unreferenced payload;
+do not delete payloads merely because a timed-out enqueue returned an error.
+
+Use file storage, no expiry/eviction, discard-new, and leader reads. For clustered
+deployments, `from_replicated_store(bucket, max_payload, min_replicas)` requires
+at least three replicas. Provision server fsync policy and failure-domain placement
+separately; stream replica count alone cannot verify those properties. Native
+JetStream lease deadlines still require synchronized application clocks. CAS
+fences replaced owners, but this does not certify arbitrary wall-clock jumps.
+
+## Upgrade boundary
+
+These are new storage layouts in the unreleased 0.2 work. An existing v1 tenant
+is rejected explicitly rather than silently starting a second ledger. Keep the
+previous binary available to drain/export it, stop legacy writers, and verify an
+offline import into a fresh tenant/bucket before switching. There is no automatic
+Redis/JetStream v1 migration in this change, and no existing hosted tenant is
+rewritten by these constructors. PostgreSQL has its own explicit, fenced
+migration described in [POSTGRES.md](POSTGRES.md).
+
+## Recovery evidence and limits
+
+`run_recovery.py` starts disposable real servers, admits 200 jobs with 64 KiB
+payloads, completes 50, leaves 50 in flight, and queues 100. It kills the server
+process and resumes the same backend instance. The three-node JetStream variant
+kills the actual stream leader and keeps it down. Verification checks every
+acknowledged payload, rejects expired owners, and completes the remaining jobs.
+
+PostgreSQL default WAL durability, Redis AOF/always/noeviction, and JetStream
+three-replica/file/sync-always configurations passed this test. This is controlled
+process-crash/failover evidence, not a proof against complete disk loss, correlated
+regional outages, clock jumps, or undocumented managed-service behavior.
+
+Persistence references: [Redis persistence](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)
+and [JetStream durability](https://docs.nats.io/nats-concepts/jetstream).

@@ -48,16 +48,36 @@ seconds; no duplicate attempts were observed. The earlier single-record polling
 benchmark spent additional time making hundreds of verification requests. The
 portable bounded `get_snapshots` API now verifies up to 1,000 IDs per request.
 
-The 64-KiB gate remains unresolved in this hosted environment. In the optimized
-three-size run, 79/100 offers were admitted at 64 KiB; 21 exceeded the client
-concurrency bound. All admitted jobs completed. Earlier intermediate runs admitted
-all 100 but exceeded the drain deadline. Do not treat a smaller-payload pass as
-certification of the full target or attribute every failure to provider capacity.
+The newer two-round-trip fenced PostgreSQL mutations passed the hosted 64 KiB
+gate twice: 300/300 jobs over 30 seconds (terminal verification 32.871 seconds,
+enqueue p95 756.78 ms), then 600/600 over 60 seconds (terminal verification 61.420
+seconds, p95 276.05 ms). Both used two processes with eight workers each and had
+zero client overloads or duplicate attempts. This closes the previously failing
+single-tenant gate for those observed runs, not every deployment.
 
-A separate no-queue transport probe sends binary parameters to PostgreSQL without
-writing data. It measured p95 latencies of 108 ms, 2,437 ms and 700 ms for 1/16/64
-KiB in one run. This establishes variability on the test connection, not its cause.
-The 100-tenant aggregate workload has not been established.
+The native queue-level harness separately validated 100 tenants at 10 jobs/second
+each with 1 KiB payloads: PostgreSQL and Redis each completed 30,000/30,000 over
+30 seconds; one-node JetStream completed 10,000/10,000 over 10 seconds. It validates
+real persistence APIs, payload integrity, tenant isolation and terminal state,
+without HTTP or external payment effects. These local results do not establish
+that a free hosted instance can deliver the same throughput. The initial Redis
+capacity instance did not establish AOF durability, and one-node JetStream did
+not establish failover; controlled durable profiles are separate tests.
+
+The combined 100-tenant, 64 KiB workload is a separate gate. Early local PostgreSQL
+runs failed, including one with 9,996 admitted and 9,188 completed by the 15-second
+deadline. Do not combine separate small-payload aggregate and large-payload
+single-tenant passes into a claim that the combined target passed.
+
+Reproduce disposable durable-profile capacity tests (100 tenants, 10 jobs/second
+each, bounded admission, five-second drain):
+
+```sh
+cargo build -p hosted-system --release --features redis,nats --locked
+export DOGRS_SYSTEM_BINARY="$PWD/target/release/hosted-system"
+DOGRS_CAPACITY_WORKERS=1 python3 dog-examples/hosted-system/run_recovery.py postgres \
+  --capacity --seconds 30 --bytes 65536 --report-dir /absolute/results
+```
 
 ## Controlled recovery tests
 
@@ -80,12 +100,20 @@ through the public DogRS backend API, rather than checking only that restore
 commands returned success. Drop the isolated restore database after testing.
 Neither test establishes provider failover behavior or a disaster-recovery RPO.
 
+The new disposable provider-process tests also cover PostgreSQL and Redis
+SIGKILL/restart with persisted files, and loss of the actual leader of a
+three-replica JetStream stream while the old leader stays down. Each preserved
+200 acknowledged 64 KiB payloads, rejected 50 expired owners and recovered 150
+unfinished jobs through the same backend instance. The tested Redis configuration
+uses AOF/always/noeviction; JetStream uses file storage and sync-always.
+See [KV storage](../dog-queue/KV-STORAGE.md) for limits and reproduction.
+
 ## Outstanding gates
 
 - Sustained aggregate load, large retained histories, fairness, latency spikes,
   and all payload stages at the agreed traffic rate.
 - Clock skew and clock jumps: PostgreSQL now uses database time for ownership;
-  other ledgers still consult the process clock, and authoritative server clock
+  Redis uses server TIME; native JetStream still consults the process clock, and authoritative server clock
   jumps remain an operational test requirement. A passing no-skew lease test does not certify distributed clock safety.
 - Equivalent controlled recovery/failover evidence for each supported deployment.
 - A durable Redis deployment: the tested Aiven Valkey service has AOF disabled.

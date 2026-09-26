@@ -92,16 +92,17 @@ now names that KV bucket, not a Core NATS subject.
 ## Capacity, security and migration
 
 PostgreSQL v2 uses indexed job rows, binary payloads and a bounded connection pool.
-Redis and JetStream currently serialize tenant state and target modest job volumes.
+Redis v2 uses indexed per-job metadata and separate binary payloads. JetStream
+uses independent active idempotency cells, immutable payloads and separate terminal
+history. Neither rewrites one growing tenant document. See [KV storage and upgrade
+requirements](KV-STORAGE.md) for persistence guards, deployment assumptions,
+retention, legacy data handling and recovery evidence.
+
 Choose a ledger to match the workload; custom durable ledgers are supported through
-`JobLedger`. Keep payloads bounded, use `get_snapshot` for metadata polling, and regularly use
-`purge_terminal_before(ctx, cutoff)` on the ledger. JetStream's maximum value and
-server message limits also bound tenant state. NATS admission reserves 8 KiB per
-record for later status updates within a state budget capped at 900 KB and reduced for smaller account/stream
-payload limits (with 4 KiB reserved for protocol framing). Purge terminal
-history before that budget fills. Persisted result references must serialize to
-at most 4 KiB; error summaries retain at most 256 characters. Benchmark realistic tenant volume
-and maintain free capacity for status updates before deploying.
+`JobLedger`. Keep payloads bounded, use metadata snapshots for status polling, and
+regularly purge terminal history. Persisted result references must serialize to at
+most 4 KiB; error summaries retain at most 256 characters. Maintain provider quota
+headroom for state transitions and benchmark the actual deployment.
 
 PostgreSQL `new` uses `NoTls` for local connections or trusted tunnels;
 `new_with_tls` accepts a certificate-validating connector. Redis supports `rediss`
@@ -109,10 +110,10 @@ with certificate verification. Use persistence, backups and appropriate replicat
 for your recovery requirements. The application must derive `QueueCtx` from a
 trusted identity; accepting arbitrary tenant IDs from HTTP clients is unsafe.
 
-PostgreSQL uses `dogrs_queue_state_v1`; Redis uses `{dogrs-queue-v1}:*`. Existing
-prototype tables/keys/messages are neither imported nor deleted. Drain/export and
-verify a migration before switching. Broker constructors and OAuth/transport API
-changes are described in the repository release notes.
+PostgreSQL v2 uses `dogrs_queue_jobs_v2`, with an explicit offline v1 migration.
+Redis v2 keys use a tenant hash tag; JetStream v2 separates active, payload and
+history keys. Legacy Redis/JetStream tenants are rejected explicitly; drain/export
+and verify migration before switching. Existing prototype data is not deleted.
 
 SQLite/SQLx, UI and workflow placeholders are not queue implementations. They are
 outside this release's broker support; enabling an unused dependency is not support.

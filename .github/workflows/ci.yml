@@ -75,6 +75,10 @@ jobs:
           DOGRS_POSTGRES_URL: host=127.0.0.1 port=5432 user=postgres password=dogrs-test-only
           DOGRS_REDIS_URL: redis://127.0.0.1:6379
           DOGRS_NATS_URL: nats://127.0.0.1:4222
+      - run: cargo test -p dog-queue --features redis,postgres,nats --test kv_records --locked -- --ignored
+        env:
+          DOGRS_REDIS_URL: redis://127.0.0.1:6379
+          DOGRS_NATS_URL: nats://127.0.0.1:4222
       - run: cargo test -p dog-queue --features postgres --test postgres_rows --locked -- --ignored
         env:
           DOGRS_POSTGRES_URL: host=127.0.0.1 port=5432 user=postgres password=dogrs-test-only
@@ -174,3 +178,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --locked
       - run: cargo audit
+
+  provider-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build -p hosted-system --release --features redis,nats --locked
+      - run: |
+          for backend in postgres redis nats; do
+            python3 dog-examples/hosted-system/run_recovery.py "$backend" --report-dir provider-recovery
+          done
+        env:
+          DOGRS_SYSTEM_BINARY: target/release/hosted-system
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: provider-recovery
+          path: provider-recovery
