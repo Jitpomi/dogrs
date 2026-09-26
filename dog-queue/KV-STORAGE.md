@@ -33,9 +33,18 @@ Retention removes up to 1,000 terminal records and their payloads per call; repe
 A revision-fenced active cell contains one record per idempotency scope (queue,
 job type and key), or one independent record for an unkeyed job. Payloads are
 immutable separate binary values, written before enqueue becomes visible.
-Completion history is archived before the active cell is conditionally removed
-or reused. Crashes between those steps retain a terminal active cell; replay and
-maintenance can finish retirement. Old tokens never authorize a replacement job.
+Completion commits the terminal record in its current cell and removes it from
+the in-memory discovery index. It does not wait for a second archive write and
+cleanup write. Before an idempotency scope is reused, enqueue archives the previous
+terminal record and then conditionally replaces the cell. Old tokens never
+authorize a replacement job. Retention covers both current terminal cells and
+archived history, and leaves tombstones that prevent delayed archival from
+recreating intentionally purged records. Purge removes at most 1,000 jobs per call;
+repeat it until no eligible records remain.
+
+NATS submissions have a default concurrency bound of 16 per backend instance.
+`with_enqueue_concurrency` accepts 1–4096 permits. Claims, completions and lease
+updates do not acquire these producer permits.
 
 An ordered, replayable watch supplies discovery hints without transferring
 payloads or completed history on every poll. Claims always re-read and CAS the

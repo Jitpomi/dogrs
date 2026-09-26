@@ -11,6 +11,7 @@ pub struct NatsConfig {
     pub subject: String,
 }
 pub struct NatsStore {
+    pub(super) enqueue_slots: tokio::sync::Semaphore,
     pub(super) bucket: kv::Store,
     pub(super) max_state_bytes: usize,
     pub(super) index: tokio::sync::OnceCell<std::sync::Arc<super::nats_records::Index>>,
@@ -22,6 +23,17 @@ fn error(e: impl std::fmt::Display) -> QueueError {
 }
 
 impl NatsBackend {
+    /// Bound concurrent submissions before they reach JetStream. Claims and
+    /// lease updates do not take producer permits. Defaults to 16 per backend.
+    pub fn with_enqueue_concurrency(mut self, limit: usize) -> QueueResult<Self> {
+        if !(1..=4096).contains(&limit) {
+            return Err(QueueError::InvalidConfig(
+                "NATS enqueue concurrency must be within 1..=4096".into(),
+            ));
+        }
+        self.store.enqueue_slots = tokio::sync::Semaphore::new(limit);
+        Ok(self)
+    }
     /// Local/development convenience: creates a file-backed bucket with one replica.
     /// For clustered production use, provision the bucket and call `from_store`.
     pub async fn new(config: NatsConfig) -> QueueResult<Self> {
@@ -99,6 +111,7 @@ impl NatsBackend {
         let max_state_bytes = state_budget(max_payload, config.max_message_size)?;
         Ok(Self {
             store: NatsStore {
+                enqueue_slots: tokio::sync::Semaphore::new(16),
                 bucket,
                 max_state_bytes,
                 index: Default::default(),

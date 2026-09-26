@@ -60,7 +60,25 @@ fn slot(id: &JobId) -> QueueResult<&str> {
     Ok(part)
 }
 type TenantIndex = dashmap::DashMap<String, (u64, Result<StoredRecord, String>)>;
+#[derive(Default)]
+struct RetiredRevisions {
+    revisions: std::collections::HashMap<String, u64>,
+    order: std::collections::VecDeque<(String, u64)>,
+}
+impl RetiredRevisions {
+    fn remember(&mut self, key: String, revision: u64) {
+        self.revisions.insert(key.clone(), revision);
+        self.order.push_back((key, revision));
+        while self.order.len() > 4096 {
+            let (key, revision) = self.order.pop_front().unwrap();
+            if self.revisions.get(&key) == Some(&revision) {
+                self.revisions.remove(&key);
+            }
+        }
+    }
+}
 pub(super) struct Index {
+    retired: std::sync::Mutex<RetiredRevisions>,
     entries: dashmap::DashMap<String, Arc<TenantIndex>>,
     notifications: dashmap::DashMap<String, Arc<tokio::sync::Notify>>,
     task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -122,7 +140,7 @@ impl Index {
         use dashmap::mapref::entry::Entry;
         // Decode once per observed revision, not on every poll by every worker.
         // Keep malformed metadata as an error so it cannot silently hide jobs.
-        let parsed = || serde_json::from_slice(&value).map_err(|e| e.to_string());
+        let parsed = || serde_json::from_slice::<StoredRecord>(&value).map_err(|e| e.to_string());
         let Some((tenant, _)) = key.strip_prefix("a.").and_then(|s| s.split_once('.')) else {
             return;
         };
@@ -142,26 +160,55 @@ impl Index {
                 row.record.message.run_at <= now && row.record.status.is_eligible(now)
             })
         };
+        // Keep a bounded high-water mark across removal. Serialize this check
+        // with insertion, otherwise an older point read can race terminal removal
+        // and reintroduce a completed candidate. Eviction only loses an advisory
+        // optimization; authoritative reads/CAS continue to fence ownership.
+        let mut retired = self.retired.lock().unwrap();
+        if retired
+            .revisions
+            .get(&key)
+            .is_some_and(|seen| *seen >= revision)
+        {
+            return;
+        }
         let wake = match entries.entry(key) {
             Entry::Occupied(mut entry) if entry.get().0 < revision => {
                 if deleted {
+                    retired.remember(entry.key().clone(), revision);
                     let _ = entry.remove();
                     false
                 } else {
                     let row = parsed();
+                    if row.as_ref().is_ok_and(|r| r.record.status.is_terminal()) {
+                        retired.remember(entry.key().clone(), revision);
+                        let _ = entry.remove();
+                        false
+                    } else {
+                        let wake = runnable(&row);
+                        let _ = entry.insert((revision, row));
+                        wake
+                    }
+                }
+            }
+            Entry::Vacant(entry) if deleted => {
+                retired.remember(entry.key().clone(), revision);
+                false
+            }
+            Entry::Vacant(entry) => {
+                let row = parsed();
+                if row.as_ref().is_ok_and(|r| r.record.status.is_terminal()) {
+                    retired.remember(entry.key().clone(), revision);
+                    false
+                } else {
                     let wake = runnable(&row);
-                    let _ = entry.insert((revision, row));
+                    entry.insert((revision, row));
                     wake
                 }
             }
-            Entry::Vacant(entry) if !deleted => {
-                let row = parsed();
-                let wake = runnable(&row);
-                entry.insert((revision, row));
-                wake
-            }
             _ => false,
         };
+        drop(retired);
         // Re-observing a revision or learning that another worker claimed a job
         // must not wake idle claimers into a notification/point-read feedback loop.
         if wake {
@@ -176,6 +223,7 @@ impl NatsStore {
         self.index
             .get_or_try_init(|| async {
                 let index = Arc::new(Index {
+                    retired: Default::default(),
                     entries: Default::default(),
                     notifications: Default::default(),
                     task: Default::default(),
@@ -354,13 +402,64 @@ impl NatsStore {
     async fn archive(&self, tenant: &str, row: &StoredRecord) -> QueueResult<()> {
         let key = history(tenant, &row.record.job_id);
         let value = serde_json::to_vec(row).map_err(error)?;
-        match self.bucket.create(&key, value.clone().into()).await {
+        // Unlike KV create(), revision zero never recreates a retention tombstone.
+        // A delayed archiver must not resurrect intentionally purged history.
+        match self.bucket.update(&key, value.clone().into(), 0).await {
             Ok(_) => Ok(()),
-            Err(err) => match self.bucket.get(&key).await.map_err(error)? {
-                Some(old) if old.as_ref() == value => Ok(()),
+            Err(err) => match self.bucket.entry(&key).await.map_err(error)? {
+                Some(old) if old.operation != kv::Operation::Put || old.value.as_ref() == value => {
+                    Ok(())
+                }
                 _ => Err(error(err)),
             },
         }
+    }
+    async fn purge_record(&self, tenant: &str, row: &StoredRecord) -> QueueResult<()> {
+        let id = &row.record.job_id;
+        // Fence delayed archival before removing the current cell or payload.
+        self.bucket
+            .purge(history(tenant, id))
+            .await
+            .map_err(error)?;
+        let key = cell(tenant, slot(id)?);
+        if let Some(entry) = self
+            .bucket
+            .entry(&key)
+            .await
+            .map_err(error)?
+            .filter(|e| e.operation == kv::Operation::Put)
+        {
+            let current: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
+            if current.record.job_id == *id {
+                if !current.record.status.is_terminal() {
+                    return Err(error("Cannot purge an active job"));
+                }
+                if let Err(err) = self
+                    .bucket
+                    .purge_expect_revision(&key, Some(entry.revision))
+                    .await
+                {
+                    if let Some(latest) = self
+                        .bucket
+                        .entry(&key)
+                        .await
+                        .map_err(error)?
+                        .filter(|e| e.operation == kv::Operation::Put)
+                    {
+                        let latest: StoredRecord =
+                            serde_json::from_slice(&latest.value).map_err(error)?;
+                        if latest.record.job_id == *id {
+                            return Err(error(err));
+                        }
+                    }
+                }
+            }
+        }
+        self.bucket
+            .purge(payload(tenant, id))
+            .await
+            .map_err(error)?;
+        Ok(())
     }
     async fn cas(&self, key: &str, value: Vec<u8>, revision: u64) -> QueueResult<bool> {
         Ok(self.cas_revision(key, value, revision).await?.is_some())
@@ -430,6 +529,11 @@ impl NatsStore {
 }
 impl NatsStore {
     async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        let _admission = if matches!(op, Operation::Enqueue(_)) {
+            Some(self.enqueue_slots.acquire().await.map_err(error)?)
+        } else {
+            None
+        };
         self.legacy(tenant).await?;
         let index = self.index().await?;
         if let Operation::Enqueue(message) = op {
@@ -509,12 +613,13 @@ impl NatsStore {
             return Ok(Outcome::Snapshots(result));
         }
         if let Operation::Purge(before) = op {
-            let prefix = format!("h.{}.", hex(tenant));
+            let active_prefix = format!("a.{}.", hex(tenant));
+            let history_prefix = format!("h.{}.", hex(tenant));
             let mut keys = self.bucket.keys().await.map_err(error)?;
-            let mut count = 0;
+            let mut purged = std::collections::HashSet::new();
             while let Some(key) = keys.next().await {
                 let key = key.map_err(error)?;
-                if !key.starts_with(&prefix) {
+                if !key.starts_with(&active_prefix) && !key.starts_with(&history_prefix) {
                     continue;
                 }
                 if let Some(entry) = self
@@ -525,22 +630,19 @@ impl NatsStore {
                     .filter(|e| e.operation == kv::Operation::Put)
                 {
                     let row: StoredRecord = serde_json::from_slice(&entry.value).map_err(error)?;
-                    if row.record.updated_at < *before {
-                        self.retire(tenant, &cell(tenant, slot(&row.record.job_id)?))
-                            .await?;
-                        self.bucket
-                            .purge_expect_revision(&key, Some(entry.revision))
-                            .await
-                            .map_err(error)?;
-                        self.bucket
-                            .purge(payload(tenant, &row.record.job_id))
-                            .await
-                            .map_err(error)?;
-                        count += 1;
+                    if row.record.status.is_terminal()
+                        && row.record.updated_at < *before
+                        && !purged.contains(&row.record.job_id)
+                    {
+                        self.purge_record(tenant, &row).await?;
+                        purged.insert(row.record.job_id);
+                        if purged.len() >= 1000 {
+                            break;
+                        }
                     }
                 }
             }
-            return Ok(Outcome::Purged(count));
+            return Ok(Outcome::Purged(purged.len()));
         }
         if matches!(op, Operation::Reap) {
             let keys: Vec<String> = index
@@ -669,17 +771,16 @@ impl NatsStore {
                 _ => {}
             }
             let row = &state.jobs[&id];
-            if let Some(revision) = self
-                .cas_revision(
+            if self
+                .cas(
                     &key,
                     serde_json::to_vec(row).map_err(error)?,
                     entry.revision,
                 )
                 .await?
             {
-                if row.record.status.is_terminal() {
-                    self.retire_revision(tenant, &key, row, revision).await?;
-                }
+                // The terminal CAS is already durable. Retain it in this cell;
+                // enqueue archives it before a future idempotency-key reuse.
                 if let Outcome::Lease(Some(job)) = &mut outcome {
                     job.record.message.payload_bytes = self.bytes(tenant, &id).await?;
                 }
@@ -729,6 +830,7 @@ mod tests {
     async fn discovery_wakes_only_for_new_runnable_revisions() {
         use futures::FutureExt;
         let index = Index {
+            retired: Default::default(),
             entries: Default::default(),
             notifications: Default::default(),
             task: Default::default(),
@@ -755,8 +857,44 @@ mod tests {
         row.record.status = crate::JobStatus::Processing {
             lease_until: Utc::now() + chrono::Duration::seconds(30),
         };
-        index.observe(key, 2, serde_json::to_vec(&row).unwrap(), false);
+        index.observe(key.clone(), 2, serde_json::to_vec(&row).unwrap(), false);
         assert!(duplicate.now_or_never().is_none());
+        row.record.status = crate::JobStatus::Completed {
+            completed_at: Utc::now(),
+        };
+        let terminal = serde_json::to_vec(&row).unwrap();
+        index.observe(key.clone(), 3, terminal.clone(), false);
+        assert!(index.tenant("test").unwrap().is_empty());
+        row.record.status = crate::JobStatus::Enqueued;
+        index.observe(key.clone(), 1, serde_json::to_vec(&row).unwrap(), false);
+        assert!(
+            index.tenant("test").unwrap().is_empty(),
+            "delayed discovery must not resurrect a completed candidate"
+        );
+        row.record.job_id = JobId::new();
+        index.observe(key.clone(), 4, serde_json::to_vec(&row).unwrap(), false);
+        index.observe(key, 3, terminal, false);
+        assert_eq!(
+            index
+                .candidate("test", &["q".into()], &Default::default())
+                .unwrap(),
+            Some(row.record.job_id)
+        );
+    }
+    #[test]
+    fn retired_revision_cache_is_bounded_even_when_one_scope_is_reused() {
+        let mut cache = RetiredRevisions::default();
+        for revision in 1..8192 {
+            cache.remember("same".into(), revision);
+        }
+        assert_eq!(cache.order.len(), 4096);
+        assert_eq!(cache.revisions.len(), 1);
+        assert_eq!(cache.revisions["same"], 8191);
+        for revision in 8192..16384 {
+            cache.remember(revision.to_string(), revision);
+        }
+        assert_eq!(cache.order.len(), 4096);
+        assert_eq!(cache.revisions.len(), 4096);
     }
     #[test]
     fn both_protocol_revision_conflicts_are_retryable_but_other_errors_are_not() {
@@ -786,6 +924,8 @@ mod tests {
             subject: name.clone(),
         })
         .await
+        .unwrap()
+        .with_enqueue_concurrency(1)
         .unwrap();
         // A rejected first-use migration check must not mark the tenant valid.
         let legacy_ctx = QueueCtx::new("legacy-validation");
@@ -907,11 +1047,86 @@ mod tests {
         let next = backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
         assert_eq!(next.record.job_id, replacement);
         assert!(backend
-            .get_record(ctx, old)
+            .get_record(ctx.clone(), old)
             .await
             .unwrap()
             .status
             .is_terminal());
+        // Saturated producer admission must not block completion of an owned job.
+        let permit = backend.store.enqueue_slots.acquire().await.unwrap();
+        let pending = backend.enqueue(ctx.clone(), message());
+        tokio::pin!(pending);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), pending.as_mut())
+                .await
+                .is_err()
+        );
+        backend
+            .ack_complete(ctx.clone(), replacement, next.lease_token, None)
+            .await
+            .unwrap();
+        drop(permit);
+        let active = pending.await.unwrap();
+        // Retention must cover terminal current cells and archived history,
+        // preserve live jobs, and fence a delayed archiver after deletion.
+        assert_eq!(
+            backend
+                .purge_terminal_before(ctx.clone(), Utc::now() + chrono::Duration::seconds(1))
+                .await
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            backend
+                .get_record(ctx.clone(), active)
+                .await
+                .unwrap()
+                .message
+                .payload_bytes
+                .len(),
+            65536
+        );
+        backend.store.archive("hint-race", terminal).await.unwrap();
+        assert!(matches!(
+            backend
+                .get_record(ctx.clone(), terminal.record.job_id.clone())
+                .await,
+            Err(QueueError::JobNotFound(_))
+        ));
+        let reused = backend
+            .enqueue(
+                ctx.clone(),
+                message().with_idempotency_key("retirement-race"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .get_record(ctx, reused)
+                .await
+                .unwrap()
+                .message
+                .payload_bytes
+                .len(),
+            65536
+        );
+        let replay = NatsBackend::new(NatsConfig {
+            url: url.clone(),
+            subject: name.clone(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            replay
+                .store
+                .index()
+                .await
+                .unwrap()
+                .tenant("hint-race")
+                .unwrap()
+                .len(),
+            2
+        );
         let js = async_nats::jetstream::new(async_nats::connect(url).await.unwrap());
         js.delete_key_value(name).await.unwrap();
     }

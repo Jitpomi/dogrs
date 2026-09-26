@@ -198,3 +198,14 @@ migration, as with the Redis backend. Empty JetStream claims can wait up to
 waiter before checking the index. Authoritative reads and revision CAS still
 control ownership; notifications never grant a lease. The bounded wait avoids
 returning immediately while a remote submission's discovery event is in flight.
+
+NATS producer admission is bounded to 16 concurrent enqueues per backend by
+default, configurable with `with_enqueue_concurrency`. Worker operations do not
+consume producer permits. Completion now durably retains the terminal record in
+its current cell; enqueue archives it before reusing an idempotency scope.
+Terminal records are removed from the discovery index, with a bounded 4,096-entry
+revision cache rejecting delayed observations of completed/deleted jobs. Retention
+covers current terminal cells and archived records, preserves active replacements,
+and fences delayed archives with deletion markers. These changes passed live
+history/reuse/retention and leader-loss tests. They have not yet established the
+full sustained 64 KiB capacity target.
