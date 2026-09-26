@@ -104,6 +104,7 @@ cargo add dog-queue
 
 ## Docs
 
+- [Quickstart Guide](docs/quickstart.md)
 - [Design Architecture](docs/design.md)
 - [Configuration](docs/configuration.md)
 
