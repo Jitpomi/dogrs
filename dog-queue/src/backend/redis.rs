@@ -263,7 +263,14 @@ impl RedisStore {
                 previous.insert(row.record.job_id.clone(), raw);
                 state.jobs.insert(row.record.job_id.clone(), row);
             }
-            let mut outcome = state.apply_at(tenant, op, now)?;
+            let metadata_op = if let Operation::Enqueue(message) = op {
+                Some(Operation::Enqueue(super::durable::metadata_message(
+                    message,
+                )))
+            } else {
+                None
+            };
+            let mut outcome = state.apply_at(tenant, metadata_op.as_ref().unwrap_or(op), now)?;
             match &mut outcome {
                 Outcome::Record(row) => {
                     row.message.payload_bytes = self.payload(tenant, &row.job_id).await?;

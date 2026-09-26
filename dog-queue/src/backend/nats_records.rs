@@ -62,6 +62,7 @@ fn slot(id: &JobId) -> QueueResult<&str> {
 type TenantIndex = dashmap::DashMap<String, (u64, Result<StoredRecord, String>)>;
 pub(super) struct Index {
     entries: dashmap::DashMap<String, Arc<TenantIndex>>,
+    notifications: dashmap::DashMap<String, Arc<tokio::sync::Notify>>,
     task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 impl Drop for Index {
@@ -77,6 +78,46 @@ impl Index {
             .get(&hex(tenant))
             .map(|entry| entry.value().clone())
     }
+    fn notification(&self, tenant: &str) -> Arc<tokio::sync::Notify> {
+        self.notifications.entry(hex(tenant)).or_default().clone()
+    }
+    fn candidate(
+        &self,
+        tenant: &str,
+        queues: &[String],
+        skipped: &std::collections::HashSet<JobId>,
+    ) -> QueueResult<Option<JobId>> {
+        let Some(entries) = self.tenant(tenant) else {
+            return Ok(None);
+        };
+        let now = Utc::now();
+        let mut candidate: Option<(
+            std::cmp::Reverse<crate::JobPriority>,
+            chrono::DateTime<Utc>,
+            JobId,
+        )> = None;
+        for entry in entries.iter() {
+            let row = entry.value().1.as_ref().map_err(|e| error(e.clone()))?;
+            if !skipped.contains(&row.record.job_id)
+                && queues.contains(&row.record.message.queue)
+                && row.record.message.run_at <= now
+                && row.record.status.is_eligible(now)
+            {
+                let key = (
+                    std::cmp::Reverse(row.record.message.priority),
+                    row.record.created_at,
+                    &row.record.job_id,
+                );
+                if candidate
+                    .as_ref()
+                    .is_none_or(|old| key < (old.0, old.1, &old.2))
+                {
+                    candidate = Some((key.0, key.1, key.2.clone()));
+                }
+            }
+        }
+        Ok(candidate.map(|(_, _, id)| id))
+    }
     fn observe(&self, key: String, revision: u64, value: Vec<u8>, deleted: bool) {
         use dashmap::mapref::entry::Entry;
         // Decode once per observed revision, not on every poll by every worker.
@@ -91,6 +132,10 @@ impl Index {
             .or_default()
             .value()
             .clone();
+        let changed = self
+            .notifications
+            .get(tenant)
+            .map(|entry| entry.value().clone());
         match entries.entry(key) {
             Entry::Occupied(mut entry) => {
                 if entry.get().0 <= revision {
@@ -107,6 +152,9 @@ impl Index {
                 }
             }
         };
+        if let Some(changed) = changed {
+            changed.notify_waiters();
+        }
     }
 }
 impl NatsStore {
@@ -115,6 +163,7 @@ impl NatsStore {
             .get_or_try_init(|| async {
                 let index = Arc::new(Index {
                     entries: Default::default(),
+                    notifications: Default::default(),
                     task: Default::default(),
                 });
                 // Last-per-subject replay installs the initial snapshot before claims.
@@ -226,6 +275,21 @@ impl NatsStore {
             .await
     }
     async fn legacy(&self, tenant: &str) -> QueueResult<()> {
+        // Migration requires old writers to be stopped before this backend is
+        // used. Validate each tenant once, rather than reading the obsolete v1
+        // key before every claim, completion and snapshot. Concurrent first uses
+        // share validation; errors are never cached as successful checks.
+        let checked = self
+            .checked_tenants
+            .entry(tenant.into())
+            .or_default()
+            .clone();
+        checked
+            .get_or_try_init(|| self.check_legacy(tenant))
+            .await?;
+        Ok(())
+    }
+    async fn check_legacy(&self, tenant: &str) -> QueueResult<()> {
         if self
             .bucket
             .entry(format!("tenant_{}", hex(tenant)))
@@ -368,7 +432,11 @@ impl NatsStore {
             };
             let key = cell(tenant, &hash);
             let mut state = TenantState::default();
-            state.apply_at(tenant, op, Utc::now())?;
+            state.apply_at(
+                tenant,
+                &Operation::Enqueue(super::durable::metadata_message(message)),
+                Utc::now(),
+            )?;
             let (_, mut row) = state.jobs.into_iter().next().unwrap();
             let id = JobId::from(format!("{hash}_{}", uuid::Uuid::new_v4()));
             row.record.job_id = id.clone();
@@ -510,42 +578,24 @@ impl NatsStore {
             return Ok(Outcome::Reaped(outcomes));
         }
         let mut skipped_hints = std::collections::HashSet::new();
+        let discovery_deadline = tokio::time::Instant::now() + Duration::from_millis(50);
         for _ in 0..64 {
             let id = match op {
                 Operation::Dequeue(queues, _) => {
-                    let Some(entries) = index.tenant(tenant) else {
+                    // Register before inspecting the index so a remote enqueue
+                    // cannot arrive between the empty check and notification wait.
+                    let changed = index.notification(tenant);
+                    let notified = changed.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+                    if let Some(id) = index.candidate(tenant, queues, &skipped_hints)? {
+                        id
+                    } else if tokio::time::Instant::now() < discovery_deadline {
+                        let _ = tokio::time::timeout_at(discovery_deadline, notified).await;
+                        continue;
+                    } else {
                         return Ok(Outcome::Lease(None));
-                    };
-                    let now = Utc::now();
-                    let mut candidate: Option<(
-                        std::cmp::Reverse<crate::JobPriority>,
-                        chrono::DateTime<Utc>,
-                        JobId,
-                    )> = None;
-                    for entry in entries.iter() {
-                        let row = entry.value().1.as_ref().map_err(|e| error(e.clone()))?;
-                        if !skipped_hints.contains(&row.record.job_id)
-                            && queues.contains(&row.record.message.queue)
-                            && row.record.message.run_at <= now
-                            && row.record.status.is_eligible(now)
-                        {
-                            let key = (
-                                std::cmp::Reverse(row.record.message.priority),
-                                row.record.created_at,
-                                &row.record.job_id,
-                            );
-                            if candidate
-                                .as_ref()
-                                .is_none_or(|old| key < (old.0, old.1, &old.2))
-                            {
-                                candidate = Some((key.0, key.1, key.2.clone()));
-                            }
-                        }
                     }
-                    let Some((_, _, id)) = candidate else {
-                        return Ok(Outcome::Lease(None));
-                    };
-                    id
                 }
                 Operation::Get(id)
                 | Operation::Snapshot(id)
@@ -628,7 +678,7 @@ impl NatsStore {
                 skipped_hints.insert(id);
             }
         }
-        if matches!(op, Operation::Dequeue(..)) && !skipped_hints.is_empty() {
+        if matches!(op, Operation::Dequeue(..)) {
             return Ok(Outcome::Lease(None));
         }
         Err(error("JetStream job contention: retry operation"))
@@ -690,6 +740,31 @@ mod tests {
         })
         .await
         .unwrap();
+        // A rejected first-use migration check must not mark the tenant valid.
+        let legacy_ctx = QueueCtx::new("legacy-validation");
+        let legacy_key = format!("tenant_{}", hex("legacy-validation"));
+        backend
+            .store
+            .bucket
+            .put(&legacy_key, "{}".into())
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                backend
+                    .enqueue(
+                        legacy_ctx.clone(),
+                        JobMessage::new("legacy", vec![], "bytes", "q")
+                    )
+                    .await,
+                Err(QueueError::InvalidConfig(_))
+            ));
+        }
+        backend.store.bucket.purge(&legacy_key).await.unwrap();
+        backend
+            .enqueue(legacy_ctx, JobMessage::new("legacy", vec![], "bytes", "q"))
+            .await
+            .unwrap();
         let ctx = QueueCtx::new("hint-race");
         let message = || {
             JobMessage::new("hint", vec![1; 65536], "bytes", "q")

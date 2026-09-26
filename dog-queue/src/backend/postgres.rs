@@ -249,7 +249,11 @@ impl PostgresStore {
         let mut client = self.pool.get().await.map_err(error)?;
         if let Operation::Enqueue(message) = op {
             let mut state = TenantState::default();
-            state.apply_at(tenant, op, Utc::now())?;
+            state.apply_at(
+                tenant,
+                &Operation::Enqueue(super::durable::metadata_message(message)),
+                Utc::now(),
+            )?;
             let stored = state.jobs.values().next().unwrap();
             let r = &stored.record;
             let value = metadata(stored)?;

@@ -184,3 +184,17 @@ is unchanged. The selected value is included in every result. Replicated-NATS
 capacity runs use two workers per tenant to overlap independent jobs; PostgreSQL
 and Redis use one. Offered rate, payload size, expected count and all correctness
 checks remain unchanged. Earlier failed profiles remain separate evidence.
+
+### Queue hot-path fixes
+
+Binary PostgreSQL, Redis and JetStream enqueue transitions construct metadata
+without copying the submission payload into temporary records. The original
+bytes are still persisted and verified by the backend contract tests.
+
+JetStream validates legacy storage on each tenant's first use. Concurrent first
+uses share validation; failures remain retryable. Stop all old writers before
+migration, as with the Redis backend. Empty JetStream claims can wait up to
+50 milliseconds for tenant-specific discovery notifications, registering the
+waiter before checking the index. Authoritative reads and revision CAS still
+control ownership; notifications never grant a lease. The bounded wait avoids
+returning immediately while a remote submission's discovery event is in flight.

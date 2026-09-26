@@ -14,6 +14,7 @@ pub struct NatsStore {
     pub(super) bucket: kv::Store,
     pub(super) max_state_bytes: usize,
     pub(super) index: tokio::sync::OnceCell<std::sync::Arc<super::nats_records::Index>>,
+    pub(super) checked_tenants: dashmap::DashMap<String, std::sync::Arc<tokio::sync::OnceCell<()>>>,
 }
 pub type NatsBackend = DurableBackend<NatsStore>;
 fn error(e: impl std::fmt::Display) -> QueueError {
@@ -101,6 +102,7 @@ impl NatsBackend {
                 bucket,
                 max_state_bytes,
                 index: Default::default(),
+                checked_tenants: Default::default(),
             },
             lease_duration: std::time::Duration::from_secs(300),
         })

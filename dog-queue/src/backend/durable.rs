@@ -20,6 +20,31 @@ pub(crate) struct StoredRecord {
     pub(crate) token: Option<LeaseToken>,
 }
 
+/// Binary stores persist payloads separately. Build transition metadata without
+/// allocating and copying the payload only to discard it before serialization.
+pub(crate) fn metadata_message(message: &JobMessage) -> JobMessage {
+    let JobMessage {
+        job_type,
+        payload_bytes: _,
+        codec,
+        queue,
+        priority,
+        max_retries,
+        run_at,
+        idempotency_key,
+    } = message;
+    JobMessage {
+        job_type: job_type.clone(),
+        payload_bytes: Vec::new(),
+        codec: codec.clone(),
+        queue: queue.clone(),
+        priority: *priority,
+        max_retries: *max_retries,
+        run_at: *run_at,
+        idempotency_key: idempotency_key.clone(),
+    }
+}
+
 pub(crate) enum Operation {
     Enqueue(JobMessage),
     Dequeue(Vec<String>, Duration),
