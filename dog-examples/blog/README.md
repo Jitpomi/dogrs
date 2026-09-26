@@ -1,6 +1,6 @@
-# blog-axum (dog.rs example)
+# blog (dog.rs example)
 
-This is a small Axum HTTP server that showcases `dog-core` + `dog-axum`.
+This is a small Axum HTTP server that showcases `dog-core` + `dog-transport`.
 
 It demonstrates:
 
@@ -25,7 +25,7 @@ It demonstrates:
 From the workspace root:
 
 ```bash
-cargo run -p blog-axum
+cargo run -p blog
 ```
 
 It listens on:
@@ -178,7 +178,7 @@ Expected:
 From the workspace root:
 
 ```bash
-cargo test -p blog-axum
+cargo test -p blog
 ```
 
 Optional full workspace run:

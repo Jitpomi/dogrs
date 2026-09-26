@@ -8,7 +8,7 @@ use axum::{
     routing, Json, Router,
 };
 use dog_core::errors::DogError;
-use dog_core::{tenant::TenantContext, DogApp, ServiceMethodKind};
+use dog_core::{tenant::TenantContext, DogApp, DogRequest, DogTransportKind, DogMethod, DogParams};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -37,47 +37,45 @@ pub async fn call_custom<R, P>(
 ) -> Result<serde_json::Value, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: FromRestParams + Send + Sync + Clone + 'static,
+    P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
 {
     let tenant = tenant_from_headers(headers);
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let params = RestParams::from_parts("rest", headers, query, http_method, uri);
-    let params = P::from_rest_params(params);
+    let rest_params = RestParams::from_parts("rest", headers, query, http_method, uri);
+    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+    let params_map = match params_val {
+        serde_json::Value::Object(map) => map.into_iter().collect(),
+        _ => std::collections::HashMap::new(),
+    };
 
-    let svc = app.service(service_name)?;
+    let payload = data.map(|d| serde_json::to_value(d).unwrap_or(serde_json::Value::Null));
 
-    // Fail fast with a clear error if the service does not expose this custom method.
-    ensure_custom_method_supported(service_name, &svc, method)?;
-
-    let res = svc.custom(tenant, method, data, params).await?;
-    Ok(serde_json::to_value(res).map_err(|e| anyhow::anyhow!(e))?)
-}
-
-fn ensure_custom_method_supported<R, P>(
-    service_name: &str,
-    svc: &dog_core::app::ServiceHandle<R, P>,
-    method: &'static str,
-) -> Result<(), DogAxumError>
-where
-    R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: FromRestParams + Send + Sync + Clone + 'static,
-{
-    let capabilities = svc.inner().capabilities();
-    let supported = capabilities.allowed_methods.iter().any(|m| match m {
-        ServiceMethodKind::Custom(name) => name.eq_ignore_ascii_case(method),
-        _ => false,
-    });
-
-    if supported {
-        Ok(())
-    } else {
-        Err(DogError::bad_request(format!(
-            "Service '{}' does not support custom method '{}'",
-            service_name, method
-        ))
-        .into_anyhow()
-        .into())
+    let mut metadata = std::collections::HashMap::new();
+    for (k, v) in headers.iter() {
+        if let Ok(s) = v.to_str() {
+            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+        }
     }
+
+    let req = DogRequest {
+        request_id: Some(request_id),
+        transport: DogTransportKind::Http,
+        service: service_name.to_string(),
+        method: DogMethod::Custom(method.to_string()),
+        id: None,
+        tenant,
+        params: DogParams::from(params_map),
+        payload,
+        metadata,
+    };
+
+    let res = app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+    Ok(res.payload.unwrap_or(serde_json::Value::Null))
 }
 
 pub async fn call_custom_json<R, P>(
@@ -92,7 +90,7 @@ pub async fn call_custom_json<R, P>(
 ) -> Result<axum::Json<serde_json::Value>, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: FromRestParams + Send + Sync + Clone + 'static,
+    P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
 {
     Ok(Json(
         call_custom(
@@ -122,7 +120,7 @@ pub async fn call_custom_redirect<R, P>(
 ) -> Result<Redirect, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: FromRestParams + Send + Sync + Clone + 'static,
+    P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
 {
     let v = call_custom(
         app,
@@ -161,7 +159,7 @@ pub async fn call_custom_redirect_location<R, P>(
 ) -> Result<Redirect, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: FromRestParams + Send + Sync + Clone + 'static,
+    P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
 {
     call_custom_redirect(
         app,
@@ -258,7 +256,7 @@ pub async fn call_custom_json_qd<R, P, Q, D>(
 ) -> Result<axum::Json<serde_json::Value>, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: FromRestParams + Send + Sync + Clone + 'static,
+    P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
     Q: Serialize,
     D: Serialize,
 {
@@ -291,7 +289,7 @@ pub async fn call_custom_redirect_qd<R, P, Q, D>(
 ) -> Result<Redirect, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: FromRestParams + Send + Sync + Clone + 'static,
+    P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
     Q: Serialize,
     D: Serialize,
 {
@@ -323,7 +321,7 @@ pub async fn call_custom_json_q<R, P, Q>(
 ) -> Result<axum::Json<serde_json::Value>, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: FromRestParams + Send + Sync + Clone + 'static,
+    P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
     Q: Serialize,
 {
     let q = query_to_map(query);
@@ -351,7 +349,7 @@ pub async fn call_custom_redirect_q<R, P, Q>(
 ) -> Result<Redirect, DogAxumError>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: FromRestParams + Send + Sync + Clone + 'static,
+    P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
     Q: Serialize,
 {
     let q = query_to_map(query);
@@ -368,47 +366,10 @@ where
     .await
 }
 
-async fn handle_custom_method<R, P>(
-    service_name: &str,
-    svc: &dog_core::app::ServiceHandle<R, P>,
-    method: &str,
-    tenant: TenantContext,
-    data: Option<R>,
-    params: P,
-) -> Result<axum::Json<serde_json::Value>, DogAxumError>
-where
-    R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: Send + Sync + Clone + 'static,
-{
-    // Check if the service declares this custom method in its capabilities
-    let capabilities = svc.inner().capabilities();
-
-    // Check if any custom method with this name exists in capabilities
-    let method_name: Option<&'static str> =
-        capabilities.allowed_methods.iter().find_map(|m| match m {
-            ServiceMethodKind::Custom(name) if name.eq_ignore_ascii_case(method) => Some(*name),
-            _ => None,
-        });
-
-    let Some(method_name) = method_name else {
-        return Err(DogError::bad_request(format!(
-            "Service '{}' does not support custom method '{}'",
-            service_name, method
-        ))
-        .into_anyhow()
-        .into());
-    };
-
-    // Call the custom method through the DogRS pipeline so hooks run
-    let result = svc.custom(tenant, method_name, data, params).await?;
-    let json_result = serde_json::to_value(result).map_err(|e| anyhow::anyhow!(e))?;
-    Ok(axum::Json(json_result))
-}
-
 pub fn service_router<R, P>(service_name: Arc<String>, app: Arc<DogApp<R, P>>) -> Router<()>
 where
     R: Serialize + DeserializeOwned + Send + Sync + 'static,
-    P: FromRestParams + Send + Sync + Clone + 'static,
+    P: FromRestParams + Serialize + DeserializeOwned + Send + Sync + Clone + 'static,
 {
     let state = DogAxumState { app };
 
@@ -422,32 +383,50 @@ where
                       Query(query): Query<std::collections::HashMap<String, String>>,
                       OriginalUri(uri): OriginalUri| async move {
                     let tenant = tenant_from_headers(&headers);
+                    let request_id = headers
+                        .get("x-request-id")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-                    let params = RestParams::from_parts("rest", &headers, query, "GET", &uri);
-                    let params = P::from_rest_params(params);
+                    let rest_params = RestParams::from_parts("rest", &headers, query, "GET", &uri);
+                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let params_map = match params_val {
+                        serde_json::Value::Object(map) => map.into_iter().collect(),
+                        _ => std::collections::HashMap::new(),
+                    };
 
-                    let svc = state.app.service(&service_name)?;
+                    let mut metadata = std::collections::HashMap::new();
+                    for (k, v) in &headers {
+                        if let Ok(s) = v.to_str() {
+                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                        }
+                    }
 
                     // Check for custom method header
-                    if let Some(custom_method) = headers
+                    let method = if let Some(custom_method) = headers
                         .get("x-service-method")
                         .and_then(|h| h.to_str().ok())
                     {
-                        return handle_custom_method(
-                            &service_name,
-                            &svc,
-                            custom_method,
-                            tenant,
-                            None,
-                            params,
-                        )
-                        .await;
-                    }
+                        DogMethod::Custom(custom_method.to_string())
+                    } else {
+                        DogMethod::Find
+                    };
 
-                    let res = svc.find(tenant, params).await?;
-                    Ok::<_, DogAxumError>(Json(
-                        serde_json::to_value(res).map_err(|e| anyhow::anyhow!(e))?,
-                    ))
+                    let req = DogRequest {
+                        request_id: Some(request_id),
+                        transport: DogTransportKind::Http,
+                        service: (*service_name).clone(),
+                        method,
+                        id: None,
+                        tenant,
+                        params: DogParams::from(params_map),
+                        payload: None,
+                        metadata,
+                    };
+
+                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             })
             .post({
@@ -458,54 +437,70 @@ where
                       OriginalUri(uri): OriginalUri,
                       request: Request<Body>| async move {
                     let tenant = tenant_from_headers(&headers);
+                    let request_id = headers
+                        .get("x-request-id")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-                    // Use clean Json extractor - multipart is handled by middleware
                     let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
-                        .await // 10MB limit for JSON
-                        .map_err(|e| {
+                        .await
+                        .map_err(|e| anyhow::anyhow!(e))?;
+
+                    let payload = if !body_bytes.is_empty() {
+                        let val: serde_json::Value = serde_json::from_slice(&body_bytes).map_err(|e| {
                             dog_core::errors::DogError::bad_request(format!(
-                                "Failed to read request body: {}",
+                                "Failed to parse JSON: {}",
                                 e
                             ))
+                            .with_errors(serde_json::json!({
+                                "_schema": [e.to_string()]
+                            }))
                             .into_anyhow()
                         })?;
+                        Some(val)
+                    } else {
+                        None
+                    };
 
-                    let data: R = serde_json::from_slice(&body_bytes).map_err(|e| {
-                        dog_core::errors::DogError::bad_request(format!(
-                            "Failed to parse JSON: {}",
-                            e
-                        ))
-                        .with_errors(serde_json::json!({
-                            "_schema": [e.to_string()]
-                        }))
-                        .into_anyhow()
-                    })?;
+                    let rest_params = RestParams::from_parts("rest", &headers, query, "POST", &uri);
+                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let params_map = match params_val {
+                        serde_json::Value::Object(map) => map.into_iter().collect(),
+                        _ => std::collections::HashMap::new(),
+                    };
 
-                    let params = RestParams::from_parts("rest", &headers, query, "POST", &uri);
-                    let params = P::from_rest_params(params);
-
-                    let svc = state.app.service(&service_name)?;
+                    let mut metadata = std::collections::HashMap::new();
+                    for (k, v) in &headers {
+                        if let Ok(s) = v.to_str() {
+                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                        }
+                    }
 
                     // Check for custom method header
-                    if let Some(custom_method) = headers
+                    let method = if let Some(custom_method) = headers
                         .get("x-service-method")
                         .and_then(|h| h.to_str().ok())
                     {
-                        return handle_custom_method(
-                            &service_name,
-                            &svc,
-                            custom_method,
-                            tenant,
-                            Some(data),
-                            params,
-                        )
-                        .await;
-                    }
+                        DogMethod::Custom(custom_method.to_string())
+                    } else {
+                        DogMethod::Create
+                    };
 
-                    let res = svc.create(tenant, data, params).await?;
-                    Ok::<_, DogAxumError>(Json(
-                        serde_json::to_value(res).map_err(|e| anyhow::anyhow!(e))?,
-                    ))
+                    let req = DogRequest {
+                        request_id: Some(request_id),
+                        transport: DogTransportKind::Http,
+                        service: (*service_name).clone(),
+                        method,
+                        id: None,
+                        tenant,
+                        params: DogParams::from(params_map),
+                        payload,
+                        metadata,
+                    };
+
+                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             }),
         )
@@ -519,13 +514,40 @@ where
                       OriginalUri(uri): OriginalUri,
                       Path(id): Path<String>| async move {
                     let tenant = tenant_from_headers(&headers);
+                    let request_id = headers
+                        .get("x-request-id")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-                    let params = RestParams::from_parts("rest", &headers, query, "GET", &uri);
-                    let params = P::from_rest_params(params);
+                    let rest_params = RestParams::from_parts("rest", &headers, query, "GET", &uri);
+                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let params_map = match params_val {
+                        serde_json::Value::Object(map) => map.into_iter().collect(),
+                        _ => std::collections::HashMap::new(),
+                    };
 
-                    let svc = state.app.service(&service_name)?;
-                    let res = svc.get(tenant, &id, params).await?;
-                    Ok::<_, DogAxumError>(Json(res))
+                    let mut metadata = std::collections::HashMap::new();
+                    for (k, v) in &headers {
+                        if let Ok(s) = v.to_str() {
+                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                        }
+                    }
+
+                    let req = DogRequest {
+                        request_id: Some(request_id),
+                        transport: DogTransportKind::Http,
+                        service: (*service_name).clone(),
+                        method: DogMethod::Get,
+                        id: Some(id),
+                        tenant,
+                        params: DogParams::from(params_map),
+                        payload: None,
+                        metadata,
+                    };
+
+                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             })
             .put({
@@ -537,34 +559,60 @@ where
                       Path(id): Path<String>,
                       request: Request<Body>| async move {
                     let tenant = tenant_from_headers(&headers);
+                    let request_id = headers
+                        .get("x-request-id")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
                     let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
                         .await
-                        .map_err(|e| {
+                        .map_err(|e| anyhow::anyhow!(e))?;
+
+                    let payload = if !body_bytes.is_empty() {
+                        let val: serde_json::Value = serde_json::from_slice(&body_bytes).map_err(|e| {
                             dog_core::errors::DogError::bad_request(format!(
-                                "Failed to read request body: {}",
+                                "Failed to parse JSON: {}",
                                 e
                             ))
+                            .with_errors(serde_json::json!({
+                                "_schema": [e.to_string()]
+                            }))
                             .into_anyhow()
                         })?;
+                        Some(val)
+                    } else {
+                        None
+                    };
 
-                    let data: R = serde_json::from_slice(&body_bytes).map_err(|e| {
-                        dog_core::errors::DogError::bad_request(format!(
-                            "Failed to parse JSON: {}",
-                            e
-                        ))
-                        .with_errors(serde_json::json!({
-                            "_schema": [e.to_string()]
-                        }))
-                        .into_anyhow()
-                    })?;
+                    let rest_params = RestParams::from_parts("rest", &headers, query, "PUT", &uri);
+                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let params_map = match params_val {
+                        serde_json::Value::Object(map) => map.into_iter().collect(),
+                        _ => std::collections::HashMap::new(),
+                    };
 
-                    let params = RestParams::from_parts("rest", &headers, query, "PUT", &uri);
-                    let params = P::from_rest_params(params);
+                    let mut metadata = std::collections::HashMap::new();
+                    for (k, v) in &headers {
+                        if let Ok(s) = v.to_str() {
+                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                        }
+                    }
 
-                    let svc = state.app.service(&service_name)?;
-                    let res = svc.update(tenant, &id, data, params).await?;
-                    Ok::<_, DogAxumError>(Json(res))
+                    let req = DogRequest {
+                        request_id: Some(request_id),
+                        transport: DogTransportKind::Http,
+                        service: (*service_name).clone(),
+                        method: DogMethod::Update,
+                        id: Some(id),
+                        tenant,
+                        params: DogParams::from(params_map),
+                        payload,
+                        metadata,
+                    };
+
+                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             })
             .patch({
@@ -576,34 +624,60 @@ where
                       Path(id): Path<String>,
                       request: Request<Body>| async move {
                     let tenant = tenant_from_headers(&headers);
+                    let request_id = headers
+                        .get("x-request-id")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
                     let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
                         .await
-                        .map_err(|e| {
+                        .map_err(|e| anyhow::anyhow!(e))?;
+
+                    let payload = if !body_bytes.is_empty() {
+                        let val: serde_json::Value = serde_json::from_slice(&body_bytes).map_err(|e| {
                             dog_core::errors::DogError::bad_request(format!(
-                                "Failed to read request body: {}",
+                                "Failed to parse JSON: {}",
                                 e
                             ))
+                            .with_errors(serde_json::json!({
+                                "_schema": [e.to_string()]
+                            }))
                             .into_anyhow()
                         })?;
+                        Some(val)
+                    } else {
+                        None
+                    };
 
-                    let data: R = serde_json::from_slice(&body_bytes).map_err(|e| {
-                        dog_core::errors::DogError::bad_request(format!(
-                            "Failed to parse JSON: {}",
-                            e
-                        ))
-                        .with_errors(serde_json::json!({
-                            "_schema": [e.to_string()]
-                        }))
-                        .into_anyhow()
-                    })?;
+                    let rest_params = RestParams::from_parts("rest", &headers, query, "PATCH", &uri);
+                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let params_map = match params_val {
+                        serde_json::Value::Object(map) => map.into_iter().collect(),
+                        _ => std::collections::HashMap::new(),
+                    };
 
-                    let params = RestParams::from_parts("rest", &headers, query, "PATCH", &uri);
-                    let params = P::from_rest_params(params);
+                    let mut metadata = std::collections::HashMap::new();
+                    for (k, v) in &headers {
+                        if let Ok(s) = v.to_str() {
+                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                        }
+                    }
 
-                    let svc = state.app.service(&service_name)?;
-                    let res = svc.patch(tenant, Some(&id), data, params).await?;
-                    Ok::<_, DogAxumError>(Json(res))
+                    let req = DogRequest {
+                        request_id: Some(request_id),
+                        transport: DogTransportKind::Http,
+                        service: (*service_name).clone(),
+                        method: DogMethod::Patch,
+                        id: Some(id),
+                        tenant,
+                        params: DogParams::from(params_map),
+                        payload,
+                        metadata,
+                    };
+
+                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             })
             .delete({
@@ -614,13 +688,40 @@ where
                       OriginalUri(uri): OriginalUri,
                       Path(id): Path<String>| async move {
                     let tenant = tenant_from_headers(&headers);
+                    let request_id = headers
+                        .get("x-request-id")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-                    let params = RestParams::from_parts("rest", &headers, query, "DELETE", &uri);
-                    let params = P::from_rest_params(params);
+                    let rest_params = RestParams::from_parts("rest", &headers, query, "DELETE", &uri);
+                    let params_val = serde_json::to_value(rest_params).map_err(|e| anyhow::anyhow!(e))?;
+                    let params_map = match params_val {
+                        serde_json::Value::Object(map) => map.into_iter().collect(),
+                        _ => std::collections::HashMap::new(),
+                    };
 
-                    let svc = state.app.service(&service_name)?;
-                    let res = svc.remove(tenant, Some(&id), params).await?;
-                    Ok::<_, DogAxumError>(Json(res))
+                    let mut metadata = std::collections::HashMap::new();
+                    for (k, v) in &headers {
+                        if let Ok(s) = v.to_str() {
+                            metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
+                        }
+                    }
+
+                    let req = DogRequest {
+                        request_id: Some(request_id),
+                        transport: DogTransportKind::Http,
+                        service: (*service_name).clone(),
+                        method: DogMethod::Remove,
+                        id: Some(id),
+                        tenant,
+                        params: DogParams::from(params_map),
+                        payload: None,
+                        metadata,
+                    };
+
+                    let res = state.app.handle(req).await.map_err(|e| DogAxumError::from(e))?;
+                    Ok::<_, DogAxumError>(Json(res.payload.unwrap_or(serde_json::Value::Null)))
                 }
             }),
         )

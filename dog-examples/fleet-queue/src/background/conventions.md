@@ -13,7 +13,7 @@ use dog_queue::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use dog_core::tenant::TenantContext;
-use dog_axum::AxumApp;
+use dog_core::DogApp;
 use serde_json::{json, Value};
 use crate::services::FleetParams;
 
@@ -58,7 +58,8 @@ pub struct JobName {
 // Note: Jobs now use crate::background::FleetContext instead of defining their own
 #[derive(Clone)]
 pub struct FleetContext {
-    pub app: Arc<AxumApp<Value, FleetParams>>,
+    pub app: DogApp<Value, FleetParams>,
+    pub tenant_id: String,
 }
 
 #[async_trait]
@@ -116,12 +117,11 @@ use tokio::time::{interval, Duration};
 
 pub struct BackgroundSystem {
     adapter: Arc<QueueAdapter<MemoryBackend>>,
-    worker_handles: Vec<WorkerHandle>,
-    context: FleetContext, // Unified context for all jobs
+    worker_handles: Mutex<Vec<WorkerHandle>>,
 }
 
 impl BackgroundSystem {
-    pub async fn new(app: Arc<AxumApp<Value, FleetParams>>) -> Result<Self> {
+    pub async fn new() -> Result<Self> {
         let backend = MemoryBackend::new();
         
         // Create queue adapter with proper configuration
@@ -207,7 +207,8 @@ All jobs now use a unified `FleetContext` defined in `background/mod.rs`. This e
 // background/mod.rs - Unified context definition
 #[derive(Clone)]
 pub struct FleetContext {
-    pub app: Arc<AxumApp<Value, FleetParams>>,
+    pub app: DogApp<Value, FleetParams>,
+    pub tenant_id: String,
 }
 
 // jobs/mod.rs - No more context aliases needed

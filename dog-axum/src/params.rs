@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 
-use axum::http::HeaderMap;
-use axum::http::Uri;
-
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct RestParams {
     pub provider: String,
     pub headers: HashMap<String, String>,
@@ -16,10 +13,10 @@ pub struct RestParams {
 impl RestParams {
     pub fn from_parts(
         provider: &str,
-        headers: &HeaderMap,
+        headers: &axum::http::HeaderMap,
         query: HashMap<String, String>,
         method: &str,
-        uri: &Uri,
+        uri: &axum::http::Uri,
     ) -> Self {
         let mut out = Self {
             provider: provider.to_string(),

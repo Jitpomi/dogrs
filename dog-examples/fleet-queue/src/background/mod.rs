@@ -7,8 +7,7 @@ use crate::services::FleetParams;
 use anyhow::Result;
 use dog_core::DogApp;
 use dog_queue::backend::memory::MemoryBackend;
-use dog_queue::prelude::*;
-use dog_queue::WorkerHandle;
+use dog_queue::{QueueAdapter, QueueCtx, Job, EnqueueOptions, WorkerHandle};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
@@ -33,8 +32,10 @@ impl BackgroundSystem {
         // Create memory backend for now (can be swapped for Redis/PostgreSQL)
         let backend = MemoryBackend::new();
 
-        // Use dog-queue's default configuration - no need for excessive env var parsing
-        let adapter = Arc::new(QueueAdapter::new(backend));
+        // Use custom configuration with long idle timeout so workers don't shutdown during testing
+        let mut config = dog_queue::QueueConfig::default();
+        config.worker_idle_timeout = std::time::Duration::from_secs(86400); // 24 hours
+        let adapter = Arc::new(QueueAdapter::with_config(backend, config));
 
         // Register all implemented job types
         adapter.register_job::<GPSTrackingJob>().await?;
@@ -79,10 +80,15 @@ impl BackgroundSystem {
 
     /// Enqueue a GPS tracking job for a specific assignment
     pub async fn enqueue_gps_tracking(&self, assignment_id: String) -> Result<()> {
+        self.enqueue_gps_tracking_opts(assignment_id, EnqueueOptions::immediate()).await
+    }
+
+    /// Enqueue a GPS tracking job with options
+    pub async fn enqueue_gps_tracking_opts(&self, assignment_id: String, opts: EnqueueOptions) -> Result<()> {
         let ctx = QueueCtx::new("fleet_tenant".to_string());
         let job = GPSTrackingJob::new(assignment_id);
 
-        self.adapter.enqueue(ctx, job).await?;
+        self.adapter.enqueue_opts(ctx, job, opts).await?;
         Ok(())
     }
 
@@ -93,10 +99,46 @@ impl BackgroundSystem {
         traffic_delay_minutes: i32,
         trigger_reason: String,
     ) -> Result<()> {
+        self.enqueue_route_rebalancing_opts(affected_routes, traffic_delay_minutes, trigger_reason, EnqueueOptions::immediate()).await
+    }
+
+    /// Enqueue a Route Rebalancing job with options
+    pub async fn enqueue_route_rebalancing_opts(
+        &self,
+        affected_routes: Vec<String>,
+        traffic_delay_minutes: i32,
+        trigger_reason: String,
+        opts: EnqueueOptions,
+    ) -> Result<()> {
         let ctx = QueueCtx::new("fleet_tenant".to_string());
         let job = RouteRebalancingJob::new(affected_routes, traffic_delay_minutes, trigger_reason);
 
-        self.adapter.enqueue(ctx, job).await?;
+        self.adapter.enqueue_opts(ctx, job, opts).await?;
+        Ok(())
+    }
+
+    /// Enqueue a Route Rebalancing job with options and repeats
+    pub async fn enqueue_route_rebalancing_repeat(
+        &self,
+        affected_routes: Vec<String>,
+        traffic_delay_minutes: i32,
+        trigger_reason: String,
+        repeat_interval_seconds: Option<u64>,
+        repeat_count: Option<u32>,
+        max_repeats: Option<u32>,
+        opts: EnqueueOptions,
+    ) -> Result<()> {
+        let ctx = QueueCtx::new("fleet_tenant".to_string());
+        let job = RouteRebalancingJob {
+            affected_routes,
+            traffic_delay_minutes,
+            trigger_reason,
+            repeat_interval_seconds,
+            repeat_count,
+            max_repeats,
+        };
+
+        self.adapter.enqueue_opts(ctx, job, opts).await?;
         Ok(())
     }
 

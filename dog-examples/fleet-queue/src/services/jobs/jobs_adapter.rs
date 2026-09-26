@@ -18,6 +18,16 @@ impl JobsAdapter {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("job_type is required"))?;
 
+        let delay_seconds = data
+            .get("delay_seconds")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let mut opts = dog_queue::EnqueueOptions::immediate();
+        if delay_seconds > 0 {
+            opts = opts.with_run_at(chrono::Utc::now() + chrono::Duration::seconds(delay_seconds));
+        }
+
         match job_type {
             "gps_tracking" => {
                 let assignment_id = data
@@ -26,13 +36,14 @@ impl JobsAdapter {
                     .ok_or_else(|| anyhow::anyhow!("assignment_id is required for gps_tracking"))?;
 
                 self.background_system
-                    .enqueue_gps_tracking(assignment_id.to_string())
+                    .enqueue_gps_tracking_opts(assignment_id.to_string(), opts)
                     .await?;
 
                 Ok(serde_json::json!({
                     "status": "enqueued",
                     "job_type": "gps_tracking",
                     "assignment_id": assignment_id,
+                    "delay_seconds": delay_seconds,
                     "timestamp": chrono::Utc::now().to_rfc3339()
                 }))
             }
@@ -45,12 +56,13 @@ impl JobsAdapter {
                     .to_string();
 
                 self.background_system
-                    .enqueue_route_rebalancing(vec!["ALL".to_string()], 0, trigger_reason)
+                    .enqueue_route_rebalancing_opts(vec!["ALL".to_string()], 0, trigger_reason, opts)
                     .await?;
 
                 Ok(serde_json::json!({
                     "status": "enqueued",
                     "job_type": "route_rebalancing",
+                    "delay_seconds": delay_seconds,
                     "timestamp": chrono::Utc::now().to_rfc3339()
                 }))
             }

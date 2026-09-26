@@ -15,7 +15,9 @@ dotenvy = "0.15"
 reqwest = { version = "0.13", features = ["json"] }
 chrono = { version = "0.4", features = ["serde"] }
 urlencoding = "2.1"
-dog-axum = { path = "../../dog-axum" }
+dog-transport = { path = "../../dog-transport", features = ["http"] }
+axum = { version = "0.8.9", features = ["macros", "json"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 dog-core = { path = "../../dog-core" }
 dog-typedb = { path = "../../dog-typedb" }
 dog-queue = { path = "../../dog-queue" }

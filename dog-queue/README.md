@@ -411,16 +411,79 @@ Cancel jobs before they're processed:
 
 ```rust
 // Cancel a specific job
-adapter.backend().cancel_job(ctx, job_id).await?;
+adapter.cancel(ctx.clone(), job_id.clone()).await?;
 
 // Try to acknowledge completion of a canceled job
-match adapter.backend().ack_complete(ctx, job_id, result).await {
+// (Cancel-wins semantics: the lease token or job status check will return JobCanceled)
+match adapter.backend().ack_complete(ctx, job_id, lease_token, Some("result".to_string())).await {
     Err(QueueError::JobCanceled) => {
         println!("Job was canceled - cancel wins!");
     }
     Ok(_) => println!("Job completed"),
     Err(e) => println!("Other error: {}", e),
 }
+```
+
+### Enqueuing Pre-Serialized Job Messages
+
+For advanced use cases (such as scheduling recurring tasks or routing messages dynamically), `QueueAdapter` provides the `enqueue_message` method. This allows enqueuing a pre-serialized `JobMessage` without requiring compile-time knowledge of the concrete `Job` type:
+
+```rust
+use dog_queue::{JobMessage, JobPriority, QueueCtx};
+use chrono::Utc;
+
+let job_message = JobMessage {
+    job_type: "fetch_inbox_snapshot".to_string(),
+    payload_bytes: serde_json::to_vec(&job_payload)?,
+    codec: "json".to_string(),
+    queue: "default".to_string(),
+    priority: JobPriority::High,
+    max_retries: 5,
+    run_at: Utc::now(),
+    idempotency_key: Some("unique_snapshot_key".to_string()),
+};
+
+let ctx = QueueCtx::new("tenant_abc".to_string());
+adapter.enqueue_message(ctx, job_message).await?;
+```
+
+### Recurring & Cron Jobs
+
+Schedule periodic/recurring tasks (cron-based). This requires the `cron-scheduling` feature flag in `Cargo.toml`.
+
+Using `Scheduler` and the new `QueueAdapter::enqueue_message` capability, recurring jobs can be scheduled in-process:
+
+```rust
+use dog_queue::{Scheduler, JobMessage, JobPriority, QueueCtx};
+use chrono::Utc;
+
+// Construct the scheduler wrapping your adapter
+let scheduler = Scheduler::new(adapter.clone());
+
+// Define the JobMessage containing the pre-serialized job payload
+let snapshot_job = FetchInboxSnapshotJob {
+    user_id: "alice@example.com".to_string(),
+    date: "2026-06-22".to_string(),
+};
+
+let job_message = JobMessage {
+    job_type: "fetch_inbox_snapshot".to_string(),
+    payload_bytes: serde_json::to_vec(&snapshot_job)?,
+    codec: "json".to_string(),
+    queue: "default".to_string(),
+    priority: JobPriority::Normal,
+    max_retries: 3,
+    run_at: Utc::now(),
+    idempotency_key: None,
+};
+
+let ctx = QueueCtx::new("alice@example.com".to_string());
+
+// Schedule the job to run every hour using a standard cron expression
+let handle = scheduler.schedule("0 * * * *".to_string(), job_message, ctx)?;
+
+// To stop the schedule at any time, cancel using the handle:
+scheduler.cancel(handle)?;
 ```
 
 ## Observability
@@ -442,9 +505,28 @@ let avg_duration = metrics.get_average_execution_time("send_email");
 
 ## Backends
 
-### Memory Backend (Development)
+Dog-Queue features a fully decoupled, pluggable backend architecture. Each storage/transport client is gated behind Cargo features, allowing you to compile only the clients your system needs.
 
-Perfect for development, testing, and single-node applications:
+### Feature Flags
+
+To enable specific backends, add the corresponding feature flags in your `Cargo.toml`:
+
+```toml
+[dependencies]
+dog-queue = { version = "0.1", features = [
+    "redis",          # Redis backend
+    "postgres",       # PostgreSQL backend
+    "rabbitmq",       # RabbitMQ (via lapin)
+    "nats",           # NATS (via async-nats)
+    "kafka",          # Kafka (via rdkafka & rskafka)
+    "aws-sqs",        # AWS SQS backend
+    "gcp-pubsub",     # GCP PubSub backend
+] }
+```
+
+### Memory Backend (Development & Testing)
+
+Perfect for local development, testing, and single-node applications. Stores all job structures and lease tracking in-memory:
 
 ```rust
 use dog_queue::backend::memory::MemoryBackend;
@@ -452,26 +534,117 @@ use dog_queue::backend::memory::MemoryBackend;
 let backend = MemoryBackend::new();
 ```
 
-### Redis Backend (Coming Soon)
+### Redis Backend
 
-For distributed, production deployments:
+For distributed, high-performance production deployments. Uses Redis hash maps and sorted sets for queue management:
 
 ```rust
-// Coming in v0.2
-use dog_queue::backend::redis::RedisBackend;
+use dog_queue::backend::redis::{RedisBackend, RedisConfig};
 
-let backend = RedisBackend::new("redis://localhost:6379").await?;
+let config = RedisConfig {
+    connection_string: "redis://127.0.0.1:6379".to_string(),
+};
+let backend = RedisBackend::new(config).await?;
 ```
 
-### PostgreSQL Backend (Coming Soon)
+### PostgreSQL Backend
 
-For applications already using PostgreSQL:
+For applications that prefer storing job queues and logs in a relational database. Automatically runs schema migrations and supports lease reclaims via querying `lease_until`:
 
 ```rust
-// Coming in v0.2
-use dog_queue::backend::postgres::PostgresBackend;
+use dog_queue::backend::postgres::{PostgresBackend, PostgresConfig};
 
-let backend = PostgresBackend::new("postgresql://localhost/mydb").await?;
+let config = PostgresConfig {
+    connection_string: "postgresql://postgres:password@localhost/mydb".to_string(),
+};
+let backend = PostgresBackend::new(config).await?;
+```
+
+### RabbitMQ Backend
+
+Leverages the official `lapin` AMQP client library. Features generic map-based configurations to avoid vendor type leakage:
+
+```rust
+use dog_queue::backend::rabbitmq::{RabbitMqBackend, RabbitMqConfig};
+use std::collections::HashMap;
+
+let config = RabbitMqConfig {
+    uri: "amqp://127.0.0.1:5672/%2f".to_string(),
+    queue_name: "my_queue".to_string(),
+    exchange: Some("my_exchange".to_string()),
+    routing_key: Some("my_routing_key".to_string()),
+    durable: true,
+    prefetch: Some(10),
+    arguments: HashMap::new(), // Generic map of custom AMQP arguments
+    prefetch_count: None,
+    prefetch_global: None,
+    auto_ack: None,
+    exclusive: None,
+    no_local: None,
+    no_wait: None,
+    nowait: None,
+};
+let backend = RabbitMqBackend::new(config).await?;
+```
+
+### NATS Backend
+
+A high-performance pub-sub queue backend driven by the modern, async-first `async-nats` client:
+
+```rust
+use dog_queue::backend::nats::nats::{NatsBackend, NatsConfig};
+
+let config = NatsConfig {
+    url: "nats://localhost:4222".to_string(),
+    subject: "dog_jobs".to_string(),
+};
+let backend = NatsBackend::new(config).await?;
+```
+
+### Kafka Backend
+
+Supports both standard `rdkafka` (via `kafka-rdkafka` feature) and the pure-Rust `rskafka` client (via `kafka-rskafka` feature):
+
+```rust
+use dog_queue::backend::kafka::{KafkaBackend, KafkaConfigStruct};
+
+let config = KafkaConfigStruct {
+    brokers: "localhost:9092".to_string(),
+    topic: "my_topic".to_string(),
+    group_id: "my_group".to_string(),
+};
+let backend = KafkaBackend::new(config).await?;
+```
+
+### AWS SQS Backend
+
+Integrates directly with AWS SQS using the official AWS SDK for Rust:
+
+```rust
+use dog_queue::backend::aws_sqs::aws_sqs::{AwsSqsBackend, AwsSqsConfig};
+
+let config = AwsSqsConfig {
+    region: "us-east-1".to_string(),
+    access_key: "AWS_ACCESS_KEY".to_string(),
+    secret_key: "AWS_SECRET_KEY".to_string(),
+    queue_url: "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue".to_string(),
+};
+let backend = AwsSqsBackend::new(config).await?;
+```
+
+### GCP Pub/Sub Backend
+
+Integrates with Google Cloud Pub/Sub using the official `google-cloud-pubsub` client library:
+
+```rust
+use dog_queue::backend::gcp_pubsub::gcp_pubsub::{GcpPubSubBackend, GcpPubSubConfig};
+
+let config = GcpPubSubConfig {
+    project_id: "my-gcp-project".to_string(),
+    topic: "my-topic".to_string(),
+    subscription: "my-subscription".to_string(),
+};
+let backend = GcpPubSubBackend::new(config).await?;
 ```
 
 ## Error Handling
@@ -550,12 +723,17 @@ Check out the `examples/` directory for complete working examples:
 - ✅ Job cancellation
 - ✅ Idempotency support
 - ✅ Basic observability
-- 🔄 Redis backend (v0.2)
-- 🔄 PostgreSQL backend (v0.2)
-- 🔄 Full OpenTelemetry integration (v0.2)
-- 🔄 Workflow engine (v0.3)
-- 🔄 Cron scheduling (v0.3)
-- 🔄 Web UI (v0.4)
+- ✅ Redis backend
+- ✅ PostgreSQL backend
+- ✅ RabbitMQ backend
+- ✅ NATS backend
+- ✅ Kafka backend
+- ✅ AWS SQS backend
+- ✅ GCP PubSub backend
+- ✅ Cron scheduling
+- 🔄 Full OpenTelemetry integration
+- 🔄 Workflow engine
+- 🔄 Web UI
 
 ## Contributing
 

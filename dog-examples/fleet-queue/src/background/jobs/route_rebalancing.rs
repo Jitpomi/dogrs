@@ -1,7 +1,7 @@
 use crate::services::FleetParams;
 use async_trait::async_trait;
 use dog_core::tenant::TenantContext;
-use dog_queue::prelude::*;
+use dog_queue::{Job, JobError, JobPriority};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,6 +9,12 @@ pub struct RouteRebalancingJob {
     pub affected_routes: Vec<String>,
     pub traffic_delay_minutes: i32,
     pub trigger_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_interval_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_repeats: Option<u32>,
 }
 
 impl RouteRebalancingJob {
@@ -21,6 +27,9 @@ impl RouteRebalancingJob {
             affected_routes,
             traffic_delay_minutes,
             trigger_reason,
+            repeat_interval_seconds: None,
+            repeat_count: None,
+            max_repeats: None,
         }
     }
 }
@@ -34,14 +43,15 @@ impl Job for RouteRebalancingJob {
     const PRIORITY: JobPriority = JobPriority::High;
     const MAX_RETRIES: u32 = 2;
 
-    async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
+    async fn execute(&self, ctx: Self::Context) -> std::result::Result<Self::Result, JobError> {
         println!(
             "🛣️  ROUTE REBALANCING JOB EXECUTING | tenant={} | routes={:?} | reason={}",
             ctx.tenant_id, self.affected_routes, self.trigger_reason
         );
 
         let tenant_ctx = TenantContext::new(ctx.tenant_id.clone());
-        let params = FleetParams::default();
+        let mut params = FleetParams::default();
+        params.path = "/operations".to_string();
 
         let operations_service = ctx
             .app

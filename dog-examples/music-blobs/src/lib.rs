@@ -1,3 +1,4 @@
+pub mod multipart;
 mod app;
 mod channels;
 mod hooks;
@@ -8,10 +9,8 @@ mod services;
 
 use std::sync::Arc;
 
-use dog_axum::{
-    middlewares::{FileEncoding, MultipartConfig, MultipartToJson},
-    AxumApp,
-};
+use dog_core::DogApp;
+use dog_transport::{IntoDogService, http::DogHttpService};
 use serde_json::Value;
 
 pub use services::MusicParams;
@@ -27,37 +26,21 @@ impl MusicMultipartDefaults {
     const FILE_ENCODING: &'static str = "base64";
 }
 
-pub async fn build() -> anyhow::Result<AxumApp<Value, MusicParams>> {
+pub async fn build() -> anyhow::Result<(DogApp<Value, MusicParams>, DogHttpService<Value, MusicParams>)> {
     let mut builder = app::build_builder().await?;
 
     let state = builder
         .get::<Arc<rustfs::RustFsState>>("rustfs")
         .ok_or(anyhow::anyhow!("RustFsState not found"))?;
 
-    let svcs = services::configure(&mut builder, Arc::clone(&state))?;
+    services::configure(&mut builder, Arc::clone(&state))?;
 
-    let config = multipart_config();
+    let dog = builder.build();
+    let http_service = dog.clone().into_service(
+        dog_transport::HttpOptions::default().route("/music", "music")
+    );
 
-    let mut ax = dog_axum::axum(builder.build())
-        .use_service_with("/music", svcs.music, MultipartToJson::with_config(config))
-        .service("/health", || async { "ok" });
-
-    // Add other middleware layers to router
-    ax.router = ax
-        .router
-        .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB to match dog-blob config
-        .layer(
-            tower_http::cors::CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any),
-        )
-        .fallback_service(tower_http::services::ServeDir::new(
-            std::env::var("STATIC_DIR")
-                .unwrap_or_else(|_| format!("{}/static", env!("CARGO_MANIFEST_DIR"))),
-        ));
-
-    Ok(ax)
+    Ok((dog, http_service))
 }
 
 fn env_var_or<T>(key: &str, default: T) -> T
@@ -71,27 +54,8 @@ where
         .unwrap_or(default)
 }
 
-fn process_audio_file(
-    ctx: &mut dog_axum::middlewares::FieldContext,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Audio file processed successfully
 
-    if let Some(filename) = &ctx.filename {
-        let format = if filename.ends_with(".mp3") {
-            "MP3"
-        } else if filename.ends_with(".wav") {
-            "WAV"
-        } else {
-            "Audio"
-        };
-        ctx.metadata
-            .insert("format".to_string(), serde_json::json!(format));
-    }
-
-    Ok(())
-}
-
-fn multipart_config() -> MultipartConfig {
+pub fn multipart_config() -> multipart::MultipartConfig {
     let max_file_mb = env_var_or(
         "MUSIC_MAX_FILE_SIZE_MB",
         MusicMultipartDefaults::MAX_FILE_SIZE_MB,
@@ -111,18 +75,17 @@ fn multipart_config() -> MultipartConfig {
     .to_lowercase()
     .as_str()
     {
-        "metadata" => FileEncoding::Metadata,
-        "skip" => FileEncoding::Skip,
-        _ => FileEncoding::Base64,
+        "metadata" => multipart::FileEncoding::Metadata,
+        "skip" => multipart::FileEncoding::Skip,
+        _ => multipart::FileEncoding::Base64,
     };
 
-    let mut config = MultipartConfig::new()
+    let mut config = multipart::MultipartConfig::new()
         .max_file_size(max_file_mb * 1024 * 1024)
         .max_total_size(max_total_mb * 1024 * 1024)
         .file_field("file")
         .file_encoding(encoding)
-        .include_metadata(include_metadata)
-        .field_processor("file", process_audio_file);
+        .include_metadata(include_metadata);
 
     // Add each allowed content type
     for content_type in MusicMultipartDefaults::ALLOWED_TYPES.split(',') {

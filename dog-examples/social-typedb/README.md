@@ -364,28 +364,32 @@ use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let ax = social_typedb::build().await?;
+    let (dog, router) = social_typedb::build().await?;
     
-    let addr = "127.0.0.1:3036";
+    let host = dog.get("http.host").unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = dog.get("http.port").unwrap_or_else(|| "3036".to_string());
+    let addr = format!("{host}:{port}");
     println!("[social-typedb] listening on http://{addr}");
     
-    ax.listen(addr).await?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, router).await?;
     Ok(())
 }
 
 // In lib.rs - your app configuration
-pub async fn build() -> Result<AxumApp<Value, SocialParams>> {
-    let ax = app::social_app()?;
-    typedb::TypeDBState::setup_db(ax.app.as_ref()).await?;
+pub async fn build() -> Result<(DogApp<Value, SocialParams>, Router)> {
+    let mut builder = app::build_builder().await?;
+    let state = builder.get::<Arc<typedb::TypeDBState>>("typedb").unwrap();
+    services::configure(&mut builder, Arc::clone(&state))?;
     
-    let ax = ax
-        .use_service("/persons", PersonsService::new(state))
-        .use_service("/organizations", OrganizationsService::new(state))
-        .use_service("/groups", GroupsService::new(state))
-        .use_service("/posts", PostsService::new(state))
-        .use_service("/comments", CommentsService::new(state));
+    let dog = builder.build();
+    let http_service = dog.clone().into_service(dog_transport::HttpOptions::default());
     
-    Ok(ax)
+    let router = Router::new()
+        .route("/health", axum::routing::get(|| async { "ok" }))
+        .nest_service("/persons", http_service.service("persons")); // and others...
+    
+    Ok((dog, router))
 }
 ```
 

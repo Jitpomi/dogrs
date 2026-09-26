@@ -3,6 +3,7 @@
 /// A simple tenant identifier.
 /// Later this can be a UUID, slug, or composite key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TenantId(pub String);
 
 /// Context carried with every DogRS operation.
@@ -10,6 +11,7 @@ pub struct TenantId(pub String);
 /// This will be passed into services, hooks, and jobs so that
 /// all logic is explicitly tenant-aware.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TenantContext {
     pub tenant_id: TenantId,
     // TODO: add workspace_id, plan, feature flags, etc.

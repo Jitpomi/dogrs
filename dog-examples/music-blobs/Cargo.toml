@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 # DogRS ecosystem
 dog-core = { path = "../../dog-core" }
-dog-axum = { path = "../../dog-axum", features = ["auth"] }
+dog-transport = { path = "../../dog-transport", features = ["http"] }
 dog-typedb = { path = "../../dog-typedb" }
 dog-blob = { path = "../../dog-blob" }
 
@@ -40,6 +40,8 @@ uuid = { version = "1.23", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0"
 base64 = "0.22.1"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 
 # Multipart form data parsing
 multer = "3.1"

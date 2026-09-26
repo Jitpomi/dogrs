@@ -262,7 +262,9 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
             config,
         })
     }
+}
 
+impl<B: ?Sized + QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
     /// Create adapter with custom codec registry
     pub fn with_codec_registry(mut self, registry: CodecRegistry) -> Self {
         self.codec_registry = Arc::new(registry);
@@ -323,6 +325,32 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
             .record_job_enqueued(&ctx, &job_id, J::JOB_TYPE, &queue_name);
 
         info!("Enqueued job {} of type {}", job_id, J::JOB_TYPE);
+        Ok(job_id)
+    }
+
+    /// Enqueue a pre-encoded job message.
+    #[instrument(skip(self, message), fields(job_type = %message.job_type, tenant_id = %ctx.tenant_id))]
+    pub async fn enqueue_message(
+        &self,
+        ctx: QueueCtx,
+        message: crate::JobMessage,
+    ) -> QueueResult<crate::JobId> {
+        if let Some(max) = self.config.max_payload_size {
+            let size = message.payload_bytes.len();
+            if size > max {
+                return Err(QueueError::PayloadTooLarge { size, max });
+            }
+        }
+
+        let queue_name = message.queue.clone();
+        let job_type = message.job_type.clone();
+
+        let job_id = self.backend.enqueue(ctx.clone(), message).await?;
+
+        self.observability
+            .record_job_enqueued(&ctx, &job_id, &job_type, &queue_name);
+
+        info!("Enqueued job {} of type {}", job_id, job_type);
         Ok(job_id)
     }
 
@@ -398,7 +426,7 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
     /// compiler error (missing field) if `QueueAdapter` ever gains a new field.
     fn to_dyn_shared(&self) -> QueueAdapter<dyn QueueBackend + Send + Sync>
     where
-        B: 'static,
+        B: Sized + 'static,
     {
         QueueAdapter {
             backend: self.backend.clone() as Arc<dyn QueueBackend + Send + Sync>,
@@ -423,6 +451,7 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
     ) -> QueueResult<WorkerHandle>
     where
         C: Clone + Send + Sync + 'static,
+        B: Sized,
     {
         // config.validate() is enforced at construction (with_config panics,
         // try_with_config returns an error, new() uses a hard-coded valid default).
@@ -587,7 +616,7 @@ impl<B: QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
     }
 }
 
-impl<B: QueueBackend> Clone for QueueAdapter<B> {
+impl<B: ?Sized + QueueBackend> Clone for QueueAdapter<B> {
     fn clone(&self) -> Self {
         Self {
             backend: self.backend.clone(),

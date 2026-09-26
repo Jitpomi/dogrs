@@ -39,6 +39,9 @@ impl DogBeforeHook<Value, FleetParams> for BeforeWrite {
     async fn run(&self, _ctx: &mut HookContext<Value, FleetParams>) -> Result<()> {
         // Validate employee data before writing
         if let Some(data) = &_ctx.data {
+            if data.get("query").is_some() {
+                return Ok(());
+            }
             // Ensure required fields are present
             if data.get("employee-id").is_none() {
                 return Err(anyhow::anyhow!("employee-id is required"));

@@ -1,10 +1,11 @@
 use anyhow::Result;
-use dog_axum::{axum, AxumApp};
-
-use crate::services::AuthDemoParams;
+use dog_core::DogApp;
+use dog_transport::{HttpOptions, IntoDogService, http::DogHttpService};
 use serde_json::Value;
 
-pub async fn auth_app() -> Result<AxumApp<Value, AuthDemoParams>> {
+use crate::services::AuthDemoParams;
+
+pub async fn auth_app() -> Result<(DogApp<Value, AuthDemoParams>, DogHttpService<Value, AuthDemoParams>)> {
     dotenvy::from_filename("dog-examples/auth-demo/.env").ok();
     dotenvy::dotenv().ok();
 
@@ -13,21 +14,22 @@ pub async fn auth_app() -> Result<AxumApp<Value, AuthDemoParams>> {
 
     crate::config::config(&mut builder)?;
     let auth_adapter = crate::auth::strategies(&mut builder)?;
-    let svcs = crate::services::configure(&mut builder, auth_adapter.clone())?;
+    let oauth_raw = crate::services::configure(&mut builder, auth_adapter.clone())?;
     crate::hooks::global_hooks(&mut builder);
     crate::channels::configure(&mut builder)?;
+    
     let dog_app = builder.build();
     auth_adapter.setup(dog_app.clone());
-    svcs.oauth_raw.setup(dog_app.clone());
+    oauth_raw.setup(dog_app.clone());
 
-    let mut ax: AxumApp<Value, AuthDemoParams> = axum(dog_app);
+    let http_service = dog_app.clone().into_service(
+        HttpOptions::default()
+            .tenant_header("x-tenant-id")
+            .enable_cors(true)
+            .route("/messages", "messages")
+            .route("/users", "users")
+            .route("/oauth", "oauth")
+    );
 
-    ax = ax
-        .use_service("/messages", svcs.messages)
-        .use_service("/users", svcs.users)
-        .use_service_as("/auth", "authentication", svcs.auth_svc)
-        .use_service("/oauth", svcs.oauth);
-
-    let ax = crate::auth::oauth2::google::http::mount(ax);
-    Ok(ax)
+    Ok((dog_app, http_service))
 }
