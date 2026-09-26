@@ -59,8 +59,9 @@ fn slot(id: &JobId) -> QueueResult<&str> {
     }
     Ok(part)
 }
+type TenantIndex = dashmap::DashMap<String, (u64, Result<StoredRecord, String>)>;
 pub(super) struct Index {
-    entries: dashmap::DashMap<String, (u64, Result<StoredRecord, String>)>,
+    entries: dashmap::DashMap<String, Arc<TenantIndex>>,
     task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 impl Drop for Index {
@@ -71,12 +72,26 @@ impl Drop for Index {
     }
 }
 impl Index {
+    fn tenant(&self, tenant: &str) -> Option<Arc<TenantIndex>> {
+        self.entries
+            .get(&hex(tenant))
+            .map(|entry| entry.value().clone())
+    }
     fn observe(&self, key: String, revision: u64, value: Vec<u8>, deleted: bool) {
         use dashmap::mapref::entry::Entry;
         // Decode once per observed revision, not on every poll by every worker.
         // Keep malformed metadata as an error so it cannot silently hide jobs.
         let parsed = || serde_json::from_slice(&value).map_err(|e| e.to_string());
-        match self.entries.entry(key) {
+        let Some((tenant, _)) = key.strip_prefix("a.").and_then(|s| s.split_once('.')) else {
+            return;
+        };
+        let entries = self
+            .entries
+            .entry(tenant.into())
+            .or_default()
+            .value()
+            .clone();
+        match entries.entry(key) {
             Entry::Occupied(mut entry) => {
                 if entry.get().0 <= revision {
                     if deleted {
@@ -91,7 +106,7 @@ impl Index {
                     let _ = entry.insert((revision, parsed()));
                 }
             }
-        }
+        };
     }
 }
 impl NatsStore {
@@ -424,13 +439,10 @@ impl NatsStore {
             return Ok(Outcome::Purged(count));
         }
         if matches!(op, Operation::Reap) {
-            let prefix = format!("a.{}.", hex(tenant));
             let keys: Vec<String> = index
-                .entries
-                .iter()
-                .filter(|e| e.key().starts_with(&prefix))
-                .map(|e| e.key().clone())
-                .collect();
+                .tenant(tenant)
+                .map(|entries| entries.iter().map(|entry| entry.key().clone()).collect())
+                .unwrap_or_default();
             let mut outcomes = Vec::new();
             for key in keys {
                 for _ in 0..16 {
@@ -479,32 +491,39 @@ impl NatsStore {
         for _ in 0..64 {
             let id = match op {
                 Operation::Dequeue(queues, _) => {
-                    let prefix = format!("a.{}.", hex(tenant));
+                    let Some(entries) = index.tenant(tenant) else {
+                        return Ok(Outcome::Lease(None));
+                    };
                     let now = Utc::now();
-                    let mut candidates = Vec::new();
-                    for entry in &index.entries {
-                        if entry.key().starts_with(&prefix) {
-                            let row = entry.value().1.as_ref().map_err(|e| error(e.clone()))?;
-                            if !skipped_hints.contains(&row.record.job_id)
-                                && queues.contains(&row.record.message.queue)
-                                && row.record.message.run_at <= now
-                                && row.record.status.is_eligible(now)
+                    let mut candidate: Option<(
+                        std::cmp::Reverse<crate::JobPriority>,
+                        chrono::DateTime<Utc>,
+                        JobId,
+                    )> = None;
+                    for entry in entries.iter() {
+                        let row = entry.value().1.as_ref().map_err(|e| error(e.clone()))?;
+                        if !skipped_hints.contains(&row.record.job_id)
+                            && queues.contains(&row.record.message.queue)
+                            && row.record.message.run_at <= now
+                            && row.record.status.is_eligible(now)
+                        {
+                            let key = (
+                                std::cmp::Reverse(row.record.message.priority),
+                                row.record.created_at,
+                                &row.record.job_id,
+                            );
+                            if candidate
+                                .as_ref()
+                                .is_none_or(|old| key < (old.0, old.1, &old.2))
                             {
-                                candidates.push(row.record.clone());
+                                candidate = Some((key.0, key.1, key.2.clone()));
                             }
                         }
                     }
-                    candidates.sort_by_key(|r| {
-                        (
-                            std::cmp::Reverse(r.message.priority),
-                            r.created_at,
-                            r.job_id.clone(),
-                        )
-                    });
-                    let Some(row) = candidates.first() else {
+                    let Some((_, _, id)) = candidate else {
                         return Ok(Outcome::Lease(None));
                     };
-                    row.job_id.clone()
+                    id
                 }
                 Operation::Get(id)
                 | Operation::Snapshot(id)
@@ -589,9 +608,11 @@ impl NatsStore {
     async fn tenants(&self) -> QueueResult<Vec<String>> {
         let index = self.index().await?;
         let mut tenants = std::collections::HashSet::new();
-        for entry in &index.entries {
-            let row = entry.value().1.as_ref().map_err(|e| error(e.clone()))?;
-            tenants.insert(row.record.tenant_id.clone());
+        for tenant in &index.entries {
+            for entry in tenant.value().iter() {
+                let row = entry.value().1.as_ref().map_err(|e| error(e.clone()))?;
+                tenants.insert(row.record.tenant_id.clone());
+            }
         }
         Ok(tenants.into_iter().collect())
     }
@@ -654,7 +675,8 @@ mod tests {
             task.abort();
         }
         let key = cell("hint-race", slot(&first).unwrap());
-        let original = index.entries.get(&key).unwrap().value().clone();
+        let tenant_index = index.tenant("hint-race").unwrap();
+        let original = tenant_index.get(&key).unwrap().value().clone();
         let leased = backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
         backend
             .ack_complete(ctx.clone(), first.clone(), leased.lease_token, None)
@@ -676,7 +698,7 @@ mod tests {
                     Err(QueueError::JobNotFound(_))
                 ));
             }
-            index.entries.insert(key.clone(), stale);
+            tenant_index.insert(key.clone(), stale);
             let next = backend.enqueue(ctx.clone(), message()).await.unwrap();
             let lease = backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
             assert_eq!(lease.record.job_id, next);

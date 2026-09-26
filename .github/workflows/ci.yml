@@ -197,10 +197,21 @@ jobs:
         env:
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
           DOGRS_PG_BATCH: 1
+      - name: Collect recovery evidence without database files
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import shutil
+          for folder in Path('provider-recovery').glob('dogrs-fault-*'):
+              for source in folder.iterdir():
+                  if source.suffix in {'.log', '.json', '.conf'} and source.is_file():
+                      destination = Path('provider-recovery-logs') / folder.name / source.name
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copyfile(source, destination)
+          PYTHON
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: provider-recovery
-          path: |
-            provider-recovery
-            !provider-recovery/**/cold-backup/**
+          path: provider-recovery-logs

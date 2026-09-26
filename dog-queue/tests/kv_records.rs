@@ -80,6 +80,38 @@ async fn history_and_reuse(a: Arc<dyn QueueBackend>, b: Arc<dyn QueueBackend>) {
         }
     }
     assert_eq!(claimed.len(), 100);
+    // Selection must stay tenant-scoped and preserve priority/FIFO when the
+    // discovery index has entries belonging to several independent tenants.
+    let foreign = QueueCtx::new(format!("foreign-{}", uuid::Uuid::new_v4()));
+    let make = |priority| {
+        JobMessage::new("order", vec![7], "bytes", "q")
+            .with_priority(priority)
+            .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1))
+    };
+    a.enqueue(foreign.clone(), make(dog_queue::JobPriority::Critical))
+        .await
+        .unwrap();
+    let mut order = Vec::new();
+    for priority in [
+        dog_queue::JobPriority::Low,
+        dog_queue::JobPriority::Normal,
+        dog_queue::JobPriority::High,
+        dog_queue::JobPriority::Normal,
+    ] {
+        order.push(a.enqueue(ctx.clone(), make(priority)).await.unwrap());
+    }
+    for position in [2, 1, 3, 0] {
+        let job = a.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+        assert_eq!(job.record.job_id, order[position]);
+        a.ack_complete(ctx.clone(), job.record.job_id, job.lease_token, None)
+            .await
+            .unwrap();
+    }
+    assert!(a.dequeue(ctx.clone(), &["q"]).await.unwrap().is_none());
+    let job = a.dequeue(foreign.clone(), &["q"]).await.unwrap().unwrap();
+    a.ack_complete(foreign, job.record.job_id, job.lease_token, None)
+        .await
+        .unwrap();
 }
 #[tokio::test]
 #[ignore = "requires disposable Redis"]

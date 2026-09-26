@@ -40,7 +40,9 @@ maintenance can finish retirement. Old tokens never authorize a replacement job.
 An ordered, replayable watch supplies discovery hints without transferring
 payloads or completed history on every poll. Claims always re-read and CAS the
 actual cell. Discovery metadata is decoded once per revision and reused across
-polls; malformed metadata remains an error. Watch end/errors trigger reconstruction. The watch is not ownership
+polls; malformed metadata remains an error. Each tenant has its own discovery
+index, and dequeue selects the next job in one pass without sorting/cloning all
+candidates or scanning other tenants. Watch end/errors trigger reconstruction. The watch is not ownership
 authority. Dequeue skips stale or not-yet-visible hints and considers other jobs;
 explicit ID reads still report missing records. Results remain limited to 4 KiB; admission reserves 8 KiB of metadata
 space for status updates and checks binary payloads against the account limit.
