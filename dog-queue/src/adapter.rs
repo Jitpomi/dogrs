@@ -820,14 +820,21 @@ impl<C: Send + Sync + 'static> Worker<C> {
         let hb_interval = self.adapter.config.heartbeat_interval;
 
         let heartbeat_handle = AbortOnDrop(tokio::spawn(async move {
+            let mut previous_renewal = tokio::time::Instant::now();
             loop {
                 tokio::time::sleep(hb_interval).await;
+                let now = tokio::time::Instant::now();
+                // Extend by elapsed time, including the previous backend round trip.
+                // Adding only the sleep interval slowly exhausts the original lease
+                // margin whenever the database has nonzero latency.
+                let extension = now.duration_since(previous_renewal);
+                previous_renewal = now;
                 match hb_backend
                     .heartbeat_extend(
                         hb_ctx.clone(),
                         hb_job_id.clone(),
                         hb_token.clone(),
-                        hb_interval,
+                        extension,
                     )
                     .await
                 {

@@ -14,6 +14,7 @@ pub struct NatsConfig {
 }
 pub struct NatsStore {
     bucket: kv::Store,
+    max_state_bytes: usize,
 }
 pub type NatsBackend = DurableBackend<NatsStore>;
 fn error(e: impl std::fmt::Display) -> QueueError {
@@ -25,6 +26,7 @@ impl NatsBackend {
     /// For clustered production use, provision the bucket and call `from_store`.
     pub async fn new(config: NatsConfig) -> QueueResult<Self> {
         let client = async_nats::connect(config.url).await.map_err(error)?;
+        let max_payload = client.server_info().max_payload;
         let js = jetstream::new(client);
         let bucket = match js.get_key_value(&config.subject).await {
             Ok(bucket) => bucket,
@@ -49,7 +51,10 @@ impl NatsBackend {
             config.allow_direct = false;
             js.update_stream(config).await.map_err(error)?;
         }
-        Self::from_store(js.get_key_value(&bucket.name).await.map_err(error)?)
+        Self::from_store_with_max_payload(
+            js.get_key_value(&bucket.name).await.map_err(error)?,
+            max_payload,
+        )
     }
     pub async fn new_async(config: NatsConfig) -> QueueResult<Self> {
         Self::new(config).await
@@ -58,20 +63,30 @@ impl NatsBackend {
     /// Use a caller-authenticated, TLS-connected JetStream bucket. Provision it with
     /// file storage, no expiration, no eviction of old keys, and leader-only reads.
     pub fn from_store(bucket: kv::Store) -> QueueResult<Self> {
+        Self::from_store_with_max_payload(bucket, 1024 * 1024)
+    }
+
+    /// Supply the smaller of the server and account payload limits. Hosted account
+    /// limits may be lower than Client::server_info().max_payload. This reserves
+    /// framing space and future completion metadata before admitting a job.
+    pub fn from_store_with_max_payload(bucket: kv::Store, max_payload: usize) -> QueueResult<Self> {
         let config = &bucket.stream.cached_info().config;
         if config.storage != stream::StorageType::File
             || !config.max_age.is_zero()
             || config.allow_direct
             || config.discard != stream::DiscardPolicy::New
-            || (config.max_message_size > 0 && config.max_message_size < 900_000)
         {
             return Err(QueueError::InvalidConfig(
                 "NATS queue requires file storage, max_age=0, allow_direct=false and discard=new"
                     .into(),
             ));
         }
+        let max_state_bytes = state_budget(max_payload, config.max_message_size)?;
         Ok(Self {
-            store: NatsStore { bucket },
+            store: NatsStore {
+                bucket,
+                max_state_bytes,
+            },
             lease_duration: std::time::Duration::from_secs(300),
         })
     }
@@ -98,9 +113,12 @@ impl StateStore for NatsStore {
                 _ => TenantState::default(),
             };
             let outcome = state.apply(tenant, op)?;
+            if matches!(op, Operation::Get(_)) {
+                return Ok(outcome);
+            }
             let value = serde_json::to_vec(&state).map_err(error)?;
             if matches!(op, Operation::Enqueue(_))
-                && value.len().saturating_add(state.reserved_bytes()) > 900_000
+                && value.len().saturating_add(state.reserved_bytes()) > self.max_state_bytes
             {
                 return Err(QueueError::InvalidConfig("JetStream tenant capacity reached; purge terminal history or use a larger-capacity ledger".into()));
             }
@@ -142,4 +160,30 @@ impl StateStore for NatsStore {
 #[allow(clippy::module_inception)] // Preserve the pre-0.2 import path.
 pub mod nats {
     pub use super::{NatsBackend, NatsConfig, NatsStore};
+}
+
+// Headers and the encoded tenant key also consume protocol payload space.
+fn state_budget(max_payload: usize, stream_limit: i32) -> QueueResult<usize> {
+    let limit = if stream_limit > 0 {
+        max_payload.min(stream_limit as usize)
+    } else {
+        max_payload
+    };
+    if limit < 16_384 {
+        return Err(QueueError::InvalidConfig(
+            "NATS payload limit must be at least 16 KiB".into(),
+        ));
+    }
+    Ok(900_000.min(limit - 4096))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn admission_uses_account_and_stream_limits() {
+        assert_eq!(state_budget(512 * 1024, -1).unwrap(), 520_192);
+        assert_eq!(state_budget(8 * 1024 * 1024, 128 * 1024).unwrap(), 126_976);
+        assert_eq!(state_budget(1024 * 1024, -1).unwrap(), 900_000);
+        assert!(state_budget(4096, -1).is_err());
+    }
 }

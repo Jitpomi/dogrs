@@ -45,6 +45,9 @@ impl StateStore for RedisStore {
                 None => TenantState::default(),
             };
             let result = state.apply(tenant, op)?;
+            if matches!(op, Operation::Get(_)) {
+                return Ok(result);
+            }
             let value = serde_json::to_string(&state).map_err(error)?;
             let changed: i32 = redis::Script::new("if (redis.call('GET',KEYS[1]) or '') ~= ARGV[1] then return 0 end; redis.call('SET',KEYS[1],ARGV[2]); redis.call('SADD',KEYS[2],ARGV[3]); return 1")
                 .key(&key).key(TENANTS).arg(previous.as_deref().unwrap_or("")).arg(value).arg(tenant)

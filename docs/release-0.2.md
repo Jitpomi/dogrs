@@ -93,6 +93,14 @@ implementations. Terminal history needs retention; persisted result references a
 bounded. The unused SQLite/SQLx dependency flags are removed; they never exposed a backend.
 UI/workflow placeholders are not implemented products.
 
+## Hosted system validation
+
+The hosted acceptance application in `dog-examples/hosted-system` exercises real
+TLS connections and independent API/worker processes. It exposed and fixes lease
+heartbeat drift under backend latency, unnecessary writes during status reads,
+and account-specific JetStream payload limits. This is additional evidence, not
+a substitute for measuring production scale and provider failover.
+
 ## Verification scope
 
 The repository tests cover service dispatch, authentication regressions, schema

@@ -199,6 +199,13 @@ async fn sqs_notifications_and_job_completion() {
     client.delete_queue().queue_url(url).send().await.unwrap();
 }
 
+#[cfg(any(
+    feature = "rabbitmq-lapin",
+    feature = "aws-sqs",
+    feature = "kafka-rdkafka",
+    feature = "kafka-rskafka",
+    feature = "gcp-pubsub"
+))]
 async fn receive_one(notifications: &impl Notifications) {
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
