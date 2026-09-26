@@ -63,8 +63,11 @@ separate evidence; connection pooling alone does not guarantee a throughput leve
 Completion uses one atomic SQL statement. It locks the row before reading database
 time, validates status/token/expiry, and commits the result in that statement.
 Retry, heartbeat and cancellation use metadata compare-and-swap with a database
-clock check after the row lock. `PostgresOptions.enqueue_concurrency` optionally
-bounds producers before they enter the pool. Keep it below `max_connections` to
-reserve worker capacity during a producer burst. It defaults to `None`; choose a
-limit using measured database/network latency rather than a fixed pool fraction.
-A small cap on a high-latency connection can reduce throughput.
+clock check after the row lock. Producer admission is bounded before connection
+acquisition, so blocked submissions cannot fill the worker connection queue.
+`PostgresOptions.enqueue_concurrency = None` selects an automatic limit: reserve
+one quarter of the pool, at least one connection when the pool has more than one.
+A 64-connection pool therefore admits at most 48 concurrent submissions. Explicit
+limits from 1 through `max_connections` override this policy; using the full pool
+is appropriate for a producer-only backend. Tune explicit limits against measured
+latency. A small cap on a high-latency connection can reduce throughput.

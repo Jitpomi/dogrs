@@ -393,3 +393,91 @@ async fn completion_waiting_on_row_lock_cannot_cross_lease_deadline() {
     ));
     driver.abort();
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn blocked_producers_do_not_starve_completion_on_default_pool() {
+    let backend = Arc::new(backend().await);
+    let ctx = QueueCtx::new(format!("admission-{}", uuid::Uuid::new_v4()));
+    let mut submissions = Vec::new();
+    for n in 0..12 {
+        let message = JobMessage::new("blocked", vec![1; 65536], "bytes", "blocked")
+            .with_idempotency_key(n.to_string());
+        let id = backend.enqueue(ctx.clone(), message.clone()).await.unwrap();
+        submissions.push((message, id));
+    }
+    let work = backend
+        .enqueue(
+            ctx.clone(),
+            JobMessage::new("work", vec![], "bytes", "work"),
+        )
+        .await
+        .unwrap();
+    let lease = backend
+        .dequeue(ctx.clone(), &["work"])
+        .await
+        .unwrap()
+        .unwrap();
+    let (mut client, connection) = tokio_postgres::connect(
+        &std::env::var("DOGRS_POSTGRES_URL").unwrap(),
+        tokio_postgres::NoTls,
+    )
+    .await
+    .unwrap();
+    let driver = tokio::spawn(connection);
+    let tx = client.transaction().await.unwrap();
+    let pid: i32 = tx
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    tx.query(
+        "SELECT id FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND queue='blocked' FOR UPDATE",
+        &[&ctx.tenant_id],
+    )
+    .await
+    .unwrap();
+    let mut producers = tokio::task::JoinSet::new();
+    for (message, expected) in submissions {
+        let backend = backend.clone();
+        let ctx = ctx.clone();
+        producers.spawn(async move { (expected, backend.enqueue(ctx, message).await) });
+    }
+    let observed = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            tx.batch_execute("SELECT pg_stat_clear_snapshot()")
+                .await
+                .unwrap();
+            let blocked: i64 = tx
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))",
+                    &[&pid],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            if blocked >= 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    let completion = tokio::time::timeout(
+        Duration::from_secs(1),
+        backend.ack_complete(ctx.clone(), work.clone(), lease.lease_token, None),
+    )
+    .await;
+    // Release locks and drain producers even when the regression fails.
+    tx.rollback().await.unwrap();
+    while let Some(result) = producers.join_next().await {
+        let (expected, actual) = result.unwrap();
+        assert_eq!(actual.unwrap(), expected);
+    }
+    observed.expect("producer queries did not reach the held row locks");
+    completion
+        .expect("completion was starved behind producers")
+        .unwrap();
+    assert!(backend.get_status(ctx, work).await.unwrap().is_terminal());
+    driver.abort();
+}

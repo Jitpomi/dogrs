@@ -209,3 +209,9 @@ covers current terminal cells and archived records, preserves active replacement
 and fences delayed archives with deletion markers. These changes passed live
 history/reuse/retention and leader-loss tests. They have not yet established the
 full sustained 64 KiB capacity target.
+
+PostgreSQL now bounds producer admission by default. `enqueue_concurrency=None`
+reserves one quarter of the connection pool for non-enqueue operations (at least
+one connection when possible). A live regression holds row locks that block
+submissions and verifies that a leased job still completes before those locks
+are released. Explicit producer limits remain available for measured tuning.

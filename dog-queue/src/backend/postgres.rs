@@ -15,8 +15,9 @@ pub struct PostgresConfig {
 pub struct PostgresOptions {
     pub max_connections: u32,
     pub operation_timeout: Duration,
-    /// Optional producer concurrency cap. Leave below max_connections to reserve
-    /// pool capacity for workers; tune against the actual server and latency.
+    /// Producer concurrency cap. None reserves a quarter of the pool (at least
+    /// one connection when possible) for worker operations. An explicit cap may
+    /// use the full pool for producer-only deployments.
     pub enqueue_concurrency: Option<u32>,
     /// Explicit offline v1 -> v2 migration. Stop every old worker/API first.
     pub migrate_legacy: bool,
@@ -55,7 +56,7 @@ impl bb8::ManageConnection for Manager {
 pub struct PostgresStore {
     pool: bb8::Pool<Manager>,
     timeout: Duration,
-    enqueue_slots: Option<tokio::sync::Semaphore>,
+    enqueue_slots: tokio::sync::Semaphore,
 }
 pub type PostgresBackend = DurableBackend<PostgresStore>;
 fn error(e: impl std::fmt::Display + 'static) -> QueueError {
@@ -149,9 +150,14 @@ impl PostgresBackend {
         let store = PostgresStore {
             pool,
             timeout: options.operation_timeout,
-            enqueue_slots: options
-                .enqueue_concurrency
-                .map(|n| tokio::sync::Semaphore::new(n as usize)),
+            enqueue_slots: tokio::sync::Semaphore::new(options.enqueue_concurrency.unwrap_or_else(
+                || {
+                    options
+                        .max_connections
+                        .saturating_sub((options.max_connections / 4).max(1))
+                        .max(1)
+                },
+            ) as usize),
         };
         tokio::time::timeout(store.timeout, store.initialize(options.migrate_legacy))
             .await
@@ -242,8 +248,8 @@ impl PostgresStore {
         // Bound producers before they enter the shared pool queue. A burst of
         // admissions must not strand already leased jobs behind thousands of
         // waiting INSERTs; worker claims/acks retain connection capacity.
-        let _admission = match (&self.enqueue_slots, op) {
-            (Some(slots), Operation::Enqueue(_)) => Some(slots.acquire().await.map_err(error)?),
+        let _admission = match op {
+            Operation::Enqueue(_) => Some(self.enqueue_slots.acquire().await.map_err(error)?),
             _ => None,
         };
         let mut client = self.pool.get().await.map_err(error)?;
