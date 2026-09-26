@@ -35,6 +35,7 @@ try:
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
   'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),
+  'nats_storage':'anonymous Docker volume at /data',
  },indent=2))
  env={**os.environ,'DOGRS_BACKEND':a.backend,'DOGRS_TEST_TENANT':run.replace('dogrs-fault-','dogrs-test-fault-'),'DOGRS_RECOVERY_MANIFEST':str(folder/'manifest.json')}
  monitors={}
@@ -60,7 +61,7 @@ try:
   for name,number,monitor in zip(names,numbers,monitor_ports):
    config=folder/(name+'.conf');routes=','.join('"nats://'+n+':6222"' for n in names if n!=name)
    config.write_text(f'server_name: {name}\nport: 4222\nhttp: 8222\nclient_advertise: "127.0.0.1:{number}"\njetstream {{store_dir:"/data",sync_interval:always}}\ncluster {{name:"{run}",listen:"0.0.0.0:6222",routes:[{routes}]}}\n')
-   launch(name,'--network',network,'-p',f'127.0.0.1:{number}:4222','-p',f'127.0.0.1:{monitor}:8222','-v',f'{config}:/etc/nats.conf:ro',os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),'-c','/etc/nats.conf')
+   launch(name,'--network',network,'-v','/data','-p',f'127.0.0.1:{number}:4222','-p',f'127.0.0.1:{monitor}:8222','-v',f'{config}:/etc/nats.conf:ro',os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),'-c','/etc/nats.conf')
    monitors[name]=monitor
   for number in numbers:wait_port(number)
   deadline=time.monotonic()+60

@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::{sync::Arc, time::Duration};
 use tokio_postgres::{types::Type, Client, NoTls, Transaction};
+#[path = "postgres_claims.rs"]
+mod claims;
 #[path = "postgres_completions.rs"]
 mod completions;
 
@@ -24,6 +26,9 @@ pub struct PostgresOptions {
     /// Maximum acknowledgments coalesced into one durable SQL statement (1..=64).
     /// Set to 1 for independent commits without cross-job row-lock coupling.
     pub completion_batch_size: usize,
+    /// Maximum distinct-tenant claims per durable statement (1..=64).
+    /// Set to 1 for independent claims. Same-tenant calls are always separated.
+    pub claim_batch_size: usize,
     /// Explicit offline v1 -> v2 migration. Stop every old worker/API first.
     pub migrate_legacy: bool,
 }
@@ -34,6 +39,7 @@ impl Default for PostgresOptions {
             operation_timeout: Duration::from_secs(10),
             enqueue_concurrency: None,
             completion_batch_size: 64,
+            claim_batch_size: 16,
             migrate_legacy: false,
         }
     }
@@ -64,6 +70,7 @@ pub struct PostgresStore {
     timeout: Duration,
     enqueue_slots: tokio::sync::Semaphore,
     completions: Option<completions::Completions>,
+    claims: Option<claims::Claims>,
 }
 pub type PostgresBackend = DurableBackend<PostgresStore>;
 fn error(e: impl std::fmt::Display + 'static) -> QueueError {
@@ -112,12 +119,13 @@ impl PostgresBackend {
         if options.max_connections == 0
             || options.operation_timeout.is_zero()
             || !(1..=64).contains(&options.completion_batch_size)
+            || !(1..=64).contains(&options.claim_batch_size)
             || options
                 .enqueue_concurrency
                 .is_some_and(|n| n == 0 || n > options.max_connections)
         {
             return Err(QueueError::InvalidConfig(
-                "positive pool size and timeout required; enqueue concurrency must be within pool size; completion batch size must be 1..=64".into(),
+                "positive pool size and timeout required; enqueue concurrency must be within pool size; batch sizes must be 1..=64".into(),
             ));
         }
         let statement_timeout = options
@@ -163,9 +171,18 @@ impl PostgresBackend {
                 options.operation_timeout,
             )
         });
+        let claims = (options.claim_batch_size > 1).then(|| {
+            claims::Claims::start(
+                pool.clone(),
+                ((options.max_connections as usize) / 4).clamp(1, 4),
+                options.claim_batch_size,
+                options.operation_timeout,
+            )
+        });
         let store = PostgresStore {
             pool,
             completions,
+            claims,
             timeout: options.operation_timeout,
             enqueue_slots: tokio::sync::Semaphore::new(options.enqueue_concurrency.unwrap_or_else(
                 || {
@@ -262,7 +279,20 @@ impl PostgresStore {
         tx.commit().await.map_err(error)
     }
     async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        if tenant.contains('\0') {
+            return Err(QueueError::InvalidConfig(
+                "PostgreSQL tenant cannot contain NUL".into(),
+            ));
+        }
         if let Operation::Complete(id, token, result) = op {
+            if id.as_str().contains('\0')
+                || token.as_str().contains('\0')
+                || result.as_ref().is_some_and(|s| s.contains('\0'))
+            {
+                return Err(QueueError::InvalidConfig(
+                    "PostgreSQL completion text cannot contain NUL".into(),
+                ));
+            }
             if serde_json::to_vec(result).map_err(error)?.len() > 4096 {
                 return Err(QueueError::InvalidConfig(
                     "Persisted result must fit in 4 KiB; store large results by reference".into(),
@@ -271,6 +301,23 @@ impl PostgresStore {
             if let Some(completions) = &self.completions {
                 completions.submit(tenant, id, token, result).await?;
                 return Ok(Outcome::Done);
+            }
+        }
+        if let Operation::Dequeue(queues, duration) = op {
+            let valid_duration = chrono::Duration::from_std(*duration)
+                .ok()
+                .and_then(|duration| Utc::now().checked_add_signed(duration))
+                .is_some();
+            if duration.is_zero()
+                || !valid_duration
+                || queues.iter().any(|queue| queue.contains('\0'))
+            {
+                return Err(QueueError::InvalidConfig("PostgreSQL claim requires representable positive duration and queue names without NUL".into()));
+            }
+            if let Some(claims) = &self.claims {
+                return Ok(Outcome::Lease(
+                    claims.submit(tenant, queues, *duration).await?,
+                ));
             }
         }
         // Bound producers before they enter the shared pool queue. A burst of
@@ -496,11 +543,27 @@ impl PostgresStore {
 fn metadata(stored: &StoredRecord) -> QueueResult<serde_json::Value> {
     let mut record = stored.record.clone();
     record.message.payload_bytes.clear();
-    serde_json::to_value(StoredRecord {
+    let value = serde_json::to_value(StoredRecord {
         record,
         token: stored.token.clone(),
     })
-    .map_err(error)
+    .map_err(error)?;
+    fn has_nul(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::String(s) => s.contains('\0'),
+            serde_json::Value::Array(values) => values.iter().any(has_nul),
+            serde_json::Value::Object(values) => values
+                .iter()
+                .any(|(key, value)| key.contains('\0') || has_nul(value)),
+            _ => false,
+        }
+    }
+    if has_nul(&value) {
+        return Err(QueueError::InvalidConfig(
+            "PostgreSQL metadata cannot contain NUL".into(),
+        ));
+    }
+    Ok(value)
 }
 fn decode_payload(row: &tokio_postgres::Row) -> QueueResult<StoredRecord> {
     let mut stored: StoredRecord = serde_json::from_value(row.get(0)).map_err(error)?;

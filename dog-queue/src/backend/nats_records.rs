@@ -1,6 +1,6 @@
 //! One CAS cell per active idempotency scope; immutable payload and terminal history
 //! live outside the cell. A replayable watch is only a discovery hint: every claim
-//! re-reads the authoritative cell and CAS-fences ownership.
+//! must CAS the exact observed server revision before acquiring ownership.
 use super::{
     durable::{Operation, Outcome, StateStore, StoredRecord, TenantState},
     nats::NatsStore,
@@ -700,7 +700,7 @@ impl NatsStore {
                     let (revision, row) = entry.value();
                     row.as_ref()
                         .ok()
-                        .filter(|row| row.record.job_id == *id)
+                        .filter(|row| *revision > 0 && row.record.job_id == *id)
                         .map(|row| (*revision, row.clone()))
                 })
             });
@@ -753,6 +753,42 @@ impl NatsStore {
                 | Operation::Heartbeat(id, ..) => id.clone(),
                 _ => unreachable!(),
             };
+            if matches!(op, Operation::Dequeue(..)) {
+                let key = cell(tenant, slot(&id)?);
+                let cached = index.tenant(tenant).and_then(|entries| {
+                    entries.get(&key).and_then(|entry| {
+                        let (revision, row) = entry.value();
+                        row.as_ref()
+                            .ok()
+                            .filter(|row| *revision > 0 && row.record.job_id == id)
+                            .map(|row| (*revision, row.clone()))
+                    })
+                });
+                if let Some((revision, row)) = cached {
+                    let mut state = TenantState::default();
+                    state.jobs.insert(id.clone(), row);
+                    if let Ok(Outcome::Lease(Some(mut job))) =
+                        state.apply_at(tenant, op, Utc::now())
+                    {
+                        // Observed metadata is usable only while its exact server
+                        // revision remains current. No lease exists until CAS
+                        // succeeds; a stale or deleted hint cannot grant ownership.
+                        if self
+                            .cas(
+                                &key,
+                                serde_json::to_vec(&state.jobs[&id]).map_err(error)?,
+                                revision,
+                            )
+                            .await?
+                        {
+                            job.record.message.payload_bytes = self.bytes(tenant, &id).await?;
+                            return Ok(Outcome::Lease(Some(job)));
+                        }
+                        skipped_hints.insert(id);
+                        continue;
+                    }
+                }
+            }
             let (key, entry) = if matches!(op, Operation::Dequeue(..)) {
                 // Watch hints can precede point-read visibility or outlive a
                 // concurrent completion/purge. Neither condition is a failed
@@ -1235,6 +1271,70 @@ mod tests {
         assert!(matches!(row.status, crate::JobStatus::Completed { .. }));
         assert_eq!(row.result.as_deref(), Some("fresh lease"));
         assert_eq!(row.message.payload_bytes, vec![8; 65536]);
+        let js = async_nats::jetstream::new(async_nats::connect(url).await.unwrap());
+        js.delete_key_value(name).await.unwrap();
+    }
+    #[tokio::test]
+    #[ignore = "requires disposable JetStream"]
+    async fn cached_claim_cannot_override_remote_owner_or_create_unobserved_job() {
+        use crate::{
+            backend::nats::{NatsBackend, NatsConfig},
+            JobMessage, QueueBackend, QueueCtx,
+        };
+        let url = std::env::var("DOGRS_NATS_URL").unwrap();
+        let name = format!("cached_claim_{}", uuid::Uuid::new_v4().simple());
+        let config = NatsConfig {
+            url: url.clone(),
+            subject: name.clone(),
+        };
+        let backend = NatsBackend::new(config.clone()).await.unwrap();
+        let remote = NatsBackend::new(config).await.unwrap();
+        let ctx = QueueCtx::new("cached-claim");
+        let id = backend
+            .enqueue(
+                ctx.clone(),
+                JobMessage::new("claim", vec![7; 65536], "bytes", "q"),
+            )
+            .await
+            .unwrap();
+        let index = backend.store.index().await.unwrap();
+        if let Some(task) = index.task.lock().unwrap().take() {
+            task.abort();
+        }
+        let key = cell("cached-claim", slot(&id).unwrap());
+        let entries = index.tenant("cached-claim").unwrap();
+        let snapshot = entries.get(&key).unwrap().value().clone();
+        let owner = remote.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+        assert!(backend
+            .dequeue(ctx.clone(), &["q"])
+            .await
+            .unwrap()
+            .is_none());
+        let fake = JobId::from(format!("{}_{}", "f".repeat(64), uuid::Uuid::new_v4()));
+        let fake_key = cell("cached-claim", slot(&fake).unwrap());
+        let mut unobserved = snapshot.1.unwrap();
+        unobserved.record.job_id = fake;
+        entries.insert(fake_key.clone(), (0, Ok(unobserved)));
+        assert!(backend
+            .dequeue(ctx.clone(), &["q"])
+            .await
+            .unwrap()
+            .is_none());
+        assert!(backend
+            .store
+            .bucket
+            .entry(&fake_key)
+            .await
+            .unwrap()
+            .is_none());
+        remote
+            .ack_complete(ctx.clone(), id.clone(), owner.lease_token, None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            remote.get_record(ctx, id).await.unwrap().status,
+            crate::JobStatus::Completed { .. }
+        ));
         let js = async_nats::jetstream::new(async_nats::connect(url).await.unwrap());
         js.delete_key_value(name).await.unwrap();
     }

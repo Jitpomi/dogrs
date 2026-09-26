@@ -86,3 +86,15 @@ unknown-commit semantics.
 `PostgresOptions.completion_batch_size` accepts 1 through 64 and defaults to 64.
 Set it to 1 to use independent commits, avoiding cross-job row-lock waiting within
 a batch. Batching is a throughput/latency choice, not a change to durability.
+
+Concurrent claims from distinct tenants use a separate bounded dispatcher with
+256 waiting requests and at most four executing statements per backend.
+`PostgresOptions.claim_batch_size` defaults to 16 and accepts 1 through 64; set it
+to 1 for independent claims. Each SQL batch includes at most one request per
+tenant, including when callers request overlapping queues. This prevents two
+requests in the same statement from leasing the same row. Row locking uses
+`SKIP LOCKED`, and ownership is returned only after the statement commits.
+
+PostgreSQL cannot store NUL characters in text or JSONB strings. Tenant, queue,
+lease, result and metadata inputs are checked before submission so an invalid
+request cannot abort valid peers in a batch. Binary payloads may contain NUL bytes.

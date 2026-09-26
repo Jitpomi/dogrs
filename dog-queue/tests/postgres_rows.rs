@@ -550,8 +550,8 @@ async fn concurrent_completions_isolate_invalid_tokens_and_duplicate_requests() 
 }
 
 #[tokio::test]
-async fn completion_batch_size_must_be_bounded() {
-    for completion_batch_size in [0, 65] {
+async fn batch_sizes_must_be_bounded() {
+    for (completion_batch_size, claim_batch_size) in [(0, 16), (65, 16), (64, 0), (64, 65)] {
         let result = PostgresBackend::new_with_tls_options(
             PostgresConfig {
                 connection_string: "host=127.0.0.1 port=1".into(),
@@ -559,6 +559,7 @@ async fn completion_batch_size_must_be_bounded() {
             tokio_postgres::NoTls,
             PostgresOptions {
                 completion_batch_size,
+                claim_batch_size,
                 ..Default::default()
             },
         )
@@ -580,6 +581,7 @@ async fn independent_completion_mode_preserves_tokens_and_results() {
         tokio_postgres::NoTls,
         PostgresOptions {
             completion_batch_size: 1,
+            claim_batch_size: 1,
             ..Default::default()
         },
     )
@@ -622,4 +624,126 @@ async fn independent_completion_mode_preserves_tokens_and_results() {
         backend.ack_complete(ctx, id, job.lease_token, None).await,
         Err(dog_queue::QueueError::JobAlreadyTerminal)
     ));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn batched_claims_preserve_tenants_queues_and_unique_ownership() {
+    let backend = Arc::new(backend().await);
+    let prefix = uuid::Uuid::new_v4().to_string();
+    for tenant in 0..32 {
+        for queue in ["a", "b"] {
+            backend
+                .enqueue(
+                    QueueCtx::new(format!("{prefix}-{tenant}")),
+                    JobMessage::new("claim", vec![tenant as u8; 65536], "bytes", queue),
+                )
+                .await
+                .unwrap();
+        }
+    }
+    let mut requests = Vec::new();
+    for round in 0..4 {
+        for tenant in 0..32 {
+            let backend = backend.clone();
+            let prefix = prefix.clone();
+            requests.push(async move {
+                let ctx = QueueCtx::new(format!("{prefix}-{tenant}"));
+                let queues = match round {
+                    0 => vec!["a"],
+                    1 => vec!["b"],
+                    2 => vec!["a", "b"],
+                    _ => vec!["missing"],
+                };
+                let job = backend.dequeue(ctx.clone(), &queues).await.unwrap();
+                if let Some(job) = job {
+                    assert!(queues.contains(&job.record.message.queue.as_str()));
+                    assert_eq!(job.record.tenant_id, ctx.tenant_id);
+                    assert_eq!(job.record.message.payload_bytes, vec![tenant as u8; 65536]);
+                    assert_eq!(job.record.attempt, 1);
+                    let id = job.record.job_id;
+                    backend
+                        .ack_complete(ctx, id.clone(), job.lease_token, None)
+                        .await
+                        .unwrap();
+                    Some((tenant, id))
+                } else {
+                    None
+                }
+            });
+        }
+    }
+    let mut ids = std::collections::HashSet::new();
+    let mut counts = [0; 32];
+    for (tenant, id) in futures::future::join_all(requests)
+        .await
+        .into_iter()
+        .flatten()
+    {
+        assert!(ids.insert(id));
+        counts[tenant] += 1;
+    }
+    assert_eq!(ids.len(), 64);
+    assert!(counts.into_iter().all(|count| count == 2));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn invalid_postgres_text_does_not_poison_other_completions() {
+    let backend = backend().await;
+    let ctx = QueueCtx::new(format!("nul-{}", uuid::Uuid::new_v4()));
+    assert!(matches!(
+        backend
+            .enqueue(
+                ctx.clone(),
+                JobMessage::new("bad\0metadata", vec![0], "bytes", "q")
+            )
+            .await,
+        Err(dog_queue::QueueError::InvalidConfig(_))
+    ));
+    let mut jobs = Vec::new();
+    for _ in 0..2 {
+        backend
+            .enqueue(
+                ctx.clone(),
+                JobMessage::new("valid", vec![0; 65536], "bytes", "q"),
+            )
+            .await
+            .unwrap();
+        jobs.push(backend.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap());
+    }
+    let (invalid, valid) = tokio::join!(
+        backend.ack_complete(
+            ctx.clone(),
+            jobs[0].record.job_id.clone(),
+            jobs[0].lease_token.clone(),
+            Some("bad\0result".into())
+        ),
+        backend.ack_complete(
+            ctx.clone(),
+            jobs[1].record.job_id.clone(),
+            jobs[1].lease_token.clone(),
+            Some("good".into())
+        ),
+    );
+    assert!(matches!(
+        invalid,
+        Err(dog_queue::QueueError::InvalidConfig(_))
+    ));
+    valid.unwrap();
+    assert!(backend
+        .get_record(ctx.clone(), jobs[0].record.job_id.clone())
+        .await
+        .unwrap()
+        .status
+        .is_processing());
+    assert_eq!(
+        backend
+            .get_record(ctx, jobs[1].record.job_id.clone())
+            .await
+            .unwrap()
+            .result
+            .as_deref(),
+        Some("good")
+    );
 }

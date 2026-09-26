@@ -241,3 +241,33 @@ Before the latest Redis/NATS request reductions, Redis passed its Linux 60-secon
 run (60,000/60,000 in 60.063 seconds); replicated NATS failed its 60-second run
 (31,900 admitted, 21,400 completed; 28,100 drops). Short and long results must not
 be conflated; a complete sustained production target remains unproven.
+
+
+### Claim-path throughput fixes
+
+PostgreSQL also batches claims from distinct tenants, with a separate bounded
+dispatcher. Same-tenant requests cannot share a statement, preventing duplicate
+ownership with overlapping queue lists. The default claim batch size is 16; one
+opts out. Invalid PostgreSQL text/JSONB NUL inputs are rejected before batching.
+JetStream claims may use observed metadata with a positive revision, but only an
+exact server CAS grants ownership. A lost CAS skips the candidate; unobserved
+revision-zero hints cannot create a job. Live regressions cover remote owners,
+phantom hints, tenant/queue isolation and invalid-input isolation.
+
+The local PostgreSQL 60-second test improved to 56,655 admitted / 49,430 completed
+with 3,345 drops and no operation errors, still failing the 60,000-job gate.
+Admission batching was tested and removed because it regressed throughput.
+Thirteen PostgreSQL row tests, 40 library tests, six durable contracts and three
+Redis/NATS record tests passed, as did strict Clippy. Fresh-container PostgreSQL
+restoration and replicated JetStream leader-loss recovery passed on these changes.
+
+The JetStream Docker fixture now mounts `/data` on a Docker volume, matching the
+volume-backed data placement already used by the PostgreSQL and Redis images.
+Three replicas and sync-always remain required; this change does not relax the
+capacity or durability gates. Sustained results must be rerun on this fixture.
+
+At commit `2e9974b`, full CI passed and Redis passed the Linux 60-second target
+(60,000/60,000 in 62.319 seconds). PostgreSQL with two workers per tenant failed
+(36,160 admitted / 34,708 completed), and JetStream before the claim-cache and
+volume changes failed (53,718 admitted / 43,534 completed). Neither failure had
+operation errors, but admission drops and the completion deadline are failures.

@@ -52,8 +52,7 @@ NATS submissions have a default concurrency bound of 16 per backend instance.
 updates do not acquire these producer permits.
 
 An ordered, replayable watch supplies discovery hints without transferring
-payloads or completed history on every poll. Claims always re-read and CAS the
-actual cell. Discovery metadata is decoded once per revision and reused across
+payloads or completed history on every poll. Claims must CAS the exact observed server revision before acquiring ownership. Discovery metadata is decoded once per revision and reused across
 polls; malformed metadata remains an error. Each tenant has its own discovery
 index, and dequeue selects the next job in one pass without sorting/cloning all
 candidates or scanning other tenants. Watch end/errors trigger reconstruction. The watch is not ownership
@@ -133,8 +132,10 @@ Redis successful claims return the binary payload from the same atomic CAS scrip
 response; losing claims return no payload. This removes a separate payload GET
 without changing ownership checks or the stored format.
 
-JetStream completion may apply its transition to cached metadata, but success
-still requires CAS of that exact server revision. A stale validation result or a
-revision conflict falls back to an authoritative read, preserving remote
-cancellation and heartbeat behavior. Claims and explicit reads continue to read
-the server. This is an optional-backend optimization, not a portable API change.
+JetStream claims and completions may apply their transitions to observed metadata,
+but success still requires CAS of that exact server revision. A claim that loses
+CAS skips that candidate. A completion with stale validation or a revision conflict
+falls back to an authoritative read, preserving remote cancellation and heartbeat
+behavior. Uncached claims and explicit reads continue to read the server. Revision
+zero is never used to claim from an unobserved hint. This is an optional-backend
+optimization, not a portable API change.
