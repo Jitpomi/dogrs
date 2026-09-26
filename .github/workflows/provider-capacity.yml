@@ -20,12 +20,12 @@ on:
         description: Fixed JetStream bucket count
         type: choice
         options: ['1', '4', '16']
-        default: '1'
+        default: '16'
       postgres_commit_delay_us:
         description: PostgreSQL durable commit grouping delay
         type: choice
         options: ['0', '1000', '3000', '5000']
-        default: '3000'
+        default: '0'
 permissions:
   contents: read
 jobs:
@@ -47,10 +47,9 @@ jobs:
           PAYLOAD_BYTES: ${{ inputs.payload_bytes || '65536' }}
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
           DOGRS_CAPACITY_WORKERS: 1
-          DOGRS_PG_BATCH: ${{ matrix.backend == 'postgres' && '1' || '0' }}
-          DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '3000') || '0' }}
+          DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
-          DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '1') || '1' }}
+          DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '16') || '1' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

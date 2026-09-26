@@ -9,12 +9,17 @@ p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis'
 root=pathlib.Path(a.report_dir).resolve();root.mkdir(parents=True,exist_ok=True)
 run='dogrs-fault-'+secrets.token_hex(5);folder=root/run;folder.mkdir()
 binary=str(pathlib.Path(os.environ['DOGRS_SYSTEM_BINARY']).resolve());containers=[];network=None;process=None
+allocated_ports=set()
 
 def command(*args):return subprocess.check_output(args,text=True).strip()
 def port():
- with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
+ while True:
+  with socket.socket() as s:s.bind(('127.0.0.1',0));number=s.getsockname()[1]
+  if number not in allocated_ports:
+   allocated_ports.add(number);return number
 def launch(name,*args):
- command('docker','run','-d','--name',name,*args);containers.append(name)
+ command('docker','create','--name',name,*args);containers.append(name)
+ command('docker','start',name)
 def wait_port(number):
  deadline=time.monotonic()+60
  while True:
@@ -27,7 +32,6 @@ try:
  (folder/'environment.json').write_text(json.dumps({
   'host_architecture':platform.machine(),'host_logical_cpus':os.cpu_count(),
   'docker':json.loads(command('docker','info','--format','{"cpus":{{.NCPU}},"memory_bytes":{{.MemTotal}},"architecture":"{{.Architecture}}"}')),
-  'postgres_batch':os.environ.get('DOGRS_PG_BATCH')=='1',
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
   'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),

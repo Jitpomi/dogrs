@@ -148,10 +148,8 @@ See [KV storage](../dog-queue/KV-STORAGE.md) for limits and reproduction.
 
 A later hosted PostgreSQL 64 KiB run passed 300/300 jobs over 30 seconds, verified
 all 300 business effects and completions by 30.744 seconds, and recorded no
-overload or duplicate attempts (enqueue p95 447.71 ms). The optional enqueue
-batcher is independently tested for immediate cross-connection visibility after
-acknowledgement, cross-tenant deduplication, whole-batch rollback, and subsequent
-successful admission. It returns no successful response before COMMIT.
+overload or duplicate attempts (enqueue p95 447.71 ms). Enqueue remains one atomic statement; optional producer concurrency is
+configurable without introducing a second background execution path.
 
 CI exposed a Redis reconnect timeout after restart. The retry cycle is now
 bounded to fit below the queue operation deadline; the same-client controlled
@@ -161,3 +159,19 @@ including the five-minute Redis outage and fresh-container AOF restoration.
 The capacity fixture records host/Docker resources and PostgreSQL WAL I/O
 statistics. These separate the observed deployment profile from the portable
 backend API; they do not turn failing capacity measurements into passes.
+
+### Sustained full-payload result
+
+The 60-second Linux Redis AOF/always/noeviction run offered 60,000 jobs at the
+agreed aggregate rate. It admitted 52,712, completed 45,669 before the 65-second
+deadline and dropped 7,288 offers at the bounded client admission limit. It
+reported no queue errors or duplicate attempts. The server log records repeated
+AOF rewrites during the run. The short 10,000-job pass therefore does **not**
+close sustained 64 KiB capacity; compaction under load remains a release gate.
+
+The PostgreSQL enqueue-batching experiment preserved transaction correctness but
+did not close capacity and was removed rather than expanding the public API.
+The ordinary single-statement path and optional producer cap remain. A separate
+replicated-NATS 1 KiB run failed in fixture setup due to a repeated host port;
+the allocator now ensures uniqueness and tracks containers before starting them.
+That setup failure is not a backend capacity measurement.

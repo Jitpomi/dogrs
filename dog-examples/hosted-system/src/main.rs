@@ -260,11 +260,6 @@ async fn main() -> Result<()> {
                         max_connections: std::env::var("DOGRS_PG_POOL_SIZE")
                             .unwrap_or_else(|_| "64".into())
                             .parse()?,
-                        enqueue_batch: (std::env::var("DOGRS_PG_BATCH").as_deref() == Ok("1"))
-                            .then(|| dog_queue::backend::postgres::PostgresBatchOptions {
-                                workers: 4,
-                                ..Default::default()
-                            }),
                         enqueue_concurrency: std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY")
                             .ok()
                             .map(|n| n.parse())

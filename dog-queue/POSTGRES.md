@@ -68,16 +68,3 @@ bounds producers before they enter the pool. Keep it below `max_connections` to
 reserve worker capacity during a producer burst. It defaults to `None`; choose a
 limit using measured database/network latency rather than a fixed pool fraction.
 A small cap on a high-latency connection can reduce throughput.
-
-### Optional enqueue batching
-
-`PostgresOptions.enqueue_batch = Some(PostgresBatchOptions::default())` enables a
-bounded coalescing channel (two workers, up to 32 requests per transaction, up to
-2 ms gathering delay by default). Workers must be fewer than pool connections;
-this reserves pool capacity for claims and acknowledgements. No caller succeeds
-until the shared transaction commits. Failed transactions acknowledge no members;
-timed-out or canceled requests retain the normal unknown-commit rule:
-retry with the same idempotency key. Validation happens before admission, and
-consistent deduplication-key lock order prevents opposite-order batches from
-deadlocking each other. This is optional PostgreSQL tuning, not a portable queue
-requirement. A batching setting alone does not establish a throughput guarantee.
