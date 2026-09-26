@@ -1,6 +1,7 @@
 name: CI
 on:
   push:
+    branches: [main]
   pull_request:
 permissions:
   contents: read
@@ -17,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -29,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: |
           for features in '' http grpc cli iroh http,grpc,cli,iroh; do
@@ -50,7 +51,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -64,7 +65,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: docker run -d --name typedb-ci -p 127.0.0.1:1729:1729 typedb/typedb:3.13.6
       - run: cargo test -p dog-queue --features redis,postgres,cron-scheduling --locked
@@ -88,10 +89,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y cmake libsasl2-dev libssl-dev pkg-config
+      - run: sudo apt-get update && sudo apt-get install -y cmake libsasl2-dev libssl-dev libcurl4-openssl-dev pkg-config
       - run: cargo check -p dog-queue --all-features --locked
+      - run: |
+          for features in postgres redis nats-async amqp rabbitmq-lapin kafka-rdkafka kafka-rskafka aws-sqs gcp-pubsub; do
+            cargo check -p dog-queue --no-default-features --features "$features" --locked
+          done
 
   brokers:
     runs-on: ubuntu-latest
@@ -107,7 +112,7 @@ jobs:
           POSTGRES_PASSWORD: dogrs-test-only
         ports: [5432:5432]
         options: >-
-          --health-cmd pg_isready --health-interval 5s
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
           --health-timeout 5s --health-retries 10
     env:
       DOGRS_POSTGRES_URL: host=127.0.0.1 port=5432 user=postgres password=dogrs-test-only
@@ -117,12 +122,14 @@ jobs:
       DOGRS_KAFKA_TOPIC: dogrs-ci
       DOGRS_PUBSUB_ENDPOINT: http://127.0.0.1:8085
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - if: matrix.backend == 'rabbitmq'
         run: docker run -d --name rabbit-ci -p 127.0.0.1:5672:5672 rabbitmq:4.1-alpine
       - if: matrix.backend == 'aws-sqs'
         run: docker run -d --name sqs-ci -p 127.0.0.1:9324:9324 softwaremill/elasticmq-native:1.6.15
+      - if: matrix.backend == 'kafka'
+        run: sudo apt-get update && sudo apt-get install -y cmake libsasl2-dev libssl-dev libcurl4-openssl-dev pkg-config
       - if: matrix.backend == 'kafka'
         run: |
           docker run -d --name kafka-ci -p 127.0.0.1:9092:9092 redpandadata/redpanda:v25.1.9 redpanda start --overprovisioned --smp 1 --memory 512M --reserve-memory 0M --node-id 0 --check=false --kafka-addr 0.0.0.0:9092 --advertise-kafka-addr 127.0.0.1:9092
@@ -131,11 +138,24 @@ jobs:
             sleep 2
           done
       - if: matrix.backend == 'gcp-pubsub'
-        uses: google-github-actions/setup-gcloud@v2
+        uses: actions/setup-java@v5
         with:
+          distribution: temurin
+          java-version: '17'
+      - if: matrix.backend == 'gcp-pubsub'
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: 563.0.0
           install_components: pubsub-emulator
       - if: matrix.backend == 'gcp-pubsub'
         run: |
           mkdir -p /tmp/dogrs-pubsub
-          gcloud beta emulators pubsub start --host-port=127.0.0.1:8085 --project=dogrs-test --data-dir=/tmp/dogrs-pubsub --quiet > /tmp/pubsub.log 2>&1 &
+          nohup gcloud beta emulators pubsub start --host-port=127.0.0.1:8085 --project=dogrs-test --data-dir=/tmp/dogrs-pubsub --quiet > /tmp/pubsub.log 2>&1 < /dev/null &
+          for attempt in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:8085; then break; fi
+            sleep 1
+          done
+          curl -s -o /dev/null http://127.0.0.1:8085 || { cat /tmp/pubsub.log; exit 1; }
       - run: cargo test -p dog-queue --features postgres,${{ matrix.backend }} --test broker_backends --locked -- --ignored
+      - if: always() && matrix.backend == 'gcp-pubsub'
+        run: cat /tmp/pubsub.log

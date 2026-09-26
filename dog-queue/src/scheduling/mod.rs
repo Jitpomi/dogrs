@@ -88,12 +88,7 @@ impl<B: QueueBackend + ?Sized + 'static> SchedulerBackend for InMemoryScheduler<
 
         // Spawn a background task that waits for each upcoming datetime and enqueues.
         let join_handle = tokio::spawn(async move {
-            let mut upcoming = schedule.upcoming(Utc);
-            loop {
-                let next = match upcoming.next() {
-                    Some(t) => t,
-                    None => break,
-                };
+            for next in schedule.upcoming(Utc) {
                 let now = Utc::now();
                 if next > now {
                     let dur = (next - now).to_std().unwrap_or(Duration::from_secs(0));

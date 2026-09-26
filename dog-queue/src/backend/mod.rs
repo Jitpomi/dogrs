@@ -133,8 +133,8 @@ pub trait QueueBackend: Send + Sync {
     ///
     /// Backends that manage lease expiry internally (e.g. [`MemoryBackend`]) should
     /// override this.  The default is a no-op (`Ok(vec![])`) for backends that rely on an
-    /// external TTL mechanism (Redis `EXPIRE`, Postgres `pg_cron`) which handles
-    /// reclamation outside the Rust process.
+    /// external lease mechanism. The PostgreSQL, Redis and JetStream ledgers
+    /// implement this method directly and require a running reaper.
     ///
     /// Called periodically by `QueueAdapter::start_workers` at `lease_duration / 2`
     /// intervals.  Returns one [`ReapOutcome`] per reclaimed lease — the adapter uses

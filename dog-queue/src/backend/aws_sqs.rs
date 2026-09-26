@@ -68,6 +68,7 @@ impl Notifications for SqsNotifications {
         Ok(received)
     }
 }
+#[allow(clippy::module_inception)] // Preserve the pre-0.2 import path.
 pub mod aws_sqs {
     pub use super::{AwsSqsBackend, SqsNotifications};
 }

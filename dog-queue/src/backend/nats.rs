@@ -139,6 +139,7 @@ impl StateStore for NatsStore {
 }
 
 /// Compatibility import path.
+#[allow(clippy::module_inception)] // Preserve the pre-0.2 import path.
 pub mod nats {
     pub use super::{NatsBackend, NatsConfig, NatsStore};
 }

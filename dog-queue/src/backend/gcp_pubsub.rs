@@ -82,6 +82,7 @@ impl Notifications for PubSubNotifications {
         }
     }
 }
+#[allow(clippy::module_inception)] // Preserve the pre-0.2 import path.
 pub mod gcp_pubsub {
     pub use super::{GcpPubSubBackend, PubSubNotifications};
 }

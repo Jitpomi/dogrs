@@ -88,6 +88,7 @@ impl Notifications for RabbitNotifications {
         Ok(false)
     }
 }
+#[allow(clippy::module_inception)] // Preserve the pre-0.2 import path.
 pub mod rabbitmq {
     pub use super::{RabbitMqBackend, RabbitNotifications};
 }

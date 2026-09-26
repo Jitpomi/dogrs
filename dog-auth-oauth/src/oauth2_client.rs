@@ -167,3 +167,60 @@ where
         Ok(Some(profile))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct RejectCallbacks;
+    #[async_trait]
+    impl OAuthCallbackVerifier<()> for RejectCallbacks {
+        async fn consume(&self, _: &str, _: &mut HookContext<Value, ()>) -> Result<String> {
+            Err(dog_core::DogError::not_authenticated("unbound callback").into_anyhow())
+        }
+    }
+    #[tokio::test]
+    async fn authorization_uses_fresh_state_and_pkce_and_rejects_unbound_exchange() {
+        let provider = OAuth2AuthorizationCodeProvider::new(
+            OAuth2ClientConfig {
+                name: "test".into(),
+                client_id: "test".into(),
+                client_secret: "test".into(),
+                auth_url: "https://example.invalid/authorize".into(),
+                token_url: "https://example.invalid/token".into(),
+                redirect_uri: "https://app.invalid/callback".into(),
+                scopes: vec!["openid".into()],
+                userinfo_url: Some("https://example.invalid/userinfo".into()),
+            },
+            Arc::new(RejectCallbacks),
+        )
+        .unwrap();
+        let first = provider.authorize_url();
+        let second = provider.authorize_url();
+        assert_ne!(first.state, second.state);
+        assert_ne!(first.code_verifier, second.code_verifier);
+        let url = reqwest::Url::parse(&first.url).unwrap();
+        let query: std::collections::HashMap<_, _> = url.query_pairs().collect();
+        assert_eq!(query.get("state").unwrap(), first.state.as_str());
+        assert_eq!(query.get("code_challenge_method").unwrap(), "S256");
+        let challenge = PkceCodeChallenge::from_code_verifier_sha256(&PkceCodeVerifier::new(
+            first.code_verifier,
+        ));
+        assert_eq!(query.get("code_challenge").unwrap(), challenge.as_str());
+        let app = dog_core::DogAppBuilder::<Value, ()>::new().build();
+        let mut ctx = HookContext::new(
+            dog_core::TenantContext::new("test"),
+            dog_core::ServiceMethodKind::Create,
+            (),
+            dog_core::ServiceCaller::new(app.clone()),
+            app.config_snapshot(),
+        );
+        assert!(provider
+            .exchange_code("code", None, &mut ctx)
+            .await
+            .is_err());
+        assert!(provider
+            .exchange_code("code", Some(&first.state), &mut ctx)
+            .await
+            .is_err());
+    }
+}
