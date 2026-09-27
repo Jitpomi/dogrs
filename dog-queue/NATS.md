@@ -27,10 +27,15 @@ writers and readers using either mode can share the bucket.
 Each enqueue atomically commits its immutable payload and discoverable metadata
 together. A rejected idempotency-scope update leaves neither key partially written.
 The atomic writer groups only concurrent operations, with at most 128 distinct
-keys and a normal target of 240 KiB of value bytes per batch. This leaves framing
-headroom below JetStream's roughly 256 KiB Raft proposal grouping boundary, avoiding
-an acknowledgement that waits for many sequential WAL appends. A larger single
-logical operation still runs intact, up to the existing 2 MiB hard bound. Separate bounded execution lanes handle
+keys. Normal coalescing includes the complete logical operation that reaches or
+crosses 256 KiB of value bytes, while the entire batch stays within the 2 MiB hard
+bound. JetStream closes its roughly 256 KiB Raft append after the crossing entry.
+An enqueue places its small metadata first and payload last within the atomic
+operation; this lets four typical 64 KiB jobs finish a batch instead of stopping
+at three or leaving a final metadata entry for another append. Atomic visibility
+prevents discovery of metadata before its payload commits, and enqueue returns
+the metadata revision for subsequent ownership checks. Larger individual logical
+operations remain intact. Separate bounded execution lanes handle
 enqueue pairs and metadata updates: the enqueue lane pipelines up to four
 batches while the metadata lane has its own execution slot. Each input channel holds at
 most 128 queued requests. Overlapping bounded acknowledgement waits avoids a
@@ -46,7 +51,9 @@ count as success. Per-key expected revisions are checked by the server when the
 whole batch commits. A known revision-conflict rejection is retried as independent
 conditional operations (enqueue pairs stay atomic) so unrelated operations can succeed. Transport errors,
 timeouts and malformed acknowledgements are **not** automatically replayed: their
-commit outcome may be unknown. A batch execution is bounded to five seconds.
+commit outcome may be unknown. A batch execution is bounded to five seconds. Optional `queue-diagnostics`
+timings distinguish frame submission, staging acknowledgement and final durable
+acknowledgement waits; only the final acknowledgement establishes success.
 
 Local workers reserve advisory candidates while their claim is in flight. This
 avoids redundant local lease races but grants no ownership. The server's exact

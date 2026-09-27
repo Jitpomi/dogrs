@@ -9,11 +9,11 @@ use tokio::sync::{mpsc, oneshot};
 const MAX_MESSAGES: usize = 128;
 pub(super) const ADMISSION_CAPACITY: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
-// JetStream splits Raft proposals at roughly 256 KiB. Large atomic batches
-// wait for several durable appends before releasing any caller. Keep normal
-// batches under that boundary, leaving room for headers/replication framing.
-// A single larger logical operation remains valid and is never split.
-const TARGET_BATCH_BYTES: usize = 240 * 1024;
+// JetStream closes a Raft append after the entry that crosses 256 KiB,
+// rather than before it. Include the logical operation crossing the target;
+// enqueues put their small metadata first and payload last so the crossing
+// entry can also finish the atomic batch. A larger operation stays intact.
+const TARGET_BATCH_BYTES: usize = 256 * 1024;
 struct Write {
     key: String,
     value: Vec<u8>,
@@ -82,7 +82,8 @@ impl BatchWriter {
                     // A logical operation (including an enqueue's payload and metadata)
                     // is indivisible. Distinct expected subjects are required by ADR-50.
                     if count + group.writes.len() > MAX_MESSAGES
-                        || bytes + size > TARGET_BATCH_BYTES
+                        || bytes >= TARGET_BATCH_BYTES
+                        || bytes + size > MAX_BYTES
                         || group.writes.iter().any(|w| keys.contains(&w.key))
                     {
                         deferred = Some(group);
@@ -192,19 +193,21 @@ impl BatchWriter {
     ) -> QueueResult<Option<u64>> {
         Ok(self
             .send(vec![
-                Write {
-                    key: payload_key,
-                    value: payload,
-                    revision: 0,
-                },
+                // Atomic visibility makes this order safe: metadata is not
+                // discoverable until its payload commits in the same batch.
                 Write {
                     key: key.into(),
                     value: metadata,
                     revision,
                 },
+                Write {
+                    key: payload_key,
+                    value: payload,
+                    revision: 0,
+                },
             ])
             .await?
-            .map(|r| r[1]))
+            .map(|r| r[0]))
     }
 }
 async fn single(bucket: &kv::Store, write: &Write) -> QueueResult<Option<u64>> {
@@ -300,6 +303,7 @@ async fn atomic(
             bucket.put_prefix.as_ref().unwrap_or(&bucket.prefix),
             write.key
         );
+        let send_time = crate::diagnostics::start();
         if bucket.use_jetstream_prefix {
             context
                 .send_request(
@@ -322,11 +326,17 @@ async fn atomic(
                 .await
                 .map_err(error)?;
         }
+        crate::diagnostics::elapsed(crate::diagnostics::NATS_ATOMIC_SEND, send_time);
         // Confirm batch start, then pipeline its remaining frames in order.
         // Awaiting every staging reply adds a network round trip per message.
         if i != 0 && i + 1 != writes.len() {
             continue;
         }
+        let _wait = crate::diagnostics::Scope::new(if i == 0 {
+            crate::diagnostics::NATS_ATOMIC_START_WAIT
+        } else {
+            crate::diagnostics::NATS_ATOMIC_FINAL_WAIT
+        });
         loop {
             let response = replies
                 .next()
@@ -469,7 +479,7 @@ mod tests {
         assert!(bucket.get("orphan").await.unwrap().is_none());
         // The coalescing target must not reject or split a valid large job.
         let writer = BatchWriter::start(js.clone(), bucket.clone());
-        writer
+        let metadata_revision = writer
             .enqueue(
                 "large-payload".into(),
                 vec![5; 512 * 1024],
@@ -488,6 +498,30 @@ mod tests {
             bucket.get("large-job").await.unwrap().unwrap().as_ref(),
             &vec![6; 1024]
         );
+        assert_eq!(
+            bucket.entry("large-job").await.unwrap().unwrap().revision,
+            metadata_revision,
+            "enqueue must return the metadata revision, not the final payload revision"
+        );
+        assert!(writer
+            .submit("large-job", vec![7], metadata_revision)
+            .await
+            .unwrap()
+            .is_some());
+        // Rejection of the final payload write must roll back the preceding
+        // metadata, so discovery never exposes a job without its own payload.
+        assert!(writer
+            .enqueue(
+                "large-payload".into(),
+                vec![9],
+                "uncommitted-job",
+                vec![8],
+                0
+            )
+            .await
+            .unwrap()
+            .is_none());
+        assert!(bucket.get("uncommitted-job").await.unwrap().is_none());
         js.delete_key_value(&bucket.name).await.unwrap();
     }
     #[tokio::test]

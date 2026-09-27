@@ -44,6 +44,9 @@ pub(crate) const NATS_ENQUEUE_BATCH_QUEUE: usize = 29;
 pub(crate) const NATS_UPDATE_BATCH_QUEUE: usize = 30;
 pub(crate) const NATS_ENQUEUE_BATCH_EXECUTE: usize = 31;
 pub(crate) const NATS_UPDATE_BATCH_EXECUTE: usize = 32;
+pub(crate) const NATS_ATOMIC_START_WAIT: usize = 33;
+pub(crate) const NATS_ATOMIC_FINAL_WAIT: usize = 34;
+pub(crate) const NATS_ATOMIC_SEND: usize = 35;
 const NAMES: &[&str] = &[
     "pg_enqueue_total",
     "pg_claim_total",
@@ -78,6 +81,9 @@ const NAMES: &[&str] = &[
     "nats_update_batch_queue",
     "nats_enqueue_batch_execute",
     "nats_update_batch_execute",
+    "nats_atomic_start_wait",
+    "nats_atomic_final_wait",
+    "nats_atomic_send",
 ];
 struct Metric {
     count: AtomicU64,
