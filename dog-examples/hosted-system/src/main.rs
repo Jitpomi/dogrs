@@ -425,9 +425,10 @@ async fn main() -> Result<()> {
                         config.allow_atomic_publish =
                             std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
                         js.update_stream(config).await?;
-                        let backend = if std::env::var("DOGRS_NATS_LAYOUT").as_deref()
-                            == Ok("split")
-                        {
+                        let backend = if matches!(
+                            std::env::var("DOGRS_NATS_LAYOUT").as_deref(),
+                            Ok("split" | "packed")
+                        ) {
                             let payload_name = format!("{name}_payload");
                             let payload = create_fixture_bucket(
                                 &js,
@@ -497,15 +498,25 @@ async fn main() -> Result<()> {
                 config.allow_atomic_publish =
                     std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
                 js.update_stream(config).await?;
-                let backend = dog_queue::backend::nats::NatsBackend::from_context(
-                    js.clone(),
-                    &name,
-                    1024 * 1024,
-                )
-                .await?
-                .with_lease_duration(Duration::from_secs(
-                    if role == "capacity-local" { 300 } else { 2 },
-                ));
+                let backend =
+                    if std::env::var("DOGRS_NATS_LAYOUT").as_deref() == Ok("packed-combined") {
+                        dog_queue::backend::nats::NatsBackend::from_context_with_payload_packing(
+                            js.clone(),
+                            &name,
+                            1024 * 1024,
+                        )
+                        .await?
+                    } else {
+                        dog_queue::backend::nats::NatsBackend::from_context(
+                            js.clone(),
+                            &name,
+                            1024 * 1024,
+                        )
+                        .await?
+                    }
+                    .with_lease_duration(Duration::from_secs(
+                        if role == "capacity-local" { 300 } else { 2 },
+                    ));
                 return run_local(backend, &role).await;
             }
             _ => bail!("unsupported local capacity backend"),

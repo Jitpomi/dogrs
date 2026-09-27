@@ -653,6 +653,71 @@ mod tests {
     }
     #[tokio::test]
     #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
+    async fn packed_conflict_keeps_logical_jobs_atomic_and_returns_metadata_revision() {
+        use futures::TryStreamExt;
+        let (js, bucket) = fixture().await;
+        let original = bucket.create("a.existing", vec![1].into()).await.unwrap();
+        let groups = vec![
+            Group {
+                queued: None,
+                writes: vec![
+                    write("a.existing", 0, vec![2]),
+                    write("p.rejected", 0, vec![3; 65536]),
+                ],
+                reply: oneshot::channel().0,
+            },
+            Group {
+                queued: None,
+                writes: vec![
+                    write("a.new", 0, vec![4]),
+                    write("p.new", 0, vec![5; 65536]),
+                ],
+                reply: oneshot::channel().0,
+            },
+        ];
+        let outcomes = execute_mode(&js, &bucket, &groups, Some(900000))
+            .await
+            .unwrap();
+        assert!(outcomes[0].as_ref().unwrap().is_none());
+        let revisions = outcomes[1].as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(revisions.len(), 2);
+        assert_eq!(
+            bucket.entry("a.new").await.unwrap().unwrap().revision,
+            revisions[0]
+        );
+        assert_eq!(
+            bucket.entry("p.new").await.unwrap().unwrap().revision,
+            revisions[1]
+        );
+        assert_eq!(
+            bucket.entry("a.existing").await.unwrap().unwrap().revision,
+            original
+        );
+        assert!(bucket.get("p.rejected").await.unwrap().is_none());
+        let keys: Vec<_> = bucket.keys().await.unwrap().try_collect().await.unwrap();
+        assert_eq!(keys.iter().filter(|key| key.starts_with("b.")).count(), 1);
+        assert_eq!(keys.iter().filter(|key| key.starts_with("i.")).count(), 1);
+        // A valid update's metadata revision is retained through packing.
+        let groups = vec![Group {
+            queued: None,
+            writes: vec![
+                write("a.existing", original, vec![6]),
+                write("p.updated", 0, vec![7; 65536]),
+            ],
+            reply: oneshot::channel().0,
+        }];
+        let result = execute_mode(&js, &bucket, &groups, Some(900000))
+            .await
+            .unwrap();
+        let revisions = result[0].as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(
+            bucket.entry("a.existing").await.unwrap().unwrap().revision,
+            revisions[0]
+        );
+        js.delete_key_value(&bucket.name).await.unwrap();
+    }
+    #[tokio::test]
+    #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
     async fn atomic_revisions_and_rejected_batch_preserve_every_key() {
         let (js, bucket) = fixture().await;
         let writes = [
