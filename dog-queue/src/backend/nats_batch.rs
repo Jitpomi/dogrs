@@ -6,7 +6,8 @@ use futures::StreamExt;
 use std::{collections::HashSet, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
-const MAX_MESSAGES: usize = 32;
+const MAX_MESSAGES: usize = 128;
+pub(super) const ADMISSION_CAPACITY: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 struct Write {
     key: String,
@@ -43,7 +44,7 @@ impl BatchWriter {
         }
     }
     fn lane(context: jetstream::Context, bucket: kv::Store, enqueue: bool) -> mpsc::Sender<Group> {
-        let (sender, mut receiver) = mpsc::channel::<Group>(128);
+        let (sender, mut receiver) = mpsc::channel::<Group>(ADMISSION_CAPACITY);
         tokio::spawn(async move {
             let mut deferred = None;
             loop {
@@ -458,7 +459,7 @@ mod tests {
         // backlog independently of network speed and makes the regression
         // deterministic: metadata must still reach the live server.
         let mut permits = Vec::new();
-        for _ in 0..128 {
+        for _ in 0..ADMISSION_CAPACITY {
             permits.push(writer.enqueues.reserve().await.unwrap());
         }
         let pending = {
@@ -501,7 +502,7 @@ mod tests {
                 .unwrap(),
         );
         let mut tasks = tokio::task::JoinSet::new();
-        for n in 0..64u8 {
+        for n in 0..128u8 {
             let backend = backend.clone();
             tasks.spawn(async move {
                 backend
@@ -543,7 +544,7 @@ mod tests {
             }
         }
         assert_eq!(
-            payloads, 64,
+            payloads, 128,
             "losing enqueue pairs must leave no orphan payloads"
         );
         let mut consumers = tokio::task::JoinSet::new();

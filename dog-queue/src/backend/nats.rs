@@ -25,7 +25,8 @@ fn error(e: impl std::fmt::Display) -> QueueError {
 
 impl NatsBackend {
     /// Bound concurrent submissions before they reach JetStream. Claims and
-    /// lease updates do not take producer permits. Defaults to 16 per backend.
+    /// lease updates do not take producer permits. Defaults to 16 for individual
+    /// writes, or the 128-request bounded queue for atomic batching.
     pub fn with_enqueue_concurrency(mut self, limit: usize) -> QueueResult<Self> {
         if !(1..=4096).contains(&limit) {
             return Err(QueueError::InvalidConfig(
@@ -106,6 +107,11 @@ impl NatsBackend {
             && bucket.stream.cached_info().config.mirror.is_none();
         let mut backend = Self::from_store_with_max_payload(bucket.clone(), max_payload)?;
         if atomic {
+            // The batch writer bounds actual I/O and reserves a metadata lane.
+            // The individual-write limiter would otherwise prevent it from
+            // filling a byte-bounded batch while awaiting durable replies.
+            backend.store.enqueue_slots =
+                tokio::sync::Semaphore::new(super::nats_batch::ADMISSION_CAPACITY);
             backend.store.writer = Some(super::nats_batch::BatchWriter::start(context, bucket));
         }
         Ok(backend)
