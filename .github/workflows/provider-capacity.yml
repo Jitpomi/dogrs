@@ -1,4 +1,4 @@
-name: NATS write-window attribution
+name: NATS batch-size attribution
 on:
   pull_request:
     paths: ['.github/workflows/provider-capacity.yml', 'dog-queue/**', 'dog-examples/hosted-system/**', 'Cargo.lock']
