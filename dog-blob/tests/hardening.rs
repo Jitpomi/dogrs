@@ -609,3 +609,32 @@ async fn legacy_nonatomic_session_store_is_rejected_before_upload() {
     ));
     assert!(store.objects.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn chunk_size_hint_is_checked_against_actual_assembled_bytes() {
+    let store = Store::default();
+    let adapter = BlobAdapter::new(Arc::new(BlobState::new(store.clone(), config())));
+    assert!(adapter
+        .put_chunk(
+            ctx("a"),
+            ChunkSessionId::new(),
+            0,
+            1,
+            BlobPut::new().with_size_hint(9),
+            b"data".to_vec()
+        )
+        .await
+        .is_err());
+    assert!(adapter
+        .put_chunk(
+            ctx("a"),
+            ChunkSessionId::new(),
+            0,
+            1,
+            BlobPut::new().with_size_hint(3),
+            b"data".to_vec()
+        )
+        .await
+        .is_err());
+    assert!(store.objects.lock().unwrap().is_empty());
+}

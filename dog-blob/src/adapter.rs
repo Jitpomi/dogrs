@@ -565,6 +565,12 @@ impl BlobAdapter {
         bounded::identifier(id.as_str())?;
         bounded::put_options(&put)?;
         let rules = &self.state.config.upload_rules;
+        if put
+            .size_hint
+            .is_some_and(|size| size > self.state.config.max_blob_bytes)
+        {
+            return Err(BlobError::invalid("blob exceeds byte limit"));
+        }
         if total == 0
             || total > rules.max_parts
             || index >= total
@@ -682,6 +688,9 @@ impl BlobAdapter {
             }
         });
         let mut put = session.put.clone();
+        if put.size_hint.is_some_and(|size| size != session.bytes) {
+            return Err(BlobError::invalid("declared and received sizes differ"));
+        }
         put.size_hint = Some(session.bytes);
         let receipt = self.put(ctx, put, body).await?;
         session.completed = Some(receipt.clone());
