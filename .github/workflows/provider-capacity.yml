@@ -40,6 +40,10 @@ on:
         description: Sample active PostgreSQL waits during capacity measurement
         type: boolean
         default: false
+      profile_cpu:
+        description: Diagnostic Linux CPU sampling (not an uninstrumented capacity verdict)
+        type: boolean
+        default: false
       postgres_fixture_partitions:
         description: Disposable PostgreSQL layout experiment (not a library setting)
         type: choice
@@ -85,6 +89,14 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build -p hosted-system --release --features redis,nats --locked
+      - name: Install optional CPU profiler
+        if: ${{ inputs.profile_cpu }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y linux-tools-generic
+          profiler=$(find /usr/lib/linux-tools -type f -name perf | sort -V | tail -1)
+          test -n "$profiler"
+          echo "DOGRS_PERF=$profiler" >> "$GITHUB_ENV"
       - run: |
           if [ "$PRODUCER_CAP" != none ]; then
             export DOGRS_PG_ENQUEUE_CONCURRENCY="$PRODUCER_CAP"

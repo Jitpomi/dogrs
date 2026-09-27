@@ -42,6 +42,7 @@ try:
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
   'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
   'postgres_wait_sampling':os.environ.get('DOGRS_PG_PROFILE')=='1',
+  'cpu_sampling':bool(os.environ.get('DOGRS_PERF')),
   'postgres_fixture_partitions':int(os.environ.get('DOGRS_PG_FIXTURE_PARTITIONS','0')),
   'storage_shards':pg_instances if pg_instances>1 else int(os.environ.get('DOGRS_CAPACITY_SHARDS','1')),
   'postgres_instances':pg_instances,
@@ -135,7 +136,14 @@ try:
       sampler.stdin.close()
     with (folder/'capacity.log').open('w') as output:
      role='admission-native' if a.admission_mode and a.admission_mode.startswith('native-') else 'capacity-local'
-     result=subprocess.run([binary,role],env=env,stdout=output,stderr=subprocess.STDOUT,timeout=300)
+     invocation=[binary,role]
+     profiler=os.environ.get('DOGRS_PERF')
+     if profiler:
+      assert platform.system()=='Linux','CPU sampling requires the disposable Linux runner'
+      invocation=['sudo','-n','-E',profiler,'record','-a','-e','cpu-clock','-F','49','--buildid-all','-o',str(folder/'perf.data'),'--',*invocation]
+     result=subprocess.run(invocation,env=env,stdout=output,stderr=subprocess.STDOUT,timeout=300)
+     if profiler:
+      (folder/'cpu-profile.txt').write_text(command('sudo','-n',profiler,'report','--stdio','--no-children','--sort','comm,dso,symbol','--percent-limit','0.5','-i',str(folder/'perf.data')))
     after=resource.getrusage(resource.RUSAGE_CHILDREN)
     (folder/'client-cpu.json').write_text(json.dumps({'user_seconds':after.ru_utime-before.ru_utime,'system_seconds':after.ru_stime-before.ru_stime}))
    finally:
