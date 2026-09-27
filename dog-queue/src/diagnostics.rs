@@ -40,6 +40,10 @@ pub(crate) const PG_CLAIM_QUEUE: usize = 25;
 pub(crate) const PG_COMPLETE_QUEUE: usize = 26;
 pub(crate) const NATS_ATOMIC_COMMIT: usize = 27;
 pub(crate) const NATS_ENQUEUE_COMMIT: usize = 28;
+pub(crate) const NATS_ENQUEUE_BATCH_QUEUE: usize = 29;
+pub(crate) const NATS_UPDATE_BATCH_QUEUE: usize = 30;
+pub(crate) const NATS_ENQUEUE_BATCH_EXECUTE: usize = 31;
+pub(crate) const NATS_UPDATE_BATCH_EXECUTE: usize = 32;
 const NAMES: &[&str] = &[
     "pg_enqueue_total",
     "pg_claim_total",
@@ -70,6 +74,10 @@ const NAMES: &[&str] = &[
     "pg_complete_queue",
     "nats_atomic_commit",
     "nats_enqueue_commit",
+    "nats_enqueue_batch_queue",
+    "nats_update_batch_queue",
+    "nats_enqueue_batch_execute",
+    "nats_update_batch_execute",
 ];
 struct Metric {
     count: AtomicU64,

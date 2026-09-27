@@ -2,7 +2,7 @@
 //! only after the final durable acknowledgement. Unknown outcomes are never replayed.
 use crate::{QueueError, QueueResult};
 use async_nats::jetstream::{self, kv, publish::PublishAck, response::Response};
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use std::{collections::HashSet, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
@@ -14,10 +14,14 @@ struct Write {
     revision: u64,
 }
 struct Group {
+    queued: Option<std::time::Instant>,
     writes: Vec<Write>,
     reply: oneshot::Sender<QueueResult<Option<Vec<u64>>>>,
 }
-pub(super) struct BatchWriter(mpsc::Sender<Group>);
+pub(super) struct BatchWriter {
+    updates: mpsc::Sender<Group>,
+    enqueues: mpsc::Sender<Group>,
+}
 fn error(e: impl std::fmt::Display) -> QueueError {
     QueueError::Internal(format!("JetStream atomic publish: {e}"))
 }
@@ -30,14 +34,19 @@ fn conflict(e: &jetstream::Error) -> bool {
 }
 impl BatchWriter {
     pub(super) fn start(context: jetstream::Context, bucket: kv::Store) -> Self {
-        let (sender, mut receiver) = mpsc::channel::<Group>(256);
+        // Reserve one execution lane for lease/completion metadata. A large
+        // producer backlog must not occupy both durable-write slots or put a
+        // lease update behind payload staging in the same atomic batch.
+        Self {
+            updates: Self::lane(context.clone(), bucket.clone(), false),
+            enqueues: Self::lane(context, bucket, true),
+        }
+    }
+    fn lane(context: jetstream::Context, bucket: kv::Store, enqueue: bool) -> mpsc::Sender<Group> {
+        let (sender, mut receiver) = mpsc::channel::<Group>(128);
         tokio::spawn(async move {
-            let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
             loop {
-                while running.len() >= 2 {
-                    let _ = running.join_next().await;
-                }
                 let first = match deferred.take() {
                     Some(group) => group,
                     None => match receiver.recv().await {
@@ -69,37 +78,46 @@ impl BatchWriter {
                     keys.extend(group.writes.iter().map(|w| w.key.clone()));
                     groups.push(group);
                 }
-                let context = context.clone();
-                let bucket = bucket.clone();
-                running.spawn(async move {
-                    groups.retain(|group| !group.reply.is_closed());
-                    if groups.is_empty() {
-                        return;
-                    }
-                    let outcomes = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        execute(&context, &bucket, &groups),
-                    )
-                    .await
-                    .unwrap_or_else(|_| Err(error("timed out; commit outcome may be unknown")));
-                    match outcomes {
-                        Ok(outcomes) => {
-                            for (group, outcome) in groups.into_iter().zip(outcomes) {
-                                let _ = group.reply.send(outcome);
-                            }
-                        }
-                        Err(e) => {
-                            for group in groups {
-                                let _ = group.reply.send(Err(e.clone()));
-                            }
-                        }
-                    }
+                groups.retain(|group| !group.reply.is_closed());
+                if groups.is_empty() {
+                    continue;
+                }
+                for group in &mut groups {
+                    crate::diagnostics::elapsed(
+                        if enqueue {
+                            crate::diagnostics::NATS_ENQUEUE_BATCH_QUEUE
+                        } else {
+                            crate::diagnostics::NATS_UPDATE_BATCH_QUEUE
+                        },
+                        group.queued.take(),
+                    );
+                }
+                let _execution = crate::diagnostics::Scope::new(if enqueue {
+                    crate::diagnostics::NATS_ENQUEUE_BATCH_EXECUTE
+                } else {
+                    crate::diagnostics::NATS_UPDATE_BATCH_EXECUTE
                 });
-                while running.try_join_next().is_some() {}
+                let outcomes = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    execute(&context, &bucket, &groups),
+                )
+                .await
+                .unwrap_or_else(|_| Err(error("timed out; commit outcome may be unknown")));
+                match outcomes {
+                    Ok(outcomes) => {
+                        for (group, outcome) in groups.into_iter().zip(outcomes) {
+                            let _ = group.reply.send(outcome);
+                        }
+                    }
+                    Err(e) => {
+                        for group in groups {
+                            let _ = group.reply.send(Err(e.clone()));
+                        }
+                    }
+                }
             }
-            while running.join_next().await.is_some() {}
         });
-        Self(sender)
+        sender
     }
     async fn send(&self, writes: Vec<Write>) -> QueueResult<Option<Vec<u64>>> {
         if writes.is_empty()
@@ -112,10 +130,18 @@ impl BatchWriter {
         }
 
         let (reply, receiver) = oneshot::channel();
-        self.0
-            .send(Group { writes, reply })
-            .await
-            .map_err(|_| error("writer closed"))?;
+        let lane = if writes.len() == 1 {
+            &self.updates
+        } else {
+            &self.enqueues
+        };
+        lane.send(Group {
+            writes,
+            reply,
+            queued: crate::diagnostics::start(),
+        })
+        .await
+        .map_err(|_| error("writer closed"))?;
         receiver
             .await
             .map_err(|_| error("writer interrupted; commit outcome may be unknown"))?
@@ -214,17 +240,15 @@ async fn execute(
         // Only a known atomic rejection can reach this branch. Each logical
         // operation remains atomic; an enqueue pair is never split into writes.
         None => {
-            let pending: Vec<_> = groups
-                .iter()
-                .map(|group| {
-                    async move {
-                        let writes: Vec<_> = group.writes.iter().collect();
-                        commit(context, bucket, &writes).await
-                    }
-                    .boxed()
-                })
-                .collect();
-            Ok(futures::stream::iter(pending).buffered(16).collect().await)
+            // Keep the lane's one-commit bound even during conflicts. Expanding
+            // one rejected batch into many concurrent requests defeats admission
+            // backpressure precisely when writers contend for the same scopes.
+            let mut outcomes = Vec::with_capacity(groups.len());
+            for group in groups {
+                let writes: Vec<_> = group.writes.iter().collect();
+                outcomes.push(commit(context, bucket, &writes).await);
+            }
+            Ok(outcomes)
         }
     }
 }
@@ -395,6 +419,7 @@ mod tests {
         let groups: Vec<_> = rejected
             .into_iter()
             .map(|w| Group {
+                queued: None,
                 writes: vec![w],
                 reply: oneshot::channel().0,
             })
@@ -407,10 +432,12 @@ mod tests {
         // independent operation is retried after the mixed batch is rejected.
         let groups = vec![
             Group {
+                queued: None,
                 writes: vec![write("orphan", 0, vec![7]), write("first", 0, vec![8])],
                 reply: oneshot::channel().0,
             },
             Group {
+                queued: None,
                 writes: vec![write("unrelated", 0, vec![9])],
                 reply: oneshot::channel().0,
             },
@@ -421,6 +448,49 @@ mod tests {
         assert!(bucket.get("orphan").await.unwrap().is_none());
         js.delete_key_value(&bucket.name).await.unwrap();
     }
+    #[tokio::test]
+    #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
+    async fn saturated_admission_cannot_block_metadata_progress() {
+        let (js, bucket) = fixture().await;
+        let revision = bucket.create("owned", vec![1].into()).await.unwrap();
+        let writer = Arc::new(BatchWriter::start(js.clone(), bucket.clone()));
+        // Hold every admission slot without publishing. This models an enqueue
+        // backlog independently of network speed and makes the regression
+        // deterministic: metadata must still reach the live server.
+        let mut permits = Vec::new();
+        for _ in 0..128 {
+            permits.push(writer.enqueues.reserve().await.unwrap());
+        }
+        let pending = {
+            let writer = writer.clone();
+            tokio::spawn(async move {
+                writer
+                    .enqueue("payload".into(), vec![7; 65536], "job", vec![8], 0)
+                    .await
+            })
+        };
+        let next = tokio::time::timeout(
+            Duration::from_secs(3),
+            writer.submit("owned", vec![2], revision),
+        )
+        .await
+        .expect("metadata was blocked by saturated admission")
+        .unwrap()
+        .unwrap();
+        assert!(next > revision);
+        assert!(!pending.is_finished());
+        assert_eq!(bucket.get("owned").await.unwrap().unwrap().as_ref(), &[2]);
+        drop(permits);
+        tokio::time::timeout(Duration::from_secs(5), pending)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(bucket.get("payload").await.unwrap().unwrap().len(), 65536);
+        js.delete_key_value(&bucket.name).await.unwrap();
+    }
+
     #[tokio::test]
     #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
     async fn batched_backend_concurrency_dedupe_and_legacy_reopen() {
