@@ -130,7 +130,7 @@ Writes use bounded disk staging followed by a single S3 PUT, with a maximum of
 parts before this final PUT; it does **not** use native S3 multipart uploads.
 `MultipartBlobStore` is an extension trait, not an automatically selected capability.
 Listing returns at most one page (default/maximum 1000 entries), not a full bucket
-inventory. Providers must implement the required S3 operations; MinIO validation
+inventory. Providers must implement the required S3 operations; RustFS validation
 does not certify every provider's failover, retention or durability settings.
 
 ## Upgrade from the earlier implementation
@@ -158,13 +158,13 @@ cargo test -p dog-blob --all-features --locked
 cargo clippy -p dog-blob --all-features --all-targets --locked -- -D warnings
 ```
 
-The ignored S3 test only accepts a loopback MinIO endpoint and fixed dummy credentials.
+The ignored S3 test only accepts a loopback RustFS endpoint and fixed dummy credentials.
 It creates a unique bucket and deletes its objects and bucket after success:
 
 ```sh
 docker run -d --name dogrs-blob-test -p 127.0.0.1:9000:9000 \
-  -e MINIO_ROOT_USER=dogrs-local-test -e MINIO_ROOT_PASSWORD=dogrs-local-test-only \
-  minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
+  -e RUSTFS_ACCESS_KEY=dogrs-local-test -e RUSTFS_SECRET_KEY=dogrs-local-test-only \
+  rustfs/rustfs@sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff /data
 DOGRS_BLOB_TEST_ENDPOINT=http://127.0.0.1:9000 \
   cargo test -p dog-blob --features s3 --test s3_live --locked -- --ignored
 docker rm -fv dogrs-blob-test

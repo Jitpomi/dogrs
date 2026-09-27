@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Packaging and validation
 - Make AWS dependencies optional behind the `s3` feature.
 - Add ownership, concurrency, cancellation, corruption, expiry and capacity regression tests.
-- Add a live disposable MinIO test and compiled documentation examples.
+- Add a live disposable RustFS test and compiled documentation examples.
 - Document backend contracts, cleanup, durability limits and migration in README.md.
 
 ### Breaking changes

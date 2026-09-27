@@ -1,4 +1,4 @@
-//! Disposable loopback MinIO only; never uses developer/cloud credentials.
+//! Disposable loopback RustFS only; never uses developer/cloud credentials.
 #![cfg(feature = "s3")]
 use dog_blob::*;
 use futures_util::StreamExt;
@@ -8,9 +8,9 @@ fn body(value: &[u8]) -> ByteStream {
     Box::pin(futures::stream::once(async { Ok(value) }))
 }
 #[tokio::test]
-#[ignore = "requires disposable local MinIO; see README"]
+#[ignore = "requires disposable local RustFS; see README"]
 async fn real_s3_streams_ranges_metadata_limits_and_signed_reads() {
-    let endpoint = std::env::var("DOGRS_BLOB_TEST_ENDPOINT").expect("local MinIO endpoint");
+    let endpoint = std::env::var("DOGRS_BLOB_TEST_ENDPOINT").expect("local RustFS endpoint");
     let port = endpoint
         .strip_prefix("http://127.0.0.1:")
         .expect("loopback only");
