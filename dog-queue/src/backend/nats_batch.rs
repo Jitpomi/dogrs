@@ -3,7 +3,7 @@
 use crate::{QueueError, QueueResult};
 use async_nats::jetstream::{self, kv, publish::PublishAck, response::Response};
 use futures::StreamExt;
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
 const MAX_MESSAGES: usize = 128;
@@ -14,6 +14,7 @@ const MAX_BYTES: usize = 2 * 1024 * 1024;
 // enqueues put their small metadata first and payload last so the crossing
 // entry can also finish the atomic batch. A larger operation stays intact.
 const TARGET_BATCH_BYTES: usize = 256 * 1024;
+const PIGGYBACK_METADATA: bool = true;
 struct Write {
     key: String,
     value: Vec<u8>,
@@ -38,18 +39,99 @@ fn conflict(e: &jetstream::Error) -> bool {
             | jetstream::ErrorCode::STREAM_WRONG_LAST_SEQUENCE_CONSTANT
     )
 }
-impl BatchWriter {
-    pub(super) fn start(context: jetstream::Context, bucket: kv::Store) -> Self {
-        // Reserve one execution lane for lease/completion metadata. A large
-        // producer backlog must not occupy every durable-write slot or put a
-        // lease update behind payload staging in the same atomic batch.
-        Self {
-            updates: Self::lane(context.clone(), bucket.clone(), false),
-            enqueues: Self::lane(context, bucket, true),
+struct Inbox {
+    receiver: mpsc::Receiver<Group>,
+    deferred: Option<Group>,
+}
+impl Inbox {
+    async fn recv(&mut self) -> Option<Group> {
+        match self.deferred.take() {
+            Some(group) => Some(group),
+            None => self.receiver.recv().await,
         }
     }
-    fn lane(context: jetstream::Context, bucket: kv::Store, enqueue: bool) -> mpsc::Sender<Group> {
-        let (sender, mut receiver) = mpsc::channel::<Group>(ADMISSION_CAPACITY);
+    fn try_recv(&mut self) -> Option<Group> {
+        self.deferred
+            .take()
+            .or_else(|| self.receiver.try_recv().ok())
+    }
+}
+
+// Prefix waiting metadata so the final payload still closes the same Raft
+// append's value-byte target. Leave conservative headroom for protocol framing;
+// never wait for metadata or take its independent reserved execution slot.
+fn piggyback_metadata(groups: &mut Vec<Group>, updates: &mut Inbox) {
+    let mut count: usize = groups.iter().map(|g| g.writes.len()).sum();
+    let mut bytes: usize = groups
+        .iter()
+        .flat_map(|g| &g.writes)
+        .map(|w| w.value.len())
+        .sum();
+    let final_bytes = groups.last().unwrap().writes.last().unwrap().value.len();
+    let mut prefix_budget = TARGET_BATCH_BYTES
+        .saturating_sub(bytes - final_bytes)
+        .saturating_sub(32 * 1024);
+    let mut keys: HashSet<_> = groups
+        .iter()
+        .flat_map(|g| &g.writes)
+        .map(|w| w.key.clone())
+        .collect();
+    let mut metadata = Vec::new();
+    while count < MAX_MESSAGES && prefix_budget > 0 {
+        let Some(group) = updates.try_recv() else {
+            break;
+        };
+        if group.reply.is_closed() {
+            continue;
+        }
+        let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
+        if size > prefix_budget
+            || bytes + size > MAX_BYTES
+            || count + group.writes.len() > MAX_MESSAGES
+            || group.writes.iter().any(|w| keys.contains(&w.key))
+        {
+            updates.deferred = Some(group);
+            break;
+        }
+        bytes += size;
+        prefix_budget -= size;
+        count += group.writes.len();
+        keys.extend(group.writes.iter().map(|w| w.key.clone()));
+        metadata.push(group);
+    }
+    metadata.append(groups);
+    *groups = metadata;
+}
+
+impl BatchWriter {
+    pub(super) fn start(context: jetstream::Context, bucket: kv::Store) -> Self {
+        let (updates, receiver) = mpsc::channel::<Group>(ADMISSION_CAPACITY);
+        let update_inbox = Arc::new(tokio::sync::Mutex::new(Inbox {
+            receiver,
+            deferred: None,
+        }));
+        let (enqueues, receiver) = mpsc::channel::<Group>(ADMISSION_CAPACITY);
+        let enqueue_inbox = Arc::new(tokio::sync::Mutex::new(Inbox {
+            receiver,
+            deferred: None,
+        }));
+        Self::lane(
+            context.clone(),
+            bucket.clone(),
+            false,
+            update_inbox.clone(),
+            None,
+        );
+        Self::lane(context, bucket, true, enqueue_inbox, Some(update_inbox));
+        Self { updates, enqueues }
+    }
+    fn lane(
+        context: jetstream::Context,
+        bucket: kv::Store,
+        enqueue: bool,
+        inbox: Arc<tokio::sync::Mutex<Inbox>>,
+        pending_updates: Option<Arc<tokio::sync::Mutex<Inbox>>>,
+    ) {
         tokio::spawn(async move {
             // Small atomic batches should overlap their acknowledgement waits.
             // One in-flight 3-job batch at 100 ms caps admission at 30 jobs/s
@@ -57,17 +139,14 @@ impl BatchWriter {
             // a separate metadata lane so producer pipelining cannot consume it.
             let concurrency = if enqueue { 4 } else { 1 };
             let mut running = tokio::task::JoinSet::new();
-            let mut deferred = None;
             loop {
                 while running.len() >= concurrency {
                     let _ = running.join_next().await;
                 }
-                let first = match deferred.take() {
+                let mut receiver = inbox.lock().await;
+                let first = match receiver.recv().await {
                     Some(group) => group,
-                    None => match receiver.recv().await {
-                        Some(group) => group,
-                        None => break,
-                    },
+                    None => break,
                 };
                 tokio::task::yield_now().await;
                 let mut bytes: usize = first.writes.iter().map(|w| w.value.len()).sum();
@@ -75,7 +154,7 @@ impl BatchWriter {
                 let mut keys: HashSet<_> = first.writes.iter().map(|w| w.key.clone()).collect();
                 let mut groups = vec![first];
                 while count < MAX_MESSAGES {
-                    let Ok(group) = receiver.try_recv() else {
+                    let Some(group) = receiver.try_recv() else {
                         break;
                     };
                     let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
@@ -86,7 +165,7 @@ impl BatchWriter {
                         || bytes + size > MAX_BYTES
                         || group.writes.iter().any(|w| keys.contains(&w.key))
                     {
-                        deferred = Some(group);
+                        receiver.deferred = Some(group);
                         break;
                     }
                     bytes += size;
@@ -94,13 +173,21 @@ impl BatchWriter {
                     keys.extend(group.writes.iter().map(|w| w.key.clone()));
                     groups.push(group);
                 }
+                drop(receiver);
                 groups.retain(|group| !group.reply.is_closed());
                 if groups.is_empty() {
                     continue;
                 }
+                if PIGGYBACK_METADATA {
+                    if let Some(pending_updates) = &pending_updates {
+                        if let Ok(mut updates) = pending_updates.try_lock() {
+                            piggyback_metadata(&mut groups, &mut updates);
+                        }
+                    }
+                }
                 for group in &mut groups {
                     crate::diagnostics::elapsed(
-                        if enqueue {
+                        if group.writes.len() > 1 {
                             crate::diagnostics::NATS_ENQUEUE_BATCH_QUEUE
                         } else {
                             crate::diagnostics::NATS_UPDATE_BATCH_QUEUE
@@ -139,7 +226,6 @@ impl BatchWriter {
             }
             while running.join_next().await.is_some() {}
         });
-        sender
     }
     async fn send(&self, writes: Vec<Write>) -> QueueResult<Option<Vec<u64>>> {
         if writes.is_empty()
@@ -410,6 +496,147 @@ mod tests {
             })
             .collect()
     }
+    fn live_group(writes: Vec<Write>) -> (Group, oneshot::Receiver<QueueResult<Option<Vec<u64>>>>) {
+        let (reply, receiver) = oneshot::channel();
+        (
+            Group {
+                queued: None,
+                writes,
+                reply,
+            },
+            receiver,
+        )
+    }
+    #[tokio::test]
+    async fn prefixed_metadata_preserves_enqueue_pairs_bounds_and_deferred_work() {
+        let mut replies = Vec::new();
+        let mut batch = Vec::new();
+        for n in 0..4 {
+            let (group, reply) = live_group(vec![
+                write(&format!("job-{n}"), 0, vec![1; 256]),
+                write(&format!("payload-{n}"), 0, vec![2; 65536]),
+            ]);
+            batch.push(group);
+            replies.push(reply);
+        }
+        let (sender, receiver) = mpsc::channel(128);
+        let mut updates = Inbox {
+            receiver,
+            deferred: None,
+        };
+        for n in 0..128 {
+            let (group, reply) = live_group(vec![write(&format!("owned-{n}"), 1, vec![3; 512])]);
+            replies.push(reply);
+            sender.send(group).await.unwrap();
+        }
+        piggyback_metadata(&mut batch, &mut updates);
+        assert!(batch.len() > 4);
+        let writes: Vec<_> = batch.iter().flat_map(|g| &g.writes).collect();
+        assert!(writes.len() <= MAX_MESSAGES);
+        assert!(writes.iter().map(|w| w.value.len()).sum::<usize>() <= MAX_BYTES);
+        assert!(
+            writes[..writes.len() - 1]
+                .iter()
+                .map(|w| w.value.len())
+                .sum::<usize>()
+                <= TARGET_BATCH_BYTES - 32 * 1024
+        );
+        assert_eq!(writes.last().unwrap().key, "payload-3");
+        assert!(batch
+            .iter()
+            .take(batch.len() - 4)
+            .all(|g| g.writes.len() == 1));
+        assert!(batch
+            .iter()
+            .skip(batch.len() - 4)
+            .all(|g| g.writes.len() == 2));
+        let attached = batch.len() - 4;
+        let first_pending = updates.try_recv().unwrap();
+        assert_eq!(first_pending.writes[0].key, format!("owned-{attached}"));
+        let mut pending = 1;
+        while updates.try_recv().is_some() {
+            pending += 1;
+        }
+        assert_eq!(attached + pending, 128, "no borrowed request may disappear");
+
+        // A conflicting key stays in the original metadata lane; it must not
+        // become a second expected revision for the same subject in one batch.
+        let (duplicate, reply) = live_group(vec![write("job-0", 1, vec![7])]);
+        replies.push(reply);
+        updates.deferred = Some(duplicate);
+        let (fresh, reply) = live_group(vec![
+            write("job-0", 0, vec![1]),
+            write("payload-0", 0, vec![2; 65536]),
+        ]);
+        replies.push(reply);
+        let mut batch = vec![fresh];
+        let before = batch.len();
+        piggyback_metadata(&mut batch, &mut updates);
+        assert_eq!(batch.len(), before);
+        assert_eq!(updates.try_recv().unwrap().writes[0].key, "job-0");
+
+        // A valid operation already at the hard byte bound must remain intact.
+        let (full, reply) = live_group(vec![
+            write("full-job", 0, vec![1; 256]),
+            write("full-payload", 0, vec![2; MAX_BYTES - 256]),
+        ]);
+        replies.push(reply);
+        let (extra, reply) = live_group(vec![write("other", 0, vec![3])]);
+        replies.push(reply);
+        updates.deferred = Some(extra);
+        let mut batch = vec![full];
+        piggyback_metadata(&mut batch, &mut updates);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(updates.try_recv().unwrap().writes[0].key, "other");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
+    async fn prefixed_metadata_commits_exact_revisions_and_isolates_rejected_owners() {
+        let (js, bucket) = fixture().await;
+        let original = bucket.create("owned", vec![1].into()).await.unwrap();
+        for stale in [false, true] {
+            let (sender, receiver) = mpsc::channel(2);
+            let mut updates = Inbox {
+                receiver,
+                deferred: None,
+            };
+            let (metadata, _metadata_reply) = live_group(vec![write("owned", original, vec![2])]);
+            sender.send(metadata).await.unwrap();
+            let key = if stale { "second-job" } else { "first-job" };
+            let payload = format!("{key}-payload");
+            let (enqueue, _enqueue_reply) = live_group(vec![
+                write(key, 0, vec![3]),
+                write(&payload, 0, vec![4; 65536]),
+            ]);
+            let mut batch = vec![enqueue];
+            piggyback_metadata(&mut batch, &mut updates);
+            assert_eq!(batch.len(), 2);
+            assert_eq!(batch[0].writes[0].key, "owned");
+            let outcomes = execute(&js, &bucket, &batch).await.unwrap();
+            assert_eq!(outcomes[0].as_ref().unwrap().is_none(), stale);
+            let revisions = outcomes[1].as_ref().unwrap().as_ref().unwrap();
+            assert_eq!(
+                bucket.entry(key).await.unwrap().unwrap().revision,
+                revisions[0]
+            );
+            assert_eq!(
+                bucket.entry(&payload).await.unwrap().unwrap().revision,
+                revisions[1]
+            );
+            assert_eq!(
+                bucket.get(&payload).await.unwrap().unwrap().as_ref(),
+                vec![4; 65536]
+            );
+            bucket
+                .update(key, vec![5].into(), revisions[0])
+                .await
+                .unwrap();
+        }
+        assert_eq!(bucket.get("owned").await.unwrap().unwrap().as_ref(), &[2]);
+        js.delete_key_value(&bucket.name).await.unwrap();
+    }
+
     #[tokio::test]
     async fn one_stale_group_does_not_serialize_every_other_job() {
         let groups = groups(64);
