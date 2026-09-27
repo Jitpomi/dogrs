@@ -40,6 +40,11 @@ on:
         description: Sample active PostgreSQL waits during capacity measurement
         type: boolean
         default: false
+      postgres_fixture_partitions:
+        description: Disposable PostgreSQL layout experiment (not a library setting)
+        type: choice
+        options: ['0', '16', 'compare']
+        default: '0'
       workers_per_tenant:
         description: Worker concurrency (auto preserves the baseline)
         type: choice
@@ -69,6 +74,14 @@ jobs:
           if [ "$PRODUCER_CAP" != none ]; then
             export DOGRS_PG_ENQUEUE_CONCURRENCY="$PRODUCER_CAP"
           fi
+          if [ "$DOGRS_PG_FIXTURE_PARTITIONS" = compare ]; then
+            test "$BACKEND" = postgres
+            status=0
+            for partitions in 0 16 16 0; do
+              DOGRS_PG_FIXTURE_PARTITIONS="$partitions" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
+          fi
           python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
         env:
           BACKEND: ${{ matrix.backend }}
@@ -80,6 +93,7 @@ jobs:
           DOGRS_CAPACITY_INFLIGHT: 32
           DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
           DOGRS_PG_PROFILE: ${{ inputs.profile_postgres && '1' || '0' }}
+          DOGRS_PG_FIXTURE_PARTITIONS: ${{ inputs.postgres_fixture_partitions || '0' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
           DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '16') || '1' }}
       - name: Explain capacity result
@@ -92,6 +106,8 @@ jobs:
               summary.write("## Sustained queue capacity\n\n")
               found = False
               for log in logs:
+                  environment = json.loads((log.parent / 'environment.json').read_text())
+                  summary.write(f"\nFixture partitions: {environment.get('postgres_fixture_partitions', 0)}\n\n")
                   for line in log.read_text().splitlines():
                       try:
                           result = json.loads(line)

@@ -37,6 +37,7 @@ try:
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
   'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
   'postgres_wait_sampling':os.environ.get('DOGRS_PG_PROFILE')=='1',
+  'postgres_fixture_partitions':int(os.environ.get('DOGRS_PG_FIXTURE_PARTITIONS','0')),
   'measurement':a.admission_mode or ('queue-capacity' if a.capacity else 'recovery'),
   'comparison_tenant':os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT') if a.capacity else None,
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),
@@ -59,6 +60,14 @@ try:
   while subprocess.run(['docker','exec',name,'pg_isready','-h','127.0.0.1','-U','postgres'],capture_output=True).returncode:
    assert time.monotonic()<deadline;time.sleep(.2)
   command('docker','exec',name,'psql','-U','postgres','-c','CREATE EXTENSION pg_stat_statements')
+  partitions=int(os.environ.get('DOGRS_PG_FIXTURE_PARTITIONS','0'))
+  assert partitions in (0,16),'unsupported diagnostic partition count'
+  if partitions:
+   assert a.capacity and not a.admission_mode,'partition experiment requires full queue capacity'
+   schema=(pathlib.Path(__file__).resolve().parents[2]/'dog-queue/src/backend/postgres_schema.sql').read_text()
+   create=schema.split(';',1)[0]+' PARTITION BY HASH (tenant);'
+   create+='\n'.join(f'CREATE TABLE dogrs_queue_jobs_v2_p{i} PARTITION OF dogrs_queue_jobs_v2 FOR VALUES WITH (MODULUS {partitions},REMAINDER {i});' for i in range(partitions))
+   command('docker','exec',name,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-c',create)
  elif a.backend=='redis':
   number=port();name=run+'-redis'
   launch(name,'-p',f'127.0.0.1:{number}:6379','redis:7.4-alpine','redis-server','--appendonly','yes','--appendfsync','always','--maxmemory-policy','noeviction')
@@ -104,7 +113,7 @@ try:
     if a.backend=='postgres' and os.environ.get('DOGRS_PG_PROFILE')=='1':
      sample_output=(folder/'postgres-waits.log').open('w')
      sampler=subprocess.Popen(['docker','exec','-i',name,'psql','-XAt','-U','postgres'],stdin=subprocess.PIPE,stdout=sample_output,stderr=subprocess.STDOUT,text=True)
-     sampler.stdin.write("SELECT json_build_object('at',clock_timestamp(),'waits',COALESCE(json_agg(s),'[]'::json)) FROM (SELECT CASE WHEN query LIKE '%INSERT INTO dogrs_queue_jobs_v2%' THEN 'enqueue' WHEN query LIKE '%WITH input%' AND query LIKE '%jsonb[]%' THEN 'claim' WHEN query LIKE '%WITH input%' THEN 'complete' ELSE left(query,80) END AS operation,wait_event_type,wait_event,count(*) AS backends FROM pg_stat_activity WHERE pid<>pg_backend_pid() AND datname=current_database() AND state='active' GROUP BY 1,2,3) s;\n\\watch 0.1\n")
+     sampler.stdin.write("SELECT jsonb_build_object('at',clock_timestamp(),'waits',COALESCE(jsonb_agg(s),'[]'::jsonb)) FROM (SELECT CASE WHEN query LIKE '%INSERT INTO dogrs_queue_jobs_v2%' THEN 'enqueue' WHEN query LIKE '%WITH input%' AND query LIKE '%jsonb[]%' THEN 'claim' WHEN query LIKE '%WITH input%' THEN 'complete' ELSE left(query,80) END AS operation,wait_event_type,wait_event,CASE WHEN wait_event='extend' THEN (SELECT relation::regclass::text FROM pg_locks l WHERE l.pid=a.pid AND l.locktype='extend' AND NOT l.granted LIMIT 1) END AS relation,count(*) AS backends FROM pg_stat_activity a WHERE pid<>pg_backend_pid() AND datname=current_database() AND state='active' GROUP BY 1,2,3,4) s;\n\\watch 0.1\n")
      sampler.stdin.close()
     with (folder/'capacity.log').open('w') as output:
      role='admission-native' if a.admission_mode and a.admission_mode.startswith('native-') else 'capacity-local'
