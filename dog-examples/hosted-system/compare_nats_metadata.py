@@ -25,7 +25,7 @@ try:
         source.write_text(original.replace(needle, f'const PIGGYBACK_METADATA: bool = {label};'))
         features = 'redis,nats'
         if os.environ.get('DOGRS_QUEUE_TIMINGS') == '1':
-            features += ',diagnostics'
+            features += ',queue-diagnostics'
         subprocess.run(['cargo', 'build', '-p', 'hosted-system', '--release', '--features', features, '--locked'], check=True)
         folder = root / f'trial-{trial}-metadata-{label}'
         folder.mkdir()
