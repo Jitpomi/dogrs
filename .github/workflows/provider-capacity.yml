@@ -36,6 +36,10 @@ on:
         type: choice
         options: ['0', '1000', '3000', '5000']
         default: '0'
+      profile_postgres:
+        description: Sample active PostgreSQL waits during capacity measurement
+        type: boolean
+        default: false
       workers_per_tenant:
         description: Worker concurrency (auto preserves the baseline)
         type: choice
@@ -75,6 +79,7 @@ jobs:
           PRODUCER_CAP: ${{ inputs.postgres_enqueue_concurrency || 'none' }}
           DOGRS_CAPACITY_INFLIGHT: 32
           DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
+          DOGRS_PG_PROFILE: ${{ inputs.profile_postgres && '1' || '0' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
           DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '16') || '1' }}
       - name: Explain capacity result

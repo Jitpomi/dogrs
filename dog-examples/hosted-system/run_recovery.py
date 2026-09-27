@@ -36,6 +36,7 @@ try:
   'docker':json.loads(command('docker','info','--format','{"cpus":{{.NCPU}},"memory_bytes":{{.MemTotal}},"architecture":"{{.Architecture}}"}')),
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
   'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
+  'postgres_wait_sampling':os.environ.get('DOGRS_PG_PROFILE')=='1',
   'measurement':a.admission_mode or ('queue-capacity' if a.capacity else 'recovery'),
   'comparison_tenant':os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT') if a.capacity else None,
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),
@@ -98,13 +99,24 @@ try:
   before=resource.getrusage(resource.RUSAGE_CHILDREN)
   with (folder/'container-stats.jsonl').open('w') as stats:
    monitor=subprocess.Popen(['docker','stats','--format','{{json .}}',*containers],stdout=stats,stderr=subprocess.DEVNULL)
+   sampler=None;sample_output=None
    try:
+    if a.backend=='postgres' and os.environ.get('DOGRS_PG_PROFILE')=='1':
+     sample_output=(folder/'postgres-waits.log').open('w')
+     sampler=subprocess.Popen(['docker','exec','-i',name,'psql','-XAt','-U','postgres'],stdin=subprocess.PIPE,stdout=sample_output,stderr=subprocess.STDOUT,text=True)
+     sampler.stdin.write("SELECT json_build_object('at',clock_timestamp(),'waits',COALESCE(json_agg(s),'[]'::json)) FROM (SELECT CASE WHEN query LIKE '%INSERT INTO dogrs_queue_jobs_v2%' THEN 'enqueue' WHEN query LIKE '%WITH input%' AND query LIKE '%jsonb[]%' THEN 'claim' WHEN query LIKE '%WITH input%' THEN 'complete' ELSE left(query,80) END AS operation,wait_event_type,wait_event,count(*) AS backends FROM pg_stat_activity WHERE pid<>pg_backend_pid() AND datname=current_database() AND state='active' GROUP BY 1,2,3) s;\n\\watch 0.1\n")
+     sampler.stdin.close()
     with (folder/'capacity.log').open('w') as output:
      role='admission-native' if a.admission_mode and a.admission_mode.startswith('native-') else 'capacity-local'
      result=subprocess.run([binary,role],env=env,stdout=output,stderr=subprocess.STDOUT,timeout=300)
     after=resource.getrusage(resource.RUSAGE_CHILDREN)
     (folder/'client-cpu.json').write_text(json.dumps({'user_seconds':after.ru_utime-before.ru_utime,'system_seconds':after.ru_stime-before.ru_stime}))
    finally:
+    if sampler is not None:
+     sampler.terminate()
+     try:sampler.wait(timeout=5)
+     except subprocess.TimeoutExpired:sampler.kill();sampler.wait()
+     sample_output.close()
     monitor.terminate()
     try:monitor.wait(timeout=5)
     except subprocess.TimeoutExpired:monitor.kill();monitor.wait()
