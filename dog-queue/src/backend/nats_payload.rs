@@ -113,12 +113,13 @@ pub(super) fn pack(writes: &[&Write], limit: usize) -> QueueResult<Vec<Write>> {
 }
 impl NatsStore {
     pub(super) async fn read_packed(&self, key: &str) -> QueueResult<Vec<u8>> {
-        let value = self
-            .payload_bucket
-            .get(key)
-            .await
-            .map_err(error)?
-            .ok_or_else(|| error("payload reference missing"))?;
+        let value = crate::diagnostics::measure(
+            crate::diagnostics::NATS_PAYLOAD_REFERENCE_READ,
+            self.payload_bucket.get(key),
+        )
+        .await
+        .map_err(error)?
+        .ok_or_else(|| error("payload reference missing"))?;
         let reference: PayloadRef = serde_json::from_slice(&value).map_err(error)?;
         if reference.key != key
             || !reference.bundle.starts_with("b.")
@@ -134,12 +135,14 @@ impl NatsStore {
             .cell(&reference.bundle);
         let bytes = cell
             .get_or_try_init(|| async {
-                self.payload_bucket
-                    .get(&reference.bundle)
-                    .await
-                    .map_err(error)?
-                    .map(|b| b.to_vec())
-                    .ok_or_else(|| error("immutable payload bundle missing"))
+                crate::diagnostics::measure(
+                    crate::diagnostics::NATS_PAYLOAD_BUNDLE_LOAD,
+                    self.payload_bucket.get(&reference.bundle),
+                )
+                .await
+                .map_err(error)?
+                .map(|b| b.to_vec())
+                .ok_or_else(|| error("immutable payload bundle missing"))
             })
             .await?;
         let end = reference

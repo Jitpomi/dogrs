@@ -464,7 +464,11 @@ impl NatsStore {
     }
     async fn bytes(&self, tenant: &str, id: &JobId) -> QueueResult<Vec<u8>> {
         if self.packed_payloads {
-            return self.read_packed(&payload(tenant, id)).await;
+            return crate::diagnostics::measure(
+                crate::diagnostics::NATS_PAYLOAD_READ,
+                self.read_packed(&payload(tenant, id)),
+            )
+            .await;
         }
         crate::diagnostics::measure(
             crate::diagnostics::NATS_PAYLOAD_READ,
