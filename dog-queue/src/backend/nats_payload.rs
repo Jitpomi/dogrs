@@ -1,5 +1,5 @@
 //! Experimental immutable bundles. References, membership index and bytes commit
-//! together. Per-job ownership stays in the independent metadata store.
+//! together. Per-job ownership stays independent; lease updates never rewrite bytes.
 use super::{nats::NatsStore, nats_batch::Write};
 use crate::{QueueError, QueueResult};
 use serde::{Deserialize, Serialize};
@@ -164,17 +164,30 @@ impl NatsStore {
         }
         uuid::Uuid::parse_str(&reference.bundle[2..]).map_err(error)?;
         let index_key = format!("i.{}", &reference.bundle[2..]);
-        let index = self
-            .payload_bucket
-            .get(&index_key)
-            .await
-            .map_err(error)?
-            .ok_or_else(|| error("bundle index missing"))?;
+        let Some(index) = self.payload_bucket.get(&index_key).await.map_err(error)? else {
+            // Another purger can finish this immutable bundle between our
+            // reference read and index read. Missing index is safe only if our
+            // reference has also disappeared; never hide a dangling live ref.
+            if self.payload_bucket.get(key).await.map_err(error)?.is_none() {
+                return Ok(());
+            }
+            return Err(error("bundle index missing for live reference"));
+        };
         let index: BundleIndex = serde_json::from_slice(&index).map_err(error)?;
         if !index.keys.iter().any(|k| k == key) {
             return Err(error("reference absent from bundle index"));
         }
         self.payload_bucket.purge(key).await.map_err(error)?;
+        self.collect_bundle(&index_key, &reference.bundle, index)
+            .await?;
+        Ok(())
+    }
+    async fn collect_bundle(
+        &self,
+        index_key: &str,
+        bundle: &str,
+        index: BundleIndex,
+    ) -> QueueResult<bool> {
         for other in index.keys {
             if self
                 .payload_bucket
@@ -183,20 +196,33 @@ impl NatsStore {
                 .map_err(error)?
                 .is_some()
             {
-                return Ok(());
+                return Ok(false);
             }
         }
         // References never reappear: immutable writes use expected revision zero.
-        self.payload_bucket
-            .purge(&reference.bundle)
-            .await
-            .map_err(error)?;
+        self.payload_bucket.purge(bundle).await.map_err(error)?;
         self.payload_bucket.purge(index_key).await.map_err(error)?;
-        self.payload_cache
-            .lock()
-            .map_err(error)?
-            .remove(&reference.bundle);
-        Ok(())
+        self.payload_cache.lock().map_err(error)?.remove(bundle);
+        Ok(true)
+    }
+    // Operator-triggered, bounded-memory repair after interrupted retention.
+    // Never run a full bucket scan on an enqueue/claim/completion hot path.
+    pub(super) async fn repair_payload_bundles(&self) -> QueueResult<usize> {
+        use futures::TryStreamExt;
+        let mut keys = self.payload_bucket.keys().await.map_err(error)?;
+        let mut collected = 0;
+        while let Some(key) = keys.try_next().await.map_err(error)? {
+            let Some(id) = key.strip_prefix("i.") else {
+                continue;
+            };
+            uuid::Uuid::parse_str(id).map_err(error)?;
+            let Some(bytes) = self.payload_bucket.get(&key).await.map_err(error)? else {
+                continue;
+            };
+            let index: BundleIndex = serde_json::from_slice(&bytes).map_err(error)?;
+            collected += usize::from(self.collect_bundle(&key, &format!("b.{id}"), index).await?);
+        }
+        Ok(collected)
     }
 }
 
@@ -390,6 +416,56 @@ mod tests {
                     .any(|prefix| k.starts_with(prefix))),
                 "last reference must release the bundle and its membership index"
             );
+            // Simulate a crash after reference deletion but before bundle GC.
+            // All keys below represent an already committed immutable bundle.
+            let writes = [
+                Write {
+                    key: "p.gc.one".into(),
+                    value: vec![1; 65536],
+                    revision: 0,
+                },
+                Write {
+                    key: "p.gc.two".into(),
+                    value: vec![2; 65536],
+                    revision: 0,
+                },
+            ];
+            let packed = pack(&writes.iter().collect::<Vec<_>>(), 900000).unwrap();
+            for write in &packed {
+                backend
+                    .store
+                    .payload_bucket
+                    .update(&write.key, write.value.clone().into(), 0)
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(backend.repair_payload_bundles().await.unwrap(), 0);
+            backend
+                .store
+                .payload_bucket
+                .purge("p.gc.one")
+                .await
+                .unwrap();
+            assert_eq!(backend.repair_payload_bundles().await.unwrap(), 0);
+            assert_eq!(
+                backend.store.read_packed("p.gc.two").await.unwrap(),
+                vec![2; 65536]
+            );
+            backend
+                .store
+                .payload_bucket
+                .purge("p.gc.two")
+                .await
+                .unwrap();
+            assert_eq!(backend.repair_payload_bundles().await.unwrap(), 1);
+            assert_eq!(backend.repair_payload_bundles().await.unwrap(), 0);
+            assert!(backend
+                .store
+                .payload_bucket
+                .get(&packed.last().unwrap().key)
+                .await
+                .unwrap()
+                .is_none());
             js.delete_key_value(name).await.unwrap();
             js.delete_key_value(payload_name).await.unwrap();
         }

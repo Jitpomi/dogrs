@@ -234,6 +234,18 @@ impl NatsBackend {
         Ok(backend)
     }
 
+    /// Diagnostic packed-layout retention repair. Scans membership indices
+    /// without retaining a complete key list; does not remove live references.
+    #[doc(hidden)]
+    pub async fn repair_payload_bundles(&self) -> QueueResult<usize> {
+        if !self.store.packed_payloads {
+            return Err(QueueError::InvalidConfig(
+                "payload packing is not enabled".into(),
+            ));
+        }
+        self.store.repair_payload_bundles().await
+    }
+
     /// Supply the smaller of the server and account payload limits. Hosted account
     /// limits may be lower than Client::server_info().max_payload. This reserves
     /// framing space and future completion metadata before admitting a job.
