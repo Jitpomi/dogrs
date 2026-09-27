@@ -70,7 +70,10 @@ impl BatchWriter {
             // One in-flight 3-job batch at 100 ms caps admission at 30 jobs/s
             // regardless of how much unused capacity the provider has. Retain
             // a separate metadata lane so producer pipelining cannot consume it.
-            let concurrency = if enqueue { 4 } else { 1 };
+            // Packing increases bytes per batch. Keep roughly the same
+            // producer byte window instead of multiplying queued payload bytes
+            // ahead of claim/completion updates on the shared Raft log.
+            let concurrency = if enqueue && packed.is_none() { 4 } else { 1 };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
             loop {

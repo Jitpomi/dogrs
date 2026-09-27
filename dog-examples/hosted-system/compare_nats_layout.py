@@ -23,7 +23,7 @@ for trial, layout in enumerate(["combined", "packed-combined", "packed-combined"
     evidence = {"trial": trial, "layout": layout, "prototype": True,
                 "binary_sha256": binary_hash,
                 "source_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-                "enqueue_window": 4, "metadata_window": 1,
+                "enqueue_window": 1 if layout == "packed-combined" else 4, "metadata_window": 1,
                 "storage": "three file replicas and sync_interval always for both kinds of data",
                 "workload": "100 tenants, 1000 offers/s, 65536 unique bytes, 60s plus 5s drain"}
     (folder / "experiment.json").write_text(json.dumps(evidence, indent=2))
