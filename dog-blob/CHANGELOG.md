@@ -7,30 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Comprehensive documentation with real-world examples
-- Performance and best practices guide
-- API reference documentation
-- Video streaming service example
-- Document management system example
-- Backup service example with chunked uploads
-- Error handling patterns and retry logic
-- Monitoring and observability examples
-- Configuration tuning guidelines
+### Security and correctness
+- Check tenant and actor ownership on every upload-session operation.
+- Reject request-supplied filesystem paths; accept trusted handles or bounded byte streams.
+- Validate actual sizes before storage using private temporary files.
+- Freeze multipart manifests with atomic session revisions; verify part integrity and support completion retries.
+- Bound chunk session capacity and lifetime, enforce ordering/count/size rules, and add explicit cleanup.
+- Replace date-dependent object keys with stable tenant-separated keys.
+- Correct S3 partial-content totals, implement signed reads, and remove whole-object memory buffering.
 
-### Enhanced
-- README.md with table of contents and better structure
-- Storage backends documentation with feature comparisons
-- Multipart upload examples (automatic and manual)
-- Range request examples for video/audio scrubbing
-- Metadata and custom fields documentation
-- lib.rs documentation with comprehensive examples
+### Packaging and validation
+- Make AWS dependencies optional behind the `s3` feature.
+- Add ownership, concurrency, cancellation, corruption, expiry and capacity regression tests.
+- Add a live disposable MinIO test and compiled documentation examples.
+- Document backend contracts, cleanup, durability limits and migration in README.md.
 
-### Improved
-- Cargo.toml metadata for better discoverability
-- Code examples with proper error handling
-- Architecture diagrams and explanations
-- Performance optimization recommendations
+### Breaking changes
+- Existing dated keys require explicit migration or a custom historical key strategy.
+- Old multipart sessions must be drained; custom session stores need atomic compare-and-swap.
+- New configuration and session fields require updates to struct literals and serialized records.
+- Unsupported key hints and application idempotency keys now return errors.
 
 ## [0.1.0] - 2024-01-04
 
