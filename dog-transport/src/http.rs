@@ -198,7 +198,9 @@ where
             };
 
             // Determine method based on HTTP method and headers
-            let method = if let Some(custom_method) = parts
+            let method = if let Some(route) = parts.extensions.get::<HttpRoute>() {
+                route.method.clone()
+            } else if let Some(custom_method) = parts
                 .headers
                 .get("x-service-method")
                 .and_then(|h| h.to_str().ok())

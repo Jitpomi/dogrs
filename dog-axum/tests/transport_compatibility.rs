@@ -304,3 +304,28 @@ async fn configured_file_encoding_is_honored() {
         assert!(value["file"].get("temp_path").is_none());
     }
 }
+
+#[tokio::test]
+async fn compatibility_head_uses_host_resolved_get_and_has_no_body() {
+    let app = dog_axum::axum(dog_core::DogApp::default()).use_service_as(
+        "/people",
+        "users",
+        std::sync::Arc::new(Echo),
+    );
+    let res = app
+        .router
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri("/people/123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(axum::body::to_bytes(res.into_body(), 10000)
+        .await
+        .unwrap()
+        .is_empty());
+}
