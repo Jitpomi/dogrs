@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 #[async_trait]
+/// Resolve by (tenant, provider, subject) using indexed lookup and atomic
+/// insert/upsert with a uniqueness constraint. Never link accounts solely by
+/// unverified email. Return only public entity fields (no password hashes).
 pub trait OAuthEntityResolver<P>: Send + Sync
 where
     P: Clone + Send + Sync + 'static,
@@ -33,6 +36,12 @@ where
     P: Clone + Send + Sync + 'static,
 {
     fn name(&self) -> &str;
+
+    /// Opt in only when fetch_profile verifies the token's intended client/audience,
+    /// not merely that it can read some user's profile. Browser login should use code+state.
+    fn supports_access_token_login(&self) -> bool {
+        false
+    }
 
     async fn exchange_code(
         &self,
@@ -175,79 +184,6 @@ where
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
-
-    async fn find_entity(
-        &self,
-        ctx: &mut HookContext<Value, P>,
-        service_name: &str,
-        provider: &str,
-        profile: &Value,
-    ) -> Result<Option<Value>> {
-        let Some(pid) = Self::profile_id(provider, profile) else {
-            return Ok(None);
-        };
-
-        let key = format!("{provider}Id");
-        let svc = ctx.services.service(service_name)?;
-
-        // Minimal lookup: find all and filter.
-        let all = svc.find(&ctx.tenant, ctx.params.clone()).await?;
-        for entity in all {
-            if entity.get(&key).and_then(|v| v.as_str()) == Some(pid.as_str()) {
-                return Ok(Some(entity));
-            }
-        }
-
-        Ok(None)
-    }
-
-    async fn create_entity(
-        &self,
-        ctx: &mut HookContext<Value, P>,
-        service_name: &str,
-        provider: &str,
-        profile: &Value,
-    ) -> Result<Value> {
-        let mut data = Map::new();
-        let Some(pid) = Self::profile_id(provider, profile) else {
-            return Err(DogError::not_authenticated("Missing profile id").into_anyhow());
-        };
-        data.insert(format!("{provider}Id"), Value::String(pid));
-        let svc = ctx.services.service(service_name)?;
-        svc.create(&ctx.tenant, Value::Object(data), ctx.params.clone())
-            .await
-    }
-
-    async fn update_entity(
-        &self,
-        ctx: &mut HookContext<Value, P>,
-        service_name: &str,
-        existing: &Value,
-        provider: &str,
-        profile: &Value,
-    ) -> Result<Value> {
-        let Some(id) = existing
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-        else {
-            // If we can't patch, fall back to returning the existing entity.
-            return Ok(existing.clone());
-        };
-
-        let mut data = Map::new();
-        if let Some(pid) = Self::profile_id(provider, profile) {
-            data.insert(format!("{provider}Id"), Value::String(pid));
-        }
-        let svc = ctx.services.service(service_name)?;
-        svc.patch(
-            &ctx.tenant,
-            Some(&id),
-            Value::Object(data),
-            ctx.params.clone(),
-        )
-        .await
-    }
 }
 
 #[async_trait]
@@ -269,12 +205,23 @@ where
             self.options.providers.get(&req.provider).ok_or_else(|| {
                 DogError::not_authenticated("Unknown OAuth provider").into_anyhow()
             })?;
+        if cfg.entity.is_some() && self.options.entity_resolver.is_none() {
+            return Err(
+                DogError::unavailable("OAuth requires an atomic entity resolver").into_anyhow(),
+            );
+        }
         let access_token = match (req.code.as_deref(), req.access_token.as_deref()) {
             (Some(code), None) => provider
                 .exchange_code(code, req.state.as_deref(), ctx)
                 .await
                 .map_err(map_oauth_provider_error)?,
-            (None, Some(token)) => token.to_string(),
+            (None, Some(token)) if provider.supports_access_token_login() => token.to_string(),
+            (None, Some(_)) => {
+                return Err(
+                    DogError::not_authenticated("Direct OAuth token login is not enabled")
+                        .into_anyhow(),
+                )
+            }
             _ => {
                 return Err(DogError::not_authenticated(
                     "Supply exactly one OAuth code or access token",
@@ -307,20 +254,6 @@ where
                 if let Some(entity) = resolver.resolve_entity(&req.provider, profile, ctx).await? {
                     entity_out = Some(json!({ entity_key: entity }));
                 }
-            } else if let (Some(service_name), Some(entity_key)) =
-                (cfg.service.clone(), cfg.entity.clone())
-            {
-                let existing = self
-                    .find_entity(ctx, &service_name, &req.provider, profile)
-                    .await?;
-                let entity = if let Some(existing) = existing {
-                    self.update_entity(ctx, &service_name, &existing, &req.provider, profile)
-                        .await?
-                } else {
-                    self.create_entity(ctx, &service_name, &req.provider, profile)
-                        .await?
-                };
-                entity_out = Some(json!({ entity_key: entity }));
             }
         }
 
@@ -389,5 +322,5 @@ fn map_oauth_provider_error(e: anyhow::Error) -> anyhow::Error {
         return DogError::bad_request("OAuth client is not authorized").into_anyhow();
     }
 
-    e
+    DogError::not_authenticated("OAuth provider request failed").into_anyhow()
 }

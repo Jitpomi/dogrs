@@ -184,11 +184,14 @@ impl JwtProvider for JsonwebtokenProvider {
         let alg = Self::algorithm(jwt.algorithm.clone());
 
         let mut validation = Validation::new(alg);
+        validation.leeway = 0;
+        validation.validate_nbf = true;
+        validation.set_required_spec_claims(&["exp", "iss", "aud"]);
         validation.set_issuer(&[issuer.as_str()]);
         validation.set_audience(&audience.iter().map(|s| s.as_str()).collect::<Vec<_>>());
 
         let decoded = decode::<Value>(token, key, &validation)
-            .map_err(|e| DogError::not_authenticated(e.to_string()).into_anyhow())?;
+            .map_err(|_| DogError::not_authenticated("Invalid token").into_anyhow())?;
 
         let expected_type = match overrides
             .and_then(|o| o.token_type.as_ref())
@@ -226,6 +229,7 @@ where
     options: Arc<AuthOptions>,
     strategies: HashMap<String, Arc<dyn AuthenticationStrategy<P>>>,
     jwt: Arc<dyn JwtProvider>,
+    token_store: Option<Arc<dyn TokenStore>>,
 }
 
 impl<P> AuthenticationBuilder<P>
@@ -256,6 +260,7 @@ where
             options: opts,
             strategies: HashMap::new(),
             jwt,
+            token_store: None,
         })
     }
 
@@ -267,11 +272,18 @@ where
         self.strategies.insert(name.into(), strategy);
     }
 
+    /// Configure shared, durable token revocation and atomic refresh consumption.
+    pub fn with_token_store(mut self, store: Arc<dyn TokenStore>) -> Self {
+        self.token_store = Some(store);
+        self
+    }
+
     pub fn build(self) -> AuthenticationBase<P> {
         AuthenticationBase {
             options: self.options,
             strategies: self.strategies,
             jwt: self.jwt,
+            token_store: self.token_store,
         }
     }
 }
@@ -283,6 +295,7 @@ where
     options: Arc<AuthOptions>,
     strategies: HashMap<String, Arc<dyn AuthenticationStrategy<P>>>,
     jwt: Arc<dyn JwtProvider>,
+    token_store: Option<Arc<dyn TokenStore>>,
 }
 
 impl<P> AuthenticationBase<P>
@@ -383,6 +396,50 @@ where
         .await
     }
 
+    /// Revokes this access token only; sibling sessions/refresh tokens are separate.
+    pub async fn revoke_access_token(&self, token: &str) -> Result<()> {
+        let store = self.token_store.as_ref().ok_or_else(|| {
+            DogError::unavailable("Token revocation store is not configured").into_anyhow()
+        })?;
+        let claims = self.verify_access_token(token).await?;
+        let (issuer, jti, exp) = token_identity(&claims)?;
+        store.revoke(issuer, jti, exp).await
+    }
+
+    /// Revoke a refresh token before it can be rotated again.
+    pub async fn revoke_refresh_token(&self, token: &str) -> Result<()> {
+        let store = self.token_store.as_ref().ok_or_else(|| {
+            DogError::unavailable("Token revocation store is not configured").into_anyhow()
+        })?;
+        let claims = self.verify_refresh_token(token).await?;
+        let (issuer, jti, exp) = token_identity(&claims)?;
+        store.revoke(issuer, jti, exp).await
+    }
+
+    /// Exactly one concurrent use of a refresh token can succeed. A lost response
+    /// requires reauthentication; replay does not produce another token pair.
+    pub async fn rotate_refresh_token(&self, token: &str) -> Result<TokenPair> {
+        let store = self.token_store.as_ref().ok_or_else(|| {
+            DogError::unavailable("Token revocation store is not configured").into_anyhow()
+        })?;
+        let claims = self.verify_refresh_token(token).await?;
+        let (issuer, jti, exp) = token_identity(&claims)?;
+        let mut payload = claims.clone();
+        if let Some(map) = payload.as_object_mut() {
+            for key in ["iss", "aud", "exp", "iat", "nbf", "jti"] {
+                map.remove(key);
+            }
+        }
+        let pair = TokenPair {
+            access_token: self.create_access_token(payload.clone(), None).await?,
+            refresh_token: self.create_refresh_token(payload, None).await?,
+        };
+        if !store.consume_refresh(issuer, jti, exp).await? {
+            return Err(DogError::not_authenticated("Refresh token already used").into_anyhow());
+        }
+        Ok(pair)
+    }
+
     async fn create_token(
         &self,
         payload: Value,
@@ -391,6 +448,7 @@ where
     ) -> Result<String> {
         let cfg = self.configuration();
         let jwt = cfg.jwt;
+        jwt.validate().map_err(anyhow::Error::msg)?;
 
         let issuer = overrides
             .as_ref()
@@ -400,6 +458,13 @@ where
             .as_ref()
             .and_then(|o| o.audience.clone())
             .unwrap_or_else(|| jwt.audience.clone());
+
+        anyhow::ensure!(
+            !issuer.trim().is_empty()
+                && !audience.is_empty()
+                && audience.iter().all(|v| !v.trim().is_empty()),
+            "JWT issuer and audience must not be empty"
+        );
 
         let token_type = overrides
             .as_ref()
@@ -415,7 +480,11 @@ where
             });
 
         let now = Utc::now().timestamp();
-        let exp = now + (expires_in_seconds as i64);
+        let lifetime = i64::try_from(expires_in_seconds)?;
+        anyhow::ensure!(lifetime > 0, "Token lifetime must be positive");
+        let exp = now
+            .checked_add(lifetime)
+            .ok_or_else(|| anyhow::anyhow!("Token lifetime overflow"))?;
         let jti = Uuid::new_v4().to_string();
 
         let mut claims = match payload {
@@ -439,13 +508,26 @@ where
             claims.insert(k, v);
         }
 
-        self.jwt.sign(&jwt, claims, token_type)
+        let token = self.jwt.sign(&jwt, claims, token_type)?;
+        anyhow::ensure!(token.len() <= 16 * 1024, "Token too large");
+        Ok(token)
     }
 
     async fn verify_token(&self, token: &str, overrides: Option<JwtOverrides>) -> Result<Value> {
         let cfg = self.configuration();
         let jwt = cfg.jwt;
-        self.jwt.verify(&jwt, token, overrides.as_ref())
+        jwt.validate().map_err(anyhow::Error::msg)?;
+        if token.len() > 16 * 1024 {
+            return Err(DogError::not_authenticated("Token too large").into_anyhow());
+        }
+        let claims = self.jwt.verify(&jwt, token, overrides.as_ref())?;
+        let (issuer, jti, _) = token_identity(&claims)?;
+        if let Some(store) = &self.token_store {
+            if store.is_revoked(issuer, jti).await? {
+                return Err(DogError::not_authenticated("Token revoked").into_anyhow());
+            }
+        }
+        Ok(claims)
     }
 }
 
@@ -509,5 +591,41 @@ fn jwt_decoding_key(jwt: &crate::options::JwtOptions) -> Result<jsonwebtoken::De
             #[cfg(not(feature = "jwt-pem"))]
             anyhow::bail!("Enable jwt-pem for RSA/ECDSA keys")
         }
+    }
+}
+
+/// Implement with your own storage. Namespace entries by (issuer, jti). Retain
+/// revoked/consumed entries until expires_at (Unix seconds). All methods must
+/// fail closed on errors. consume_refresh must atomically insert a revocation
+/// only if none exists and expires_at is still in the future; is_revoked must
+/// also see consumed refresh tokens. The store must use a synchronized clock.
+/// Multi-instance deployments require shared durable storage, not process memory.
+#[async_trait]
+pub trait TokenStore: Send + Sync {
+    async fn is_revoked(&self, issuer: &str, jti: &str) -> Result<bool>;
+    async fn revoke(&self, issuer: &str, jti: &str, expires_at: i64) -> Result<()>;
+    async fn consume_refresh(&self, issuer: &str, jti: &str, expires_at: i64) -> Result<bool>;
+}
+
+pub struct TokenPair {
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
+fn token_identity(claims: &Value) -> Result<(&str, &str, i64)> {
+    let issuer = claims
+        .get("iss")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    let jti = claims
+        .get("jti")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    let exp = claims.get("exp").and_then(Value::as_i64);
+    match (issuer, jti, exp) {
+        (Some(issuer), Some(jti), Some(exp)) if exp > Utc::now().timestamp() => {
+            Ok((issuer, jti, exp))
+        }
+        _ => Err(DogError::not_authenticated("Invalid token claims").into_anyhow()),
     }
 }

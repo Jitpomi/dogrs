@@ -35,6 +35,9 @@ the API changes, delivery contract and hosting-server responsibilities.
 
 ## Authentication
 
+See [authentication hardening and migration](auth-hardening.md) for the subsequent
+JWT lifecycle, password-boundary, and OAuth account-resolution changes.
+
 `AuthenticationService::install` now stores the service where lookup hooks expect
 it. Deserialization cannot set `authenticated` or `auth_result`. Access verification
 rejects refresh and identity tokens; use `verify_refresh_token` when appropriate.

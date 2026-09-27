@@ -82,14 +82,6 @@ where
         let cfg = self.configuration();
         cfg.validate().map_err(|e| anyhow::anyhow!(e))?;
 
-        // Basic, Feathers-like sanity check: if JWT is enabled, a secret must be present.
-        // (Later, RSA/ECDSA key support can satisfy this instead.)
-        if cfg.strategies.contains(&crate::options::AuthStrategy::Jwt) && cfg.jwt.secret.is_none() {
-            return Err(anyhow::anyhow!(
-                "A JWT secret must be provided in your authentication configuration"
-            ));
-        }
-
         Ok(())
     }
 
@@ -195,15 +187,19 @@ where
             .or_else(|| crate::core::extract_bearer_token(&params.headers))
             .ok_or_else(|| DogError::not_authenticated("Invalid access token").into_anyhow())?;
 
-        // Default "logout" behavior: verify (authenticate) the access token.
+        // Authenticate, then revoke the access token before reporting logout.
         let mut data = serde_json::Map::new();
-        data.insert("accessToken".to_string(), Value::String(token));
+        data.insert("accessToken".to_string(), Value::String(token.clone()));
         let auth_req = AuthenticationRequest {
             strategy: Some("jwt".to_string()),
             data,
         };
 
-        self.authenticate(&auth_req, params, ctx, strategies).await
+        let result = self
+            .authenticate(&auth_req, params, ctx, strategies)
+            .await?;
+        self.base.revoke_access_token(&token).await?;
+        Ok(result)
     }
 
     pub async fn handle_connection(

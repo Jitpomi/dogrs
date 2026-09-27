@@ -10,6 +10,9 @@ use std::sync::Arc;
 struct Provider;
 #[async_trait]
 impl OAuthProvider<()> for Provider {
+    fn supports_access_token_login(&self) -> bool {
+        true
+    }
     fn name(&self) -> &str {
         "test"
     }
@@ -132,4 +135,97 @@ async fn configured_entity_resolver_can_reject_login() {
         .authenticate(&request, &AuthenticationParams::default(), &mut ctx, &auth)
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn entity_mapping_requires_an_explicit_atomic_resolver() {
+    let mut builder = DogAppBuilder::<Value, ()>::new();
+    let auth = AuthenticationService::builder(
+        &mut builder,
+        Some(AuthOptions {
+            entity: Some("user".into()),
+            service: Some("users".into()),
+            ..Default::default()
+        }),
+    )
+    .unwrap()
+    .build();
+    let app = builder.build();
+    let strategy = OAuthStrategy::new().register_provider(Arc::new(Provider));
+    let request =
+        serde_json::from_value(json!({"provider":"test","accessToken":"valid-token"})).unwrap();
+    let mut ctx = HookContext::new(
+        TenantContext::new("test"),
+        ServiceMethodKind::Create,
+        (),
+        ServiceCaller::new(app.clone()),
+        app.config_snapshot(),
+    );
+    let error = strategy
+        .authenticate(&request, &AuthenticationParams::default(), &mut ctx, &auth)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<dog_core::DogError>().unwrap().code(),
+        503
+    );
+    assert!(error.to_string().contains("atomic entity resolver"));
+}
+
+struct CodeOnly;
+#[async_trait]
+impl OAuthProvider<()> for CodeOnly {
+    fn name(&self) -> &str {
+        "test"
+    }
+    async fn exchange_code(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: &mut HookContext<Value, ()>,
+    ) -> anyhow::Result<String> {
+        Err(anyhow::anyhow!("provider-secret-must-not-escape"))
+    }
+    async fn fetch_profile(
+        &self,
+        _: &str,
+        _: &mut HookContext<Value, ()>,
+    ) -> anyhow::Result<Option<Value>> {
+        panic!("disabled raw-token flow must not fetch a profile")
+    }
+}
+#[tokio::test]
+async fn raw_token_login_requires_opt_in_and_provider_errors_are_sanitized() {
+    let mut builder = DogAppBuilder::<Value, ()>::new();
+    let auth = AuthenticationService::builder(&mut builder, None)
+        .unwrap()
+        .build();
+    let app = builder.build();
+    let strategy = OAuthStrategy::new().register_provider(Arc::new(CodeOnly));
+    let mut ctx = HookContext::new(
+        TenantContext::new("test"),
+        ServiceMethodKind::Create,
+        (),
+        ServiceCaller::new(app.clone()),
+        app.config_snapshot(),
+    );
+    for data in [
+        json!({"provider":"test","accessToken":"token"}),
+        json!({"provider":"test","code":"code","state":"state"}),
+    ] {
+        let error = strategy
+            .authenticate(
+                &serde_json::from_value(data).unwrap(),
+                &AuthenticationParams::default(),
+                &mut ctx,
+                &auth,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<dog_core::DogError>().unwrap().code(),
+            401
+        );
+        assert!(!error.to_string().contains("provider-secret"));
+    }
 }

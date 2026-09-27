@@ -22,7 +22,8 @@ You need a `.env` file (or exported environment variables) for Google OAuth to w
 
 ```env
 HTTP_PORT=3000
-AUTH_JWT_SECRET=super-secret-key
+# Generate a random secret, e.g. openssl rand -hex 32
+AUTH_JWT_SECRET=<your-random-secret-at-least-32-bytes>
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 GOOGLE_REDIRECT_URL=http://localhost:3000/oauth/google/callback
@@ -116,3 +117,5 @@ By default, the HTTP service automatically maps external paths directly to their
 ### No Duplicate Adapters
 
 In `src/services/mod.rs`, the `configure` function takes the `auth_adapter` built during the strategy initialization phase instead of creating a new one. This prevents duplicate instances from being registered, ensuring that the `setup(dog_app)` method properly wires the router to the initialized application state.
+
+This demo uses process-local user and OAuth state storage. It is not a production identity service. Configure a shared durable `TokenStore` for server-side logout/refresh rotation; without one, revocation requests fail explicitly. See [auth hardening](../../docs/auth-hardening.md).
