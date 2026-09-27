@@ -5,6 +5,36 @@ is 10 jobs/second per tenant, 100 tenants (1,000 jobs/second aggregate), payload
 to 64 KiB, and recovery after a five-minute outage. These are acceptance targets,
 not promises that a free hosted database can provide that capacity.
 
+## Current evidence (27 September 2026)
+
+The queue implementation at `bf38746` passed the complete correctness and recovery
+CI suite. PostgreSQL and Redis each accepted, completed and verified all 60,000
+distinct 64 KiB jobs in the sustained 100-tenant workload, with zero overload,
+late offers or errors. [CI](https://github.com/Jitpomi/dogrs/actions/runs/36332851103),
+[capacity results](https://github.com/Jitpomi/dogrs/actions/runs/36332850985).
+
+NATS has not passed the same gate with three file replicas and synchronous disk
+acknowledgement on the tested runner. Matched same-binary, same-runner comparisons
+identified synchronous replication-log persistence as a cause of overload.
+Without queue/stack profiling, synchronous controls admitted 57,535 and 57,975
+jobs; buffered controls admitted, completed and verified all 60,000 with zero
+overloads. One buffered run still had 13 late offers. All replicas shared one
+virtual disk. Buffered controls weaken power-loss durability and are **not**
+production qualification. This does not establish NATS's absolute capacity or
+rule out further adapter optimizations.
+[Matched diagnostic](https://github.com/Jitpomi/dogrs/actions/runs/36334661808).
+
+The manual **NATS persistence diagnostics** workflow records a completed experiment
+separately from its workload verdict. Only fully accounted-for, error-free capacity
+misses are diagnostic outcomes; setup failures, runtime errors, missing results
+and unverified accepted jobs fail the workflow. The **Provider capacity** gate
+retains its strict pass/fail behavior. Merging reviewed code does not certify
+the unresolved NATS deployment target or publish a release.
+
+The sections below retain earlier measurements and investigation history. Where
+older results describe unresolved PostgreSQL or Redis capacity, use the dated
+evidence above for the latest tested implementation.
+
 ## Capacity gate
 
 `dog-examples/hosted-system/run_capacity.py postgres` uses a bounded open-loop
@@ -48,16 +78,53 @@ seconds; no duplicate attempts were observed. The earlier single-record polling
 benchmark spent additional time making hundreds of verification requests. The
 portable bounded `get_snapshots` API now verifies up to 1,000 IDs per request.
 
-The 64-KiB gate remains unresolved in this hosted environment. In the optimized
-three-size run, 79/100 offers were admitted at 64 KiB; 21 exceeded the client
-concurrency bound. All admitted jobs completed. Earlier intermediate runs admitted
-all 100 but exceeded the drain deadline. Do not treat a smaller-payload pass as
-certification of the full target or attribute every failure to provider capacity.
+The newer two-round-trip fenced PostgreSQL mutations passed the hosted 64 KiB
+gate twice: 300/300 jobs over 30 seconds (terminal verification 32.871 seconds,
+enqueue p95 756.78 ms), then 600/600 over 60 seconds (terminal verification 61.420
+seconds, p95 276.05 ms). Both used two processes with eight workers each and had
+zero client overloads or duplicate attempts. This closes the previously failing
+single-tenant gate for those observed runs, not every deployment.
 
-A separate no-queue transport probe sends binary parameters to PostgreSQL without
-writing data. It measured p95 latencies of 108 ms, 2,437 ms and 700 ms for 1/16/64
-KiB in one run. This establishes variability on the test connection, not its cause.
-The 100-tenant aggregate workload has not been established.
+The native queue-level harness separately validated 100 tenants at 10 jobs/second
+each with 1 KiB payloads: PostgreSQL and Redis each completed 30,000/30,000 over
+30 seconds; one-node JetStream completed 10,000/10,000 over 10 seconds. It validates
+real persistence APIs, payload integrity, tenant isolation and terminal state,
+without HTTP or external payment effects. These local results do not establish
+that a free hosted instance can deliver the same throughput. The initial Redis
+capacity instance did not establish AOF durability, and one-node JetStream did
+not establish failover; controlled durable profiles are separate tests.
+
+The combined 100-tenant, 64 KiB workload is a separate gate. Early local PostgreSQL
+runs failed, including one with 9,996 admitted and 9,188 completed by the 15-second
+deadline. Do not combine separate small-payload aggregate and large-payload
+single-tenant passes into a claim that the combined target passed.
+
+Reproduce disposable durable-profile capacity tests (100 tenants, 10 jobs/second
+each, bounded admission, five-second drain):
+
+```sh
+cargo build -p hosted-system --release --features redis,nats --locked
+export DOGRS_SYSTEM_BINARY="$PWD/target/release/hosted-system"
+DOGRS_CAPACITY_WORKERS=1 python3 dog-examples/hosted-system/run_recovery.py postgres \
+  --capacity --seconds 30 --bytes 65536 --report-dir /absolute/results
+```
+
+### Combined durable-profile results
+
+On the Linux CI runner, Redis AOF/always/noeviction completed and verified all
+10,000 full 64 KiB jobs across 100 tenants over ten seconds (including zero
+admission drops or duplicate attempts). This is a short controlled load pass,
+not a sustained soak or a certification of the hosted Aiven service.
+
+PostgreSQL and replicated JetStream have **not passed** that combined gate.
+PostgreSQL experiments with larger shared buffers and uncompressed TOAST storage
+did not close the gap. The later capacity fixture records an explicit 1 GiB
+shared-buffer / 4 GiB WAL profile, leaving durability enabled. Producer admission is explicitly
+tunable instead of hard-coding a pool fraction. On local NATS 2.15.0 with 16 buckets,
+three replicas and sync-always, the corrected hint handling eliminated the earlier
+lookup errors, but only 7,451 jobs were admitted and 1,915 completed by the deadline.
+The sustained throughput target remains a release blocker; failed runs must stay
+visible alongside passing unit/contract/recovery tests.
 
 ## Controlled recovery tests
 
@@ -80,12 +147,20 @@ through the public DogRS backend API, rather than checking only that restore
 commands returned success. Drop the isolated restore database after testing.
 Neither test establishes provider failover behavior or a disaster-recovery RPO.
 
+The new disposable provider-process tests also cover PostgreSQL and Redis
+SIGKILL/restart with persisted files, and loss of the actual leader of a
+three-replica JetStream stream while the old leader stays down. Each preserved
+200 acknowledged 64 KiB payloads, rejected 50 expired owners and recovered 150
+unfinished jobs through the same backend instance. The tested Redis configuration
+uses AOF/always/noeviction; JetStream uses file storage and sync-always.
+See [KV storage](../dog-queue/KV-STORAGE.md) for limits and reproduction.
+
 ## Outstanding gates
 
 - Sustained aggregate load, large retained histories, fairness, latency spikes,
   and all payload stages at the agreed traffic rate.
 - Clock skew and clock jumps: PostgreSQL now uses database time for ownership;
-  other ledgers still consult the process clock, and authoritative server clock
+  Redis uses server TIME; native JetStream still consults the process clock, and authoritative server clock
   jumps remain an operational test requirement. A passing no-skew lease test does not certify distributed clock safety.
 - Equivalent controlled recovery/failover evidence for each supported deployment.
 - A durable Redis deployment: the tested Aiven Valkey service has AOF disabled.
@@ -98,3 +173,151 @@ Neither test establishes provider failover behavior or a disaster-recovery RPO.
   See https://docs.mercury.com/reference/webhooks and
   https://docs.mercury.com/docs/invoicing. Do not infer invoice API entitlement
   from the free banking account, and do not upgrade a plan to run these tests.
+
+### Latest correctness checks
+
+A later hosted PostgreSQL 64 KiB run passed 300/300 jobs over 30 seconds, verified
+all 300 business effects and completions by 30.744 seconds, and recorded no
+overload or duplicate attempts (enqueue p95 447.71 ms). Enqueue remains one atomic statement; optional producer concurrency is
+configurable without introducing a second background execution path.
+
+CI exposed a Redis reconnect timeout after restart. The retry cycle is now
+bounded to fit below the queue operation deadline; the same-client controlled
+restart passed locally after this change. CI recovery remains a required gate,
+including the five-minute Redis outage and fresh-container AOF restoration.
+
+The capacity fixture records host/Docker resources and PostgreSQL WAL I/O
+statistics. These separate the observed deployment profile from the portable
+backend API; they do not turn failing capacity measurements into passes.
+
+### Sustained full-payload result
+
+The 60-second Linux Redis AOF/always/noeviction run offered 60,000 jobs at the
+agreed aggregate rate. It admitted 52,712, completed 45,669 before the 65-second
+deadline and dropped 7,288 offers at the bounded client admission limit. It
+reported no queue errors or duplicate attempts. The server log records repeated
+AOF rewrites during the run. The short 10,000-job pass therefore does **not**
+close sustained 64 KiB capacity; compaction under load remains a release gate.
+
+The PostgreSQL enqueue-batching experiment preserved transaction correctness but
+did not close capacity and was removed rather than expanding the public API.
+The ordinary single-statement path and optional producer cap remain. A separate
+replicated-NATS 1 KiB run failed in fixture setup due to a repeated host port;
+the allocator now ensures uniqueness and tracks containers before starting them.
+That setup failure is not a backend capacity measurement.
+
+The final native fixture makes admission concurrency explicit:
+`DOGRS_CAPACITY_INFLIGHT` defaults to 32 outstanding requests per tenant (bounded
+1–64), versus the earlier 16. At the offered 10 jobs/second per tenant this
+provides 3.2 seconds of bounded in-flight capacity; the five-second drain deadline
+is unchanged. The selected value is included in every result. Replicated-NATS
+capacity runs use two workers per tenant to overlap independent jobs; PostgreSQL
+and Redis use one. Offered rate, payload size, expected count and all correctness
+checks remain unchanged. Earlier failed profiles remain separate evidence.
+
+### Queue hot-path fixes
+
+Binary PostgreSQL, Redis and JetStream enqueue transitions construct metadata
+without copying the submission payload into temporary records. The original
+bytes are still persisted and verified by the backend contract tests.
+
+JetStream validates legacy storage on each tenant's first use. Concurrent first
+uses share validation; failures remain retryable. Stop all old writers before
+migration, as with the Redis backend. Empty JetStream claims can wait up to
+50 milliseconds for tenant-specific discovery notifications, registering the
+waiter before checking the index. Authoritative reads and revision CAS still
+control ownership; notifications never grant a lease. The bounded wait avoids
+returning immediately while a remote submission's discovery event is in flight.
+
+NATS producer admission is bounded to 16 concurrent enqueues per backend by
+default, configurable with `with_enqueue_concurrency`. Worker operations do not
+consume producer permits. Completion now durably retains the terminal record in
+its current cell; enqueue archives it before reusing an idempotency scope.
+Terminal records are removed from the discovery index, with a bounded 4,096-entry
+revision cache rejecting delayed observations of completed/deleted jobs. Retention
+covers current terminal cells and archived records, preserves active replacements,
+and fences delayed archives with deletion markers. These changes passed live
+history/reuse/retention and leader-loss tests. They have not yet established the
+full sustained 64 KiB capacity target.
+
+PostgreSQL now bounds producer admission by default. `enqueue_concurrency=None`
+reserves one quarter of the connection pool for non-enqueue operations (at least
+one connection when possible). A live regression holds row locks that block
+submissions and verifies that a leased job still completes before those locks
+are released. Explicit producer limits remain available for measured tuning.
+
+Redis concurrent dequeue no longer reports a backend failure when all bounded
+claim attempts lose compare-and-swap races. It returns an empty poll, with no
+lease acquired. A 64-worker / 512-job live regression reproduced the error before
+the fix and passed afterward with each job completed once. Other operation
+errors are unchanged.
+
+
+### Completion-path throughput fixes
+
+PostgreSQL now coalesces concurrent completions into bounded SQL batches with
+independent tenant/token/lease validation and commit-gated responses. Duplicate
+requests cannot both succeed. The configurable batch size may be set to one for
+independent commits. Live regressions cover mixed valid/invalid/duplicate requests
+and the unbatched path. Redis returns claim payloads with the successful atomic
+CAS response. JetStream completion can use observed metadata only when an exact
+server revision CAS succeeds; stale metadata falls back to an authoritative read.
+
+A local 30-second PostgreSQL run passed all 30,000 incompressible 64 KiB jobs at
+100 tenants / 1,000 jobs/sec in 32.09 seconds. Its 60-second extension still failed
+(50,511 admitted, 38,447 completed of 60,000; 9,489 drops, no operation errors).
+A WAL checkpoint began around 40 seconds. This remains a failed capacity gate.
+Before the latest Redis/NATS request reductions, Redis passed its Linux 60-second
+run (60,000/60,000 in 60.063 seconds); replicated NATS failed its 60-second run
+(31,900 admitted, 21,400 completed; 28,100 drops). Short and long results must not
+be conflated; a complete sustained production target remains unproven.
+
+
+### Claim-path throughput fixes
+
+PostgreSQL also batches claims from distinct tenants, with a separate bounded
+dispatcher. Same-tenant requests cannot share a statement, preventing duplicate
+ownership with overlapping queue lists. The default claim batch size is 16; one
+opts out. Invalid PostgreSQL text/JSONB NUL inputs are rejected before batching.
+JetStream claims may use observed metadata with a positive revision, but only an
+exact server CAS grants ownership. A lost CAS skips the candidate; unobserved
+revision-zero hints cannot create a job. Live regressions cover remote owners,
+phantom hints, tenant/queue isolation and invalid-input isolation.
+
+The local PostgreSQL 60-second test improved to 56,655 admitted / 49,430 completed
+with 3,345 drops and no operation errors, still failing the 60,000-job gate.
+Admission batching was tested and removed because it regressed throughput.
+Thirteen PostgreSQL row tests, 40 library tests, six durable contracts and three
+Redis/NATS record tests passed, as did strict Clippy. Fresh-container PostgreSQL
+restoration and replicated JetStream leader-loss recovery passed on these changes.
+
+The JetStream Docker fixture now mounts `/data` on a Docker volume, matching the
+volume-backed data placement already used by the PostgreSQL and Redis images.
+Three replicas and sync-always remain required; this change does not relax the
+capacity or durability gates. Sustained results must be rerun on this fixture.
+
+At commit `2e9974b`, full CI passed and Redis passed the Linux 60-second target
+(60,000/60,000 in 62.319 seconds). PostgreSQL with two workers per tenant failed
+(36,160 admitted / 34,708 completed), and JetStream before the claim-cache and
+volume changes failed (53,718 admitted / 43,534 completed). Neither failure had
+operation errors, but admission drops and the completion deadline are failures.
+
+
+### Sustained acceptance gate
+
+At `636bba8`, full CI and the three-backend 10-second capacity matrix passed.
+The manual 60-second PostgreSQL run admitted and completed 50,237 of 60,000 jobs
+with 9,763 dropped offers; replicated JetStream admitted 55,086 and completed
+39,611, with 4,914 dropped offers. Both failed despite zero operation errors.
+PostgreSQL 3 ms commit grouping and a four-bucket/four-worker JetStream profile
+also failed, so neither replaces the defaults.
+
+The automatic pull-request capacity test now runs for 60 seconds, with 10/30-second
+checks still available explicitly. Its job summary reports offered, admitted,
+completed, verified and dropped counts alongside the unchanged acceptance rules.
+A shorter passing run cannot satisfy this sustained gate.
+
+The same PostgreSQL backend instance also passed a 300-second outage followed by
+restoration of its crash-persisted data into a fresh container: all 200 acknowledged
+64 KiB jobs survived, 50 expired owners were rejected, and 150 unfinished jobs
+completed. This tests restoration of the latest crash image, not an old backup.

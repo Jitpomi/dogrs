@@ -7,7 +7,7 @@ Tenant-scoped jobs with leases, retries, cancellation and typed handlers.
 | Backend | Job state | Feature |
 | --- | --- | --- |
 | Memory | Process memory; lost on restart | default |
-| PostgreSQL | Transactional, versioned tenant records | `postgres` |
+| PostgreSQL | Indexed per-job rows; optional isolated storage schemas | `postgres` |
 | Redis | Atomic compare-and-swap; enable AOF and replication | `redis` |
 | NATS | File-backed JetStream KV with revision checks | `nats` |
 | RabbitMQ | Durable ledger plus confirmed AMQP wakeups | `rabbitmq` |
@@ -57,8 +57,12 @@ if let Some(job) = backend.dequeue(tenant.clone(), &["billing"]).await? {
 Use `QueueAdapter` to register typed `Job` implementations and start worker pools.
 Workers run the lease reaper; callers using `QueueBackend` directly must periodically
 call `reclaim_expired_leases`. Configure a sensible lease duration and heartbeat
-long-running work. Cancellation prevents later completion, but cannot undo a side
-effect a handler has already performed. At-least-once processing requires
+long-running work. Workers drop the handler future when renewal fails or the last
+confirmed lease expires, including a stalled renewal request. Only acknowledged
+renewals extend this local deadline. Backends without lease extension remain
+supported: workers use their original deadline without attempting heartbeats.
+Cancellation is cooperative: it cannot stop
+blocking code or undo an external effect a handler has already performed. At-least-once processing requires
 idempotent handlers; an idempotency key deduplicates active jobs, not all future
 requests after a terminal job has been removed or completed.
 
@@ -87,21 +91,25 @@ reads, set no TTL and use discard-new, then call `from_store_with_max_payload(bu
 Use the smaller of the server and account limits; hosted account limits can be
 lower than the server INFO value. The older `from_store` convenience assumes a
 1 MiB payload limit. `NatsConfig.subject`
-now names that KV bucket, not a Core NATS subject.
+now names that KV bucket, not a Core NATS subject. For NATS 2.12+ concurrent workloads,
+`from_context` can use the stream’s atomic-publish capability to share durable
+replication work without changing revision checks or the stored format. See
+[JetStream write batching](NATS.md).
 
 ## Capacity, security and migration
 
 PostgreSQL v2 uses indexed job rows, binary payloads and a bounded connection pool.
-Redis and JetStream currently serialize tenant state and target modest job volumes.
+Redis v2 uses indexed per-job metadata and separate binary payloads. JetStream
+uses independent active idempotency cells, immutable payloads and separate terminal
+history. Neither rewrites one growing tenant document. See [KV storage and upgrade
+requirements](KV-STORAGE.md) for persistence guards, deployment assumptions,
+retention, legacy data handling and recovery evidence.
+
 Choose a ledger to match the workload; custom durable ledgers are supported through
-`JobLedger`. Keep payloads bounded, use `get_snapshot` for metadata polling, and regularly use
-`purge_terminal_before(ctx, cutoff)` on the ledger. JetStream's maximum value and
-server message limits also bound tenant state. NATS admission reserves 8 KiB per
-record for later status updates within a state budget capped at 900 KB and reduced for smaller account/stream
-payload limits (with 4 KiB reserved for protocol framing). Purge terminal
-history before that budget fills. Persisted result references must serialize to
-at most 4 KiB; error summaries retain at most 256 characters. Benchmark realistic tenant volume
-and maintain free capacity for status updates before deploying.
+`JobLedger`. Keep payloads bounded, use metadata snapshots for status polling, and
+regularly purge terminal history. Persisted result references must serialize to at
+most 4 KiB; error summaries retain at most 256 characters. Maintain provider quota
+headroom for state transitions and benchmark the actual deployment.
 
 PostgreSQL `new` uses `NoTls` for local connections or trusted tunnels;
 `new_with_tls` accepts a certificate-validating connector. Redis supports `rediss`
@@ -109,10 +117,10 @@ with certificate verification. Use persistence, backups and appropriate replicat
 for your recovery requirements. The application must derive `QueueCtx` from a
 trusted identity; accepting arbitrary tenant IDs from HTTP clients is unsafe.
 
-PostgreSQL uses `dogrs_queue_state_v1`; Redis uses `{dogrs-queue-v1}:*`. Existing
-prototype tables/keys/messages are neither imported nor deleted. Drain/export and
-verify a migration before switching. Broker constructors and OAuth/transport API
-changes are described in the repository release notes.
+PostgreSQL v2 uses `dogrs_queue_jobs_v2`, with an explicit offline v1 migration.
+Redis v2 keys use a tenant hash tag; JetStream v2 separates active, payload and
+history keys. Legacy Redis/JetStream tenants are rejected explicitly; drain/export
+and verify migration before switching. Existing prototype data is not deleted.
 
 SQLite/SQLx, UI and workflow placeholders are not queue implementations. They are
 outside this release's broker support; enabling an unused dependency is not support.

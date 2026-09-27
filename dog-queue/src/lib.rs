@@ -8,6 +8,8 @@
 pub mod adapter;
 pub mod backend;
 pub mod codec;
+#[doc(hidden)]
+pub mod diagnostics;
 pub mod error;
 pub mod job;
 pub mod observability;

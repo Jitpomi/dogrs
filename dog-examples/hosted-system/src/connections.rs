@@ -228,7 +228,7 @@ pub async fn dispatch(role: &str) -> Result<()> {
                         ctx,
                         dog_queue::JobMessage::new(
                             "capacity",
-                            vec![0; 300_000],
+                            vec![0; 600_000],
                             "bytes",
                             "capacity",
                         ),

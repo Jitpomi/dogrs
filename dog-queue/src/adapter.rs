@@ -802,53 +802,13 @@ impl<C: Send + Sync + 'static> Worker<C> {
             })?
         }; // read lock released here
 
-        // Spawn a heartbeat task that extends the lease every `heartbeat_interval`
-        // while execute() runs.  Without this, any job that takes longer than
-        // `lease_duration` (default 5 min) is reclaimed by the reaper and re-executed
-        // by another worker while the original is still running — silent double-execution
-        // for non-idempotent jobs.
-        //
-        // The heartbeat is aborted as soon as execute() returns so it cannot fire
-        // between execute() completing and ack_complete/ack_fail being called.
-        // If the job is canceled or the lease token is invalidated, heartbeat_extend
-        // returns an error; the heartbeat loop exits and the main worker's
-        // ack_complete will surface the JobCanceled / InvalidLeaseToken error.
-        let hb_backend = self.adapter.backend.clone();
-        let hb_ctx = self.ctx.clone();
-        let hb_job_id = job_id.clone();
-        let hb_token = leased_job.lease_token.clone();
-        let hb_interval = self.adapter.config.heartbeat_interval;
-
-        let heartbeat_handle = AbortOnDrop(tokio::spawn(async move {
-            let mut previous_renewal = tokio::time::Instant::now();
-            loop {
-                tokio::time::sleep(hb_interval).await;
-                let now = tokio::time::Instant::now();
-                // Extend by elapsed time, including the previous backend round trip.
-                // Adding only the sleep interval slowly exhausts the original lease
-                // margin whenever the database has nonzero latency.
-                let extension = now.duration_since(previous_renewal);
-                previous_renewal = now;
-                match hb_backend
-                    .heartbeat_extend(
-                        hb_ctx.clone(),
-                        hb_job_id.clone(),
-                        hb_token.clone(),
-                        extension,
-                    )
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(e) => {
-                        warn!(
-                            "Heartbeat extension failed for job {} (stopping heartbeat): {}",
-                            hb_job_id, e
-                        );
-                        break;
-                    }
-                }
-            }
-        }));
+        // Payload retrieval and registry contention can outlast a short lease.
+        // Check before the first heartbeat, while this dequeue-time snapshot is
+        // still applicable. Never start user effects with an already expired
+        // lease; leave recovery to the backend's normal reclaim path.
+        if !leased_job.lease_valid(chrono::Utc::now()) {
+            return Err(QueueError::LeaseExpired);
+        }
 
         // Decode the payload through the registered codec before handing it to the handler.
         // `encode_bytes` was called at enqueue time; `decode_bytes` must be called here to
@@ -873,10 +833,6 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     "Codec decode failed (permanent — payload is corrupt or codec mismatch): {e}"
                 );
                 error!("Job {} permanently failed: {}", job_id, error_str);
-
-                // AbortOnDrop will abort the heartbeat task as it goes out of scope;
-                // drop explicitly here to abort BEFORE calling ack_fail.
-                drop(heartbeat_handle);
 
                 // Permanently fail the job so it leaves Processing immediately.
                 // Ignore ack_fail errors here — we cannot do anything useful with
@@ -906,13 +862,86 @@ impl<C: Send + Sync + 'static> Worker<C> {
         let mut decoded_message = leased_job.record.message.clone();
         decoded_message.payload_bytes = decoded_bytes;
 
+        // Renew only while this worker can confirm ownership. The supervisor
+        // drops the handler future on renewal failure or when the last confirmed
+        // deadline passes, including a stuck backend call. Cancellation is
+        // cooperative and cannot roll back effects the handler already performed.
+        let hb_backend = self.adapter.backend.clone();
+        let hb_ctx = self.ctx.clone();
+        let hb_job_id = job_id.clone();
+        let hb_token = leased_job.lease_token.clone();
+        let hb_interval = self.adapter.config.heartbeat_interval;
+        let can_extend = self.adapter.backend.capabilities().lease_extend;
+        let remaining = leased_job
+            .lease_remaining(chrono::Utc::now())
+            .and_then(|remaining| remaining.to_std().ok())
+            .ok_or(QueueError::LeaseExpired)?;
+        let confirmed_deadline = tokio::time::Instant::now() + remaining;
+        let (heartbeat_failed, mut heartbeat_failure) = oneshot::channel();
+        let heartbeat_handle = AbortOnDrop(tokio::spawn(async move {
+            // Extension is optional in the portable backend contract. Such a
+            // backend may execute within its original lease, but not beyond it.
+            if !can_extend {
+                tokio::time::sleep_until(confirmed_deadline).await;
+                let _ = heartbeat_failed.send(QueueError::LeaseExpired);
+                return;
+            }
+            let mut previous_renewal = tokio::time::Instant::now();
+            let mut confirmed_deadline = confirmed_deadline;
+            loop {
+                let renewal = tokio::time::timeout_at(confirmed_deadline, async {
+                    tokio::time::sleep(hb_interval).await;
+                    let now = tokio::time::Instant::now();
+                    // Include the preceding backend round trip in the extension.
+                    let extension = now.duration_since(previous_renewal);
+                    previous_renewal = now;
+                    hb_backend
+                        .heartbeat_extend(
+                            hb_ctx.clone(),
+                            hb_job_id.clone(),
+                            hb_token.clone(),
+                            extension,
+                        )
+                        .await?;
+                    Ok::<_, QueueError>(extension)
+                })
+                .await;
+                match renewal {
+                    Ok(Ok(extension)) => confirmed_deadline += extension,
+                    failure => {
+                        let error = match failure {
+                            Ok(Err(error)) => error,
+                            Err(_) => QueueError::LeaseExpired,
+                            Ok(Ok(_)) => unreachable!(),
+                        };
+                        let _ = heartbeat_failed.send(error);
+                        return;
+                    }
+                }
+            }
+        }));
+
         // Time the execute() call for performance metrics.
         // The elapsed duration is recorded after the drop of the heartbeat handle
         // so that heartbeat teardown overhead is not counted as job execution time.
         let execute_start = std::time::Instant::now();
-        let result = handler
-            .execute(&decoded_message, self.context.clone())
-            .await;
+        let result = tokio::select! {
+            biased;
+            failure = &mut heartbeat_failure => {
+                // Do not acknowledge a failed/completed result after losing the
+                // right to execute. The backend's normal recovery owns the job.
+                let error = failure.unwrap_or_else(|_| QueueError::Internal(
+                    "Lease supervisor stopped before execution finished".into(),
+                ));
+                if matches!(error, QueueError::JobCanceled | QueueError::JobAlreadyTerminal) {
+                    // Match the acknowledgement path: cancellation is a handled
+                    // lifecycle event, not a backend outage or another failure.
+                    return Ok(true);
+                }
+                return Err(error);
+            }
+            result = handler.execute(&decoded_message, self.context.clone()) => result,
+        };
         let execute_elapsed = execute_start.elapsed();
 
         // Job finished — drop the AbortOnDrop guard, which aborts the heartbeat task.
@@ -1088,6 +1117,345 @@ mod tests {
                 "Processed: {} with context: {}",
                 self.data, ctx.value
             ))
+        }
+    }
+
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct CountedJob;
+    #[async_trait]
+    impl Job for CountedJob {
+        type Context = Arc<std::sync::atomic::AtomicUsize>;
+        type Result = ();
+        const JOB_TYPE: &'static str = "counted_job";
+        async fn execute(&self, count: Self::Context) -> Result<(), JobError> {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn worker_does_not_start_effects_for_a_lease_expired_before_dispatch() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for expired in [true, false] {
+            let backend = MemoryBackend::new().with_lease_duration(if expired {
+                Duration::from_millis(20)
+            } else {
+                Duration::from_secs(60)
+            });
+            let adapter = QueueAdapter::new(backend);
+            adapter.register_job::<CountedJob>().await.unwrap();
+            let ctx = QueueCtx::new("dispatch-lease");
+            let id = adapter
+                .enqueue_opts(
+                    ctx.clone(),
+                    CountedJob,
+                    EnqueueOptions::default().with_queue("default"),
+                )
+                .await
+                .unwrap();
+            let count = Arc::new(AtomicUsize::new(0));
+            let worker = Worker {
+                adapter: Arc::new(adapter.to_dyn_shared()),
+                ctx: ctx.clone(),
+                context: Arc::new(count.clone()),
+                queues: vec!["default".into()],
+            };
+            // Hold handler lookup after dequeue until a real, nonzero lease
+            // expires. This models dispatch delayed by registry contention.
+            let registry_lock = if expired {
+                Some(adapter.job_registry.write().await)
+            } else {
+                None
+            };
+            let task = tokio::spawn(async move { worker.process_next_job(&["default"]).await });
+            if expired {
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        if matches!(
+                            adapter
+                                .backend
+                                .get_status(ctx.clone(), id.clone())
+                                .await
+                                .unwrap(),
+                            crate::JobStatus::Processing { .. }
+                        ) {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+            drop(registry_lock);
+            let result = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap();
+            if expired {
+                assert!(matches!(result, Err(QueueError::LeaseExpired)));
+                assert_eq!(count.load(Ordering::SeqCst), 0);
+                assert!(!adapter
+                    .backend
+                    .get_status(ctx, id)
+                    .await
+                    .unwrap()
+                    .is_terminal());
+                assert_eq!(
+                    adapter
+                        .backend
+                        .reclaim_expired_leases()
+                        .await
+                        .unwrap()
+                        .len(),
+                    1
+                );
+            } else {
+                assert!(result.unwrap());
+                assert_eq!(count.load(Ordering::SeqCst), 1);
+                assert!(adapter
+                    .backend
+                    .get_status(ctx, id)
+                    .await
+                    .unwrap()
+                    .is_terminal());
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ControlledContext {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        effects: Arc<std::sync::atomic::AtomicUsize>,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct ControlledJob;
+    #[async_trait]
+    impl Job for ControlledJob {
+        type Context = ControlledContext;
+        type Result = ();
+        const JOB_TYPE: &'static str = "controlled_job";
+        async fn execute(&self, ctx: Self::Context) -> Result<(), JobError> {
+            struct Dropped(Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for Dropped {
+                fn drop(&mut self) {
+                    self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            let _dropped = Dropped(ctx.dropped.clone());
+            ctx.started.notify_one();
+            ctx.release.notified().await;
+            ctx.effects
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn worker_stops_effects_after_cancel_or_stalled_renewal_but_keeps_renewed_work() {
+        use std::sync::atomic::Ordering;
+        for scenario in ["canceled", "stalled", "renewed"] {
+            let lease_duration = Duration::from_millis(200);
+            let backend = MemoryBackend::new().with_lease_duration(lease_duration);
+            let adapter = QueueAdapter::with_config(
+                backend,
+                QueueConfig {
+                    lease_duration,
+                    heartbeat_interval: Duration::from_millis(20),
+                    ..Default::default()
+                },
+            );
+            adapter.register_job::<ControlledJob>().await.unwrap();
+            let ctx = QueueCtx::new("renewal-ownership");
+            let id = adapter
+                .enqueue_opts(
+                    ctx.clone(),
+                    ControlledJob,
+                    EnqueueOptions::default().with_queue("default"),
+                )
+                .await
+                .unwrap();
+            let context = ControlledContext::default();
+            let worker = Worker {
+                adapter: Arc::new(adapter.to_dyn_shared()),
+                ctx: ctx.clone(),
+                context: Arc::new(context.clone()),
+                queues: vec!["default".into()],
+            };
+            let task = tokio::spawn(async move { worker.process_next_job(&["default"]).await });
+            tokio::time::timeout(Duration::from_secs(2), context.started.notified())
+                .await
+                .unwrap();
+            let lock = if scenario == "stalled" {
+                // Hold the provider mutation lock beyond the lease. Renewal must
+                // time out and cancel the handler even if the provider never replies.
+                Some(adapter.backend.jobs.write().await)
+            } else {
+                None
+            };
+            if scenario == "canceled" {
+                adapter
+                    .backend
+                    .cancel(ctx.clone(), id.clone())
+                    .await
+                    .unwrap();
+            } else if scenario == "renewed" {
+                // Successful renewals must supersede the stale dequeue snapshot.
+                tokio::time::sleep(lease_duration + Duration::from_millis(100)).await;
+                context.release.notify_one();
+            }
+            let result = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap();
+            drop(lock);
+            assert!(context.dropped.load(Ordering::SeqCst));
+            if scenario == "renewed" {
+                assert!(result.unwrap());
+                assert_eq!(context.effects.load(Ordering::SeqCst), 1);
+                assert!(adapter
+                    .backend
+                    .get_status(ctx, id)
+                    .await
+                    .unwrap()
+                    .is_terminal());
+            } else {
+                assert_eq!(context.effects.load(Ordering::SeqCst), 0);
+                if scenario == "canceled" {
+                    assert!(result.unwrap());
+                    assert!(matches!(
+                        adapter.backend.get_status(ctx, id).await.unwrap(),
+                        crate::JobStatus::Canceled { .. }
+                    ));
+                } else {
+                    assert!(matches!(result, Err(QueueError::LeaseExpired)));
+                    assert_eq!(
+                        adapter
+                            .backend
+                            .reclaim_expired_leases()
+                            .await
+                            .unwrap()
+                            .len(),
+                        1
+                    );
+                }
+            }
+        }
+    }
+
+    struct FixedLeaseBackend(MemoryBackend);
+    #[async_trait]
+    impl QueueBackend for FixedLeaseBackend {
+        async fn enqueue(&self, ctx: QueueCtx, message: crate::JobMessage) -> QueueResult<JobId> {
+            self.0.enqueue(ctx, message).await
+        }
+        async fn dequeue(
+            &self,
+            ctx: QueueCtx,
+            queues: &[&str],
+        ) -> QueueResult<Option<crate::LeasedJob>> {
+            self.0.dequeue(ctx, queues).await
+        }
+        async fn ack_complete(
+            &self,
+            ctx: QueueCtx,
+            id: JobId,
+            token: crate::LeaseToken,
+            result: Option<String>,
+        ) -> QueueResult<()> {
+            self.0.ack_complete(ctx, id, token, result).await
+        }
+        async fn ack_fail(
+            &self,
+            ctx: QueueCtx,
+            id: JobId,
+            token: crate::LeaseToken,
+            error: String,
+            retry: Option<chrono::DateTime<chrono::Utc>>,
+        ) -> QueueResult<()> {
+            self.0.ack_fail(ctx, id, token, error, retry).await
+        }
+        async fn cancel(&self, ctx: QueueCtx, id: JobId) -> QueueResult<bool> {
+            self.0.cancel(ctx, id).await
+        }
+        async fn get_status(&self, ctx: QueueCtx, id: JobId) -> QueueResult<crate::JobStatus> {
+            self.0.get_status(ctx, id).await
+        }
+        fn event_stream(&self, ctx: QueueCtx) -> crate::backend::BoxStream<crate::JobEvent> {
+            self.0.event_stream(ctx)
+        }
+        fn capabilities(&self) -> crate::QueueCapabilities {
+            let mut capabilities = self.0.capabilities();
+            capabilities.lease_extend = false;
+            capabilities
+        }
+        // Deliberately retain the default BackendUnsupported heartbeat method.
+    }
+
+    #[tokio::test]
+    async fn fixed_lease_backend_runs_until_its_deadline_without_requiring_heartbeats() {
+        use std::sync::atomic::Ordering;
+        for expired in [false, true] {
+            let lease_duration = Duration::from_millis(200);
+            let adapter = QueueAdapter::with_config(
+                FixedLeaseBackend(MemoryBackend::new().with_lease_duration(lease_duration)),
+                QueueConfig {
+                    lease_duration,
+                    heartbeat_interval: Duration::from_millis(20),
+                    ..Default::default()
+                },
+            );
+            adapter.register_job::<ControlledJob>().await.unwrap();
+            let ctx = QueueCtx::new("fixed-lease");
+            adapter
+                .enqueue_opts(
+                    ctx.clone(),
+                    ControlledJob,
+                    EnqueueOptions::default().with_queue("default"),
+                )
+                .await
+                .unwrap();
+            let context = ControlledContext::default();
+            let worker = Worker {
+                adapter: Arc::new(adapter.to_dyn_shared()),
+                ctx,
+                context: Arc::new(context.clone()),
+                queues: vec!["default".into()],
+            };
+            let task = tokio::spawn(async move { worker.process_next_job(&["default"]).await });
+            tokio::time::timeout(Duration::from_secs(2), context.started.notified())
+                .await
+                .unwrap();
+            if !expired {
+                // Cross more than one heartbeat interval without requiring this
+                // optional backend operation, while remaining within the lease.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                context.release.notify_one();
+            }
+            let result = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(context.dropped.load(Ordering::SeqCst));
+            if expired {
+                assert!(matches!(result, Err(QueueError::LeaseExpired)));
+                assert_eq!(context.effects.load(Ordering::SeqCst), 0);
+                assert_eq!(
+                    adapter
+                        .backend
+                        .0
+                        .reclaim_expired_leases()
+                        .await
+                        .unwrap()
+                        .len(),
+                    1
+                );
+            } else {
+                assert!(result.unwrap());
+                assert_eq!(context.effects.load(Ordering::SeqCst), 1);
+            }
         }
     }
 

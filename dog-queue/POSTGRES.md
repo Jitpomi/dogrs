@@ -24,10 +24,82 @@ also bounded. A timeout can have an unknown commit outcome: use idempotency keys
 and reconcile status rather than blindly creating a new logical job.
 
 Lease checks and transitions read PostgreSQL time after acquiring row locks.
-Worker wall clocks do not decide lease ownership. Caller-specified absolute
-`run_at` and retry timestamps still require the application to supply correct
-UTC times. Clock jumps on the database host are an operational concern; this
+Worker wall clocks do not decide lease ownership. `JobMessage::new` uses the
+clock-independent `JobMessage::IMMEDIATE` marker (Unix epoch), which PostgreSQL
+resolves to database time when inserting the job. An immediate submission cannot
+be delayed merely because its producer's clock is ahead. Explicit `with_run_at`
+timestamps remain absolute UTC, even if they appear past-dated to a fast producer.
+For an immediate retry, pass `Some(JobMessage::IMMEDIATE)`. Other absolute retry
+timestamps still require the application to supply correct UTC times.
+Clock jumps on the database host are an operational concern; this
 adapter does not claim to solve arbitrary changes to the authoritative clock.
+
+## Fixed storage schemas
+
+`PostgresOptions.schema` selects an isolated storage namespace. Startup creates it
+transactionally when needed; every connection, including a reconnect, restores
+that schema without falling back to `public`. Names are quoted as identifiers,
+limited to 63 bytes, and cannot name PostgreSQL system schemas. Creating a new
+schema requires database CREATE permission; an existing schema needs the normal
+table/function/trigger permissions. `None` preserves the connection's configured
+`search_path` and existing storage behavior.
+
+Separate schemas have separate physical job and large-payload tables. The
+provider-neutral `ShardedBackend` can route tenants over a fixed list of these
+backends. For example, four backends with distinct schema names can share a total
+64-connection budget using these options for each:
+
+```rust
+# use dog_queue::backend::postgres::PostgresOptions;
+let options = PostgresOptions {
+    schema: Some("jobs_0".into()), // jobs_1, jobs_2, jobs_3 for the other stores
+    max_connections: 16,
+    batch_concurrency: Some(1),
+    ..Default::default()
+};
+```
+
+Place their `Arc<PostgresBackend>` values in a fixed order in
+`ShardedBackend::new`. This keeps the total producer limit at 48 and executing
+claim/completion statements at four per kind across the four stores. Pool budgets
+multiply across application instances. This is an isolation option, not a throughput guarantee. Multiple schemas on
+one server were slower in paired large-payload capacity tests and increased
+operation timeouts: they still share the same write-ahead log. Keep one store
+unless measurements justify a different topology.
+
+Schema names, shard count and shard order identify persisted storage. Opening a
+different schema does not move existing jobs. Drain or perform a verified offline
+tenant migration before changing a live routing topology.
+
+## Binary payload compression
+
+`PostgresOptions.payload_storage` optionally selects PostgreSQL's storage policy
+for the binary payload column. `None` (the default) preserves the database's
+existing policy. Metadata compression is unchanged.
+
+```rust
+# use dog_queue::backend::postgres::{PostgresOptions, PostgresPayloadStorage};
+let options = PostgresOptions {
+    payload_storage: Some(PostgresPayloadStorage::External),
+    ..Default::default()
+};
+```
+
+`External` skips compression attempts while retaining normal PostgreSQL
+out-of-line storage and durable commits. It is useful for encrypted, already
+compressed, or otherwise incompressible payloads. `Extended` permits compression
+and is PostgreSQL's normal BYTEA policy; compressible payloads can use much less
+disk and WAL space with it. See [PostgreSQL's storage policies](https://www.postgresql.org/docs/18/storage-toast.html).
+
+This is a shared table setting, not a per-connection preference. Configure all
+writers consistently. An explicit change needs table-owner permissions and a
+brief exclusive table lock, bounded by the initialization timeout. Matching
+reopeners do not acquire that exclusive lock, and default reopeners do not reset
+the policy. Existing values are not rewritten: compressed and uncompressed jobs
+can coexist, and changing the policy does not change their payloads or leases.
+
+The option requires no extension or new crate and does not affect other backends.
+It is workload tuning, not a guarantee of a particular job rate on every server.
 
 ## Offline upgrade from the v1 tenant ledger
 
@@ -59,3 +131,48 @@ The backend shares the cross-connection queue contract with Redis and JetStream.
 skipping, explicit migration and old-writer fencing. `tests/production_faults.rs`
 checks controlled local connection loss and restoration. Hosted benchmarks are
 separate evidence; connection pooling alone does not guarantee a throughput level.
+
+Completion uses one atomic SQL statement. It locks the row before reading database
+time, validates status/token/expiry, and commits the result in that statement.
+Retry, heartbeat and cancellation use metadata compare-and-swap with a database
+clock check after the row lock. Producer admission is bounded before connection
+acquisition, so blocked submissions cannot fill the worker connection queue.
+`PostgresOptions.enqueue_concurrency = None` selects an automatic limit: reserve
+one quarter of the pool, at least one connection when the pool has more than one.
+A 64-connection pool therefore admits at most 48 concurrent submissions. Explicit
+limits from 1 through `max_connections` override this policy; using the full pool
+is appropriate for a producer-only backend. Tune explicit limits against measured
+latency. A small cap on a high-latency connection can reduce throughput.
+
+
+Concurrent completions are coalesced into bounded SQL batches (at most 64 requests,
+256 waiting requests, and at most four executing statements per backend). There
+is no collection timer on a quiet queue. Each request independently checks its
+tenant, token, status and lease after row locking; responses are sent only after
+the statement commits. Duplicate requests for the same tenant/job are placed in
+separate statements so they cannot both succeed from one pre-update snapshot.
+Invalid leases do not roll back valid requests in the same batch. Only explicitly
+aborted deadlock/serialization failures may be retried; network failures retain
+unknown-commit semantics.
+
+`PostgresOptions.completion_batch_size` accepts 1 through 64 and defaults to 64.
+Set it to 1 to use independent commits, avoiding cross-job row-lock waiting within
+a batch. Batching is a throughput/latency choice, not a change to durability.
+
+Concurrent claims from distinct tenants use a separate bounded dispatcher with
+256 waiting requests and at most four executing statements per backend.
+`PostgresOptions.claim_batch_size` defaults to 16 and accepts 1 through 64; set it
+to 1 for independent claims. Each SQL batch includes at most one request per
+tenant, including when callers request overlapping queues. This prevents two
+requests in the same statement from leasing the same row. Row locking uses
+`SKIP LOCKED`, and ownership is returned only after the statement commits.
+
+`PostgresOptions.batch_concurrency` optionally limits executing statements per
+dispatcher (claim and completion separately), from one through the pool size.
+The default remains one quarter of the pool, capped at four. Use explicit budgets
+when composing multiple backends so adding stores does not silently multiply
+worker statement concurrency.
+
+PostgreSQL cannot store NUL characters in text or JSONB strings. Tenant, queue,
+lease, result and metadata inputs are checked before submission so an invalid
+request cannot abort valid peers in a batch. Binary payloads may contain NUL bytes.

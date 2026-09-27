@@ -23,6 +23,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
+      - name: Check diagnostic result classification
+        run: python3 -m unittest discover -s dog-examples/hosted-system -p 'test_diagnostic_result.py'
       - run: cargo test --workspace --all-targets --locked
       - run: cargo test --workspace --doc --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -75,6 +77,18 @@ jobs:
           DOGRS_POSTGRES_URL: host=127.0.0.1 port=5432 user=postgres password=dogrs-test-only
           DOGRS_REDIS_URL: redis://127.0.0.1:6379
           DOGRS_NATS_URL: nats://127.0.0.1:4222
+      - run: cargo test -p dog-queue --features redis,postgres,nats --test kv_records --locked -- --ignored
+        env:
+          DOGRS_REDIS_URL: redis://127.0.0.1:6379
+          DOGRS_NATS_URL: nats://127.0.0.1:4222
+      - run: cargo test -p dog-queue --features nats --lib --locked claim_read_tests
+      - run: cargo test -p dog-queue --features nats --lib --locked -- --ignored --skip nats_batch
+        env:
+          DOGRS_NATS_URL: nats://127.0.0.1:4222
+      - run: docker run -d --name nats-atomic-ci -p 127.0.0.1:4223:4222 nats:2.15.0-alpine -js -sd /data
+      - run: cargo test -p dog-queue --features nats --lib --locked nats_batch -- --include-ignored
+        env:
+          DOGRS_NATS_URL: nats://127.0.0.1:4223
       - run: cargo test -p dog-queue --features postgres --test postgres_rows --locked -- --ignored
         env:
           DOGRS_POSTGRES_URL: host=127.0.0.1 port=5432 user=postgres password=dogrs-test-only
@@ -174,3 +188,37 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --locked
       - run: cargo audit
+
+  provider-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build -p hosted-system --release --features redis,nats --locked
+      - run: |
+          for backend in postgres redis nats; do
+            python3 dog-examples/hosted-system/run_recovery.py "$backend" --report-dir provider-recovery
+          done
+          python3 dog-examples/hosted-system/verify_capacity_deadline.py --report-dir provider-recovery
+          python3 dog-examples/hosted-system/run_recovery.py redis --restore --outage-seconds 300 --report-dir provider-recovery
+        env:
+          DOGRS_SYSTEM_BINARY: target/release/hosted-system
+      - name: Collect recovery evidence without database files
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import shutil
+          for folder in Path('provider-recovery').glob('dogrs-fault-*'):
+              for source in folder.iterdir():
+                  if source.suffix in {'.log', '.json', '.conf'} and source.is_file():
+                      destination = Path('provider-recovery-logs') / folder.name / source.name
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copyfile(source, destination)
+          PYTHON
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: provider-recovery
+          path: provider-recovery-logs

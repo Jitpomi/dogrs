@@ -1,9 +1,7 @@
 //! Durable NATS queue using JetStream KV compare-and-swap, not Core NATS delivery.
-use super::durable::{DurableBackend, Operation, Outcome, StateStore, TenantState};
+use super::durable::DurableBackend;
 use crate::{QueueError, QueueResult};
 use async_nats::jetstream::{self, kv, stream};
-use async_trait::async_trait;
-use futures::StreamExt;
 
 #[derive(Clone)]
 pub struct NatsConfig {
@@ -13,8 +11,13 @@ pub struct NatsConfig {
     pub subject: String,
 }
 pub struct NatsStore {
-    bucket: kv::Store,
-    max_state_bytes: usize,
+    pub(super) writer: Option<super::nats_batch::BatchWriter>,
+    pub(super) enqueue_slots: tokio::sync::Semaphore,
+    pub(super) payload_slots: tokio::sync::Semaphore,
+    pub(super) bucket: kv::Store,
+    pub(super) max_state_bytes: usize,
+    pub(super) index: tokio::sync::OnceCell<std::sync::Arc<super::nats_records::Index>>,
+    pub(super) checked_tenants: dashmap::DashMap<String, std::sync::Arc<tokio::sync::OnceCell<()>>>,
 }
 pub type NatsBackend = DurableBackend<NatsStore>;
 fn error(e: impl std::fmt::Display) -> QueueError {
@@ -22,10 +25,24 @@ fn error(e: impl std::fmt::Display) -> QueueError {
 }
 
 impl NatsBackend {
+    /// Bound concurrent submissions before they reach JetStream. Claims and
+    /// lease updates do not take producer permits. Defaults to 16 for individual
+    /// writes, or the 128-request bounded queue for atomic batching.
+    pub fn with_enqueue_concurrency(mut self, limit: usize) -> QueueResult<Self> {
+        if !(1..=4096).contains(&limit) {
+            return Err(QueueError::InvalidConfig(
+                "NATS enqueue concurrency must be within 1..=4096".into(),
+            ));
+        }
+        self.store.enqueue_slots = tokio::sync::Semaphore::new(limit);
+        Ok(self)
+    }
     /// Local/development convenience: creates a file-backed bucket with one replica.
     /// For clustered production use, provision the bucket and call `from_store`.
     pub async fn new(config: NatsConfig) -> QueueResult<Self> {
-        let client = async_nats::connect(config.url).await.map_err(error)?;
+        let client = async_nats::connect(config.url.split(',').collect::<Vec<_>>())
+            .await
+            .map_err(error)?;
         let max_payload = client.server_info().max_payload;
         let js = jetstream::new(client);
         let bucket = match js.get_key_value(&config.subject).await {
@@ -51,19 +68,54 @@ impl NatsBackend {
             config.allow_direct = false;
             js.update_stream(config).await.map_err(error)?;
         }
-        Self::from_store_with_max_payload(
-            js.get_key_value(&bucket.name).await.map_err(error)?,
-            max_payload,
-        )
+        Self::from_context(js, &bucket.name, max_payload).await
     }
     pub async fn new_async(config: NatsConfig) -> QueueResult<Self> {
         Self::new(config).await
+    }
+
+    /// Require a replicated deployment without choosing a hosting vendor. The
+    /// caller must separately verify server fsync policy and failure-domain placement.
+    pub fn from_replicated_store(
+        bucket: kv::Store,
+        max_payload: usize,
+        min_replicas: usize,
+    ) -> QueueResult<Self> {
+        if min_replicas < 3 || bucket.stream.cached_info().config.num_replicas < min_replicas {
+            return Err(QueueError::InvalidConfig("Replicated JetStream ledger requires at least the requested three or more replicas".into()));
+        }
+        Self::from_store_with_max_payload(bucket, max_payload)
     }
 
     /// Use a caller-authenticated, TLS-connected JetStream bucket. Provision it with
     /// file storage, no expiration, no eviction of old keys, and leader-only reads.
     pub fn from_store(bucket: kv::Store) -> QueueResult<Self> {
         Self::from_store_with_max_payload(bucket, 1024 * 1024)
+    }
+
+    /// Open a bucket through its authenticated context. Buckets with atomic
+    /// publishing enabled coalesce concurrent conditional writes into durable
+    /// commits. Other buckets retain the compatible individual-write path.
+    /// Provision `allow_atomic_publish=true` on NATS 2.12+ to enable batching.
+    /// No stream configuration is changed by this constructor.
+    pub async fn from_context(
+        context: jetstream::Context,
+        name: &str,
+        max_payload: usize,
+    ) -> QueueResult<Self> {
+        let bucket = context.get_key_value(name).await.map_err(error)?;
+        let atomic = bucket.stream.cached_info().config.allow_atomic_publish
+            && bucket.stream.cached_info().config.mirror.is_none();
+        let mut backend = Self::from_store_with_max_payload(bucket.clone(), max_payload)?;
+        if atomic {
+            // The batch writer bounds actual I/O and reserves a metadata lane.
+            // The individual-write limiter would otherwise prevent it from
+            // filling a byte-bounded batch while awaiting durable replies.
+            backend.store.enqueue_slots =
+                tokio::sync::Semaphore::new(super::nats_batch::ADMISSION_CAPACITY);
+            backend.store.writer = Some(super::nats_batch::BatchWriter::start(context, bucket));
+        }
+        Ok(backend)
     }
 
     /// Supply the smaller of the server and account payload limits. Hosted account
@@ -84,78 +136,16 @@ impl NatsBackend {
         let max_state_bytes = state_budget(max_payload, config.max_message_size)?;
         Ok(Self {
             store: NatsStore {
+                writer: None,
+                enqueue_slots: tokio::sync::Semaphore::new(16),
+                payload_slots: tokio::sync::Semaphore::new(128),
                 bucket,
                 max_state_bytes,
+                index: Default::default(),
+                checked_tenants: Default::default(),
             },
             lease_duration: std::time::Duration::from_secs(300),
         })
-    }
-}
-
-#[async_trait]
-impl StateStore for NatsStore {
-    async fn update(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
-        let key = format!(
-            "tenant_{}",
-            tenant
-                .as_bytes()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        );
-        for _ in 0..64 {
-            let previous = self.bucket.entry(&key).await.map_err(error)?;
-            let revision = previous.as_ref().map(|e| e.revision).unwrap_or(0);
-            let mut state: TenantState = match previous {
-                Some(entry) if entry.operation == kv::Operation::Put => {
-                    serde_json::from_slice(&entry.value).map_err(error)?
-                }
-                _ => TenantState::default(),
-            };
-            let outcome = state.apply(tenant, op)?;
-            if matches!(
-                op,
-                Operation::Get(_) | Operation::Snapshot(_) | Operation::Snapshots(_)
-            ) {
-                return Ok(outcome);
-            }
-            let value = serde_json::to_vec(&state).map_err(error)?;
-            if matches!(op, Operation::Enqueue(_))
-                && value.len().saturating_add(state.reserved_bytes()) > self.max_state_bytes
-            {
-                return Err(QueueError::InvalidConfig("JetStream tenant capacity reached; purge terminal history or use a larger-capacity ledger".into()));
-            }
-            match self.bucket.update(&key, value.into(), revision).await {
-                Ok(_) => return Ok(outcome),
-                Err(err) if err.kind() == kv::UpdateErrorKind::WrongLastRevision => {
-                    tokio::task::yield_now().await
-                }
-                Err(err) => return Err(error(err)),
-            }
-        }
-        Err(QueueError::Internal(
-            "NATS queue contention: retry operation".into(),
-        ))
-    }
-    async fn tenants(&self) -> QueueResult<Vec<String>> {
-        let mut keys = self.bucket.keys().await.map_err(error)?;
-        let mut tenants = Vec::new();
-        while let Some(key) = keys.next().await {
-            let key = key.map_err(error)?;
-            let Some(encoded) = key.strip_prefix("tenant_") else {
-                continue;
-            };
-            if encoded.len() % 2 != 0 || !encoded.is_ascii() {
-                return Err(error("Invalid NATS tenant key"));
-            }
-            let bytes = (0..encoded.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(error)?;
-            tenants.push(String::from_utf8(bytes).map_err(error)?);
-        }
-        Ok(tenants)
     }
 }
 

@@ -24,7 +24,7 @@ pub struct JobMessage {
     /// Maximum retry attempts
     pub max_retries: u32,
 
-    /// When the job should be eligible for processing
+    /// Absolute UTC eligibility time, or [`Self::IMMEDIATE`] for immediate work.
     pub run_at: DateTime<Utc>,
 
     /// Optional idempotency key (scoped by tenant/queue/job_type)
@@ -32,7 +32,11 @@ pub struct JobMessage {
 }
 
 impl JobMessage {
-    /// Create a new job message
+    /// Clock-independent marker for immediate work (also usable for an immediate
+    /// retry). Backends may resolve it to their authoritative enqueue time.
+    pub const IMMEDIATE: DateTime<Utc> = DateTime::UNIX_EPOCH;
+
+    /// Create a job eligible immediately, independent of the producer's clock.
     pub fn new(
         job_type: impl Into<String>,
         payload_bytes: Vec<u8>,
@@ -46,7 +50,7 @@ impl JobMessage {
             queue: queue.into(),
             priority: JobPriority::default(),
             max_retries: 3,
-            run_at: Utc::now(),
+            run_at: Self::IMMEDIATE,
             idempotency_key: None,
         }
     }
@@ -87,5 +91,22 @@ impl JobMessage {
     /// Get the payload size in bytes
     pub fn payload_size(&self) -> usize {
         self.payload_bytes.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn immediate_submission_is_eligible_on_a_slower_clock_but_explicit_schedule_is_not() {
+        let reference = Utc::now() - chrono::Duration::hours(1);
+        let immediate = JobMessage::new("clock", vec![], "bytes", "q");
+        assert!(immediate.is_eligible(reference));
+        let round_trip: JobMessage =
+            serde_json::from_str(&serde_json::to_string(&immediate).unwrap()).unwrap();
+        assert!(round_trip.is_eligible(reference));
+        let scheduled = immediate.with_run_at(reference + chrono::Duration::minutes(1));
+        assert!(!scheduled.is_eligible(reference));
     }
 }

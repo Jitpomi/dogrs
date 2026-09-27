@@ -2,6 +2,7 @@ pub mod broker;
 #[cfg(any(feature = "postgres", feature = "redis", feature = "nats-async"))]
 pub mod durable;
 pub mod memory;
+pub mod sharded;
 
 #[cfg(feature = "redis")]
 pub mod redis;
@@ -23,6 +24,10 @@ pub mod gcp_pubsub;
 
 #[cfg(feature = "nats-async")]
 pub mod nats;
+#[cfg(feature = "nats-async")]
+mod nats_batch;
+#[cfg(feature = "nats-async")]
+mod nats_records;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

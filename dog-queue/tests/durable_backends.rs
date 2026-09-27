@@ -113,24 +113,26 @@ async fn nats_capacity_reserves_space_for_completion() {
     };
     let backend = NatsBackend::new(config.clone()).await.unwrap();
     let tenant = QueueCtx::new("capacity-test");
-    let mut admitted = 0;
-    loop {
-        match backend
+    // Aggregate tenant payloads exceed the old single-value limit without
+    // growing a shared tenant record. Oversized individual jobs still fail.
+    for _ in 0..20 {
+        backend
             .enqueue(
                 tenant.clone(),
                 JobMessage::new("large", vec![0; 100_000], "json", "q"),
             )
             .await
-        {
-            Ok(_) => {
-                admitted += 1;
-                assert!(admitted < 10);
-            }
-            Err(dog_queue::QueueError::InvalidConfig(_)) => break,
-            Err(err) => panic!("Unexpected admission error: {err}"),
-        }
+            .unwrap();
     }
-    assert!(admitted > 0);
+    assert!(matches!(
+        backend
+            .enqueue(
+                tenant.clone(),
+                JobMessage::new("too-large", vec![0; 1_048_576], "bytes", "q")
+            )
+            .await,
+        Err(dog_queue::QueueError::InvalidConfig(_))
+    ));
     let job = backend
         .dequeue(tenant.clone(), &["q"])
         .await

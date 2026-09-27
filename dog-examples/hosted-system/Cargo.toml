@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+futures = "0.3"
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
@@ -31,6 +32,7 @@ aws-sdk-sqs = { version = "1.113", optional = true, default-features = false, fe
 google-cloud-pubsub = { version = "1.5", optional = true }
 
 [features]
+queue-diagnostics = ["dog-queue/queue-diagnostics"]
 redis = ["dog-queue/redis", "dep:redis"]
 nats = ["dog-queue/nats", "dep:async-nats"]
 rabbitmq = ["dog-queue/rabbitmq", "dep:lapin"]

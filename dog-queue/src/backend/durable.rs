@@ -14,10 +14,35 @@ use std::{collections::HashMap, time::Duration};
 pub(crate) struct TenantState {
     pub(crate) jobs: HashMap<JobId, StoredRecord>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct StoredRecord {
     pub(crate) record: JobRecord,
     pub(crate) token: Option<LeaseToken>,
+}
+
+/// Binary stores persist payloads separately. Build transition metadata without
+/// allocating and copying the payload only to discard it before serialization.
+pub(crate) fn metadata_message(message: &JobMessage) -> JobMessage {
+    let JobMessage {
+        job_type,
+        payload_bytes: _,
+        codec,
+        queue,
+        priority,
+        max_retries,
+        run_at,
+        idempotency_key,
+    } = message;
+    JobMessage {
+        job_type: job_type.clone(),
+        payload_bytes: Vec::new(),
+        codec: codec.clone(),
+        queue: queue.clone(),
+        priority: *priority,
+        max_retries: *max_retries,
+        run_at: *run_at,
+        idempotency_key: idempotency_key.clone(),
+    }
 }
 
 pub(crate) enum Operation {
@@ -46,13 +71,7 @@ pub(crate) enum Outcome {
 }
 
 impl TenantState {
-    /// Reserve room for bounded terminal outcomes and lease metadata on every job.
-    #[cfg(feature = "nats-async")]
-    pub(crate) fn reserved_bytes(&self) -> usize {
-        self.jobs.len().saturating_mul(8192)
-    }
-
-    #[cfg(any(feature = "redis", feature = "nats-async", test))]
+    #[cfg(test)]
     pub(crate) fn apply(&mut self, tenant: &str, operation: &Operation) -> QueueResult<Outcome> {
         self.apply_at(tenant, operation, Utc::now())
     }

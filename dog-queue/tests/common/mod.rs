@@ -7,7 +7,9 @@ pub async fn contract(
 ) {
     let tenant = QueueCtx::new(format!("audit-{}", uuid::Uuid::new_v4()));
     let stranger = QueueCtx::new(format!("stranger-{}", uuid::Uuid::new_v4()));
-    let msg = JobMessage::new("test", vec![1, 2, 3], "json", "q").with_idempotency_key("same");
+    let msg = JobMessage::new("test", vec![1, 2, 3], "json", "q")
+        .with_idempotency_key("same")
+        .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1));
     let (left, right) = tokio::join!(
         a.enqueue(tenant.clone(), msg.clone()),
         b.enqueue(tenant.clone(), msg)
@@ -74,7 +76,8 @@ pub async fn contract(
     let cancel = a
         .enqueue(
             tenant.clone(),
-            JobMessage::new("cancel", vec![], "json", "q"),
+            JobMessage::new("cancel", vec![], "json", "q")
+                .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1)),
         )
         .await
         .unwrap();
@@ -89,7 +92,8 @@ pub async fn contract(
     let retry = a
         .enqueue(
             tenant.clone(),
-            JobMessage::new("retry", vec![], "json", "q"),
+            JobMessage::new("retry", vec![], "json", "q")
+                .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1)),
         )
         .await
         .unwrap();
@@ -99,7 +103,7 @@ pub async fn contract(
         retry.clone(),
         lease.lease_token,
         "retry me".into(),
-        Some(chrono::Utc::now()),
+        Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
     )
     .await
     .unwrap();
@@ -112,7 +116,8 @@ pub async fn contract(
     let expired = a
         .enqueue(
             tenant.clone(),
-            JobMessage::new("expire", vec![], "json", "q"),
+            JobMessage::new("expire", vec![], "json", "q")
+                .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1)),
         )
         .await
         .unwrap();

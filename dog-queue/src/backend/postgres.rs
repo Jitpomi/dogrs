@@ -5,24 +5,67 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::{sync::Arc, time::Duration};
 use tokio_postgres::{types::Type, Client, NoTls, Transaction};
+#[path = "postgres_claims.rs"]
+mod claims;
+#[path = "postgres_completions.rs"]
+mod completions;
 
 #[derive(Clone)]
 pub struct PostgresConfig {
     pub connection_string: String,
 }
+/// PostgreSQL's policy for the binary payload column. Metadata is unaffected.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PostgresPayloadStorage {
+    /// Permit compression and out-of-line storage (PostgreSQL's BYTEA default).
+    Extended,
+    /// Permit out-of-line storage without compression. Useful for encrypted,
+    /// already compressed, or otherwise incompressible payloads.
+    External,
+}
 /// PostgreSQL-specific tuning. It is not part of the portable queue contract.
 #[derive(Clone)]
 pub struct PostgresOptions {
+    /// Optional isolated storage schema, created transactionally at startup.
+    /// Combine fixed schemas with ShardedBackend to distribute table/TOAST
+    /// contention. Schema names and shard order are persistent storage topology.
+    /// None preserves the connection's configured search_path.
+    pub schema: Option<String>,
+    /// Optional table-wide payload policy, applied transactionally at startup.
+    /// None preserves the existing database policy. All writers sharing the
+    /// table should agree on an explicit setting. Changing it needs table-owner
+    /// permissions and a brief exclusive lock; existing values are not rewritten.
+    pub payload_storage: Option<PostgresPayloadStorage>,
     pub max_connections: u32,
     pub operation_timeout: Duration,
+    /// Producer concurrency cap. None reserves a quarter of the pool (at least
+    /// one connection when possible) for worker operations. An explicit cap may
+    /// use the full pool for producer-only deployments.
+    pub enqueue_concurrency: Option<u32>,
+    /// Maximum acknowledgments coalesced into one durable SQL statement (1..=64).
+    /// Set to 1 for independent commits without cross-job row-lock coupling.
+    pub completion_batch_size: usize,
+    /// Maximum distinct-tenant claims per durable statement (1..=64).
+    /// Set to 1 for independent claims. Same-tenant calls are always separated.
+    pub claim_batch_size: usize,
+    /// Executing statements per claim/completion dispatcher. None uses one
+    /// quarter of the pool, capped at four. An explicit limit lets fixed shards
+    /// share an application-wide statement budget without multiplying it.
+    pub batch_concurrency: Option<usize>,
     /// Explicit offline v1 -> v2 migration. Stop every old worker/API first.
     pub migrate_legacy: bool,
 }
 impl Default for PostgresOptions {
     fn default() -> Self {
         Self {
+            schema: None,
+            payload_storage: None,
             max_connections: 4,
             operation_timeout: Duration::from_secs(10),
+            enqueue_concurrency: None,
+            completion_batch_size: 64,
+            claim_batch_size: 16,
+            batch_concurrency: None,
             migrate_legacy: false,
         }
     }
@@ -51,6 +94,9 @@ impl bb8::ManageConnection for Manager {
 pub struct PostgresStore {
     pool: bb8::Pool<Manager>,
     timeout: Duration,
+    enqueue_slots: tokio::sync::Semaphore,
+    completions: Option<completions::Completions>,
+    claims: Option<claims::Claims>,
 }
 pub type PostgresBackend = DurableBackend<PostgresStore>;
 fn error(e: impl std::fmt::Display + 'static) -> QueueError {
@@ -96,9 +142,30 @@ impl PostgresBackend {
         T::TlsConnect: Send,
         <T::TlsConnect as tokio_postgres::tls::TlsConnect<tokio_postgres::Socket>>::Future: Send,
     {
-        if options.max_connections == 0 || options.operation_timeout.is_zero() {
+        if options.schema.as_ref().is_some_and(|name| {
+            name.is_empty()
+                || name.len() > 63
+                || name.contains('\0')
+                || name.starts_with("pg_")
+                || name == "information_schema"
+        }) {
             return Err(QueueError::InvalidConfig(
-                "positive pool size and operation timeout required".into(),
+                "PostgreSQL schema must be a non-system name of 1..=63 bytes without NUL".into(),
+            ));
+        }
+        if options.max_connections == 0
+            || options.operation_timeout.is_zero()
+            || !(1..=64).contains(&options.completion_batch_size)
+            || !(1..=64).contains(&options.claim_batch_size)
+            || options
+                .batch_concurrency
+                .is_some_and(|n| n == 0 || n > options.max_connections as usize)
+            || options
+                .enqueue_concurrency
+                .is_some_and(|n| n == 0 || n > options.max_connections)
+        {
+            return Err(QueueError::InvalidConfig(
+                "positive pool size and timeout required; enqueue concurrency must be within pool size; batch sizes must be 1..=64 and batch concurrency within pool size".into(),
             ));
         }
         let statement_timeout = options
@@ -107,10 +174,12 @@ impl PostgresBackend {
             .min(i32::MAX as u128)
             .max(1)
             .to_string();
+        let schema = options.schema.clone();
         let connect: Connector = Arc::new(move || {
             let uri = config.connection_string.clone();
             let tls = tls.clone();
             let statement_timeout = statement_timeout.clone();
+            let schema = schema.clone();
             Box::pin(async move {
                 let (client, connection) =
                     tokio_postgres::connect(&uri, tls).await.map_err(error)?;
@@ -126,6 +195,15 @@ impl PostgresBackend {
                     )
                     .await
                     .map_err(error)?;
+                if let Some(schema) = schema {
+                    client
+                        .query_one(
+                            "SELECT set_config('search_path', quote_ident($1) || ', pg_catalog', false)",
+                            &[&schema],
+                        )
+                        .await
+                        .map_err(error)?;
+                }
                 Ok(client)
             })
         });
@@ -136,13 +214,50 @@ impl PostgresBackend {
             .build(Manager(connect))
             .await
             .map_err(error)?;
+        let completions = (options.completion_batch_size > 1).then(|| {
+            completions::Completions::start(
+                pool.clone(),
+                options
+                    .batch_concurrency
+                    .unwrap_or_else(|| ((options.max_connections as usize) / 4).clamp(1, 4)),
+                options.completion_batch_size,
+                options.operation_timeout,
+            )
+        });
+        let claims = (options.claim_batch_size > 1).then(|| {
+            claims::Claims::start(
+                pool.clone(),
+                options
+                    .batch_concurrency
+                    .unwrap_or_else(|| ((options.max_connections as usize) / 4).clamp(1, 4)),
+                options.claim_batch_size,
+                options.operation_timeout,
+            )
+        });
         let store = PostgresStore {
             pool,
+            completions,
+            claims,
             timeout: options.operation_timeout,
+            enqueue_slots: tokio::sync::Semaphore::new(options.enqueue_concurrency.unwrap_or_else(
+                || {
+                    options
+                        .max_connections
+                        .saturating_sub((options.max_connections / 4).max(1))
+                        .max(1)
+                },
+            ) as usize),
         };
-        tokio::time::timeout(store.timeout, store.initialize(options.migrate_legacy))
-            .await
-            .map_err(|_| error("PostgreSQL schema initialization timed out"))??;
+        tokio::time::timeout(
+            store.timeout,
+            store.initialize(
+                options.migrate_legacy,
+                options.schema.as_deref(),
+                options.payload_storage,
+            ),
+        )
+        .await
+        .map_err(|_| error("PostgreSQL schema initialization timed out"))??;
         Ok(Self {
             store,
             lease_duration: Duration::from_secs(300),
@@ -166,9 +281,41 @@ async fn schema_ready(client: &impl tokio_postgres::GenericClient) -> QueueResul
 }
 
 impl PostgresStore {
-    async fn initialize(&self, migrate: bool) -> QueueResult<()> {
-        let mut client = self.pool.get().await.map_err(error)?;
-        if schema_ready(&*client).await? {
+    async fn configure_payload_storage(
+        tx: &Transaction<'_>,
+        storage: PostgresPayloadStorage,
+    ) -> QueueResult<()> {
+        let current: String = tx.query_one(
+            "SELECT attstorage::text FROM pg_attribute WHERE attrelid='dogrs_queue_jobs_v2'::regclass AND attname='payload' AND NOT attisdropped",
+            &[],
+        ).await.map_err(error)?.get(0);
+        let (expected, sql) = match storage {
+            PostgresPayloadStorage::Extended => (
+                "x",
+                "ALTER TABLE dogrs_queue_jobs_v2 ALTER COLUMN payload SET STORAGE EXTENDED",
+            ),
+            PostgresPayloadStorage::External => (
+                "e",
+                "ALTER TABLE dogrs_queue_jobs_v2 ALTER COLUMN payload SET STORAGE EXTERNAL",
+            ),
+        };
+        // Matching reopeners avoid the exclusive table lock entirely.
+        if current != expected {
+            tx.batch_execute(sql).await.map_err(error)?;
+        }
+        Ok(())
+    }
+
+    async fn initialize(
+        &self,
+        migrate: bool,
+        schema: Option<&str>,
+        storage: Option<PostgresPayloadStorage>,
+    ) -> QueueResult<()> {
+        let mut client = crate::diagnostics::measure(crate::diagnostics::PG_POOL, self.pool.get())
+            .await
+            .map_err(error)?;
+        if storage.is_none() && schema_ready(&*client).await? {
             return Ok(());
         }
         let tx = client.transaction().await.map_err(error)?;
@@ -179,11 +326,27 @@ impl PostgresStore {
         .await
         .map_err(error)?;
         if schema_ready(&tx).await? {
+            if let Some(storage) = storage {
+                Self::configure_payload_storage(&tx, storage).await?;
+            }
             return tx.commit().await.map_err(error);
+        }
+        if let Some(schema) = schema {
+            // quote_ident handles the connection setting; double embedded quotes
+            // here because PostgreSQL DDL cannot bind an identifier parameter.
+            tx.batch_execute(&format!(
+                "CREATE SCHEMA IF NOT EXISTS \"{}\"",
+                schema.replace('"', "\"\"")
+            ))
+            .await
+            .map_err(error)?;
         }
         tx.batch_execute(include_str!("postgres_schema.sql"))
             .await
             .map_err(error)?;
+        if let Some(storage) = storage {
+            Self::configure_payload_storage(&tx, storage).await?;
+        }
         let done: bool = tx
             .query_one(
                 "SELECT EXISTS(SELECT 1 FROM dogrs_queue_metadata_v2 WHERE version=2)",
@@ -226,17 +389,87 @@ impl PostgresStore {
         tx.commit().await.map_err(error)
     }
     async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
-        let mut client = self.pool.get().await.map_err(error)?;
+        if tenant.contains('\0') {
+            return Err(QueueError::InvalidConfig(
+                "PostgreSQL tenant cannot contain NUL".into(),
+            ));
+        }
+        if let Operation::Complete(id, token, result) = op {
+            if id.as_str().contains('\0')
+                || token.as_str().contains('\0')
+                || result.as_ref().is_some_and(|s| s.contains('\0'))
+            {
+                return Err(QueueError::InvalidConfig(
+                    "PostgreSQL completion text cannot contain NUL".into(),
+                ));
+            }
+            if serde_json::to_vec(result).map_err(error)?.len() > 4096 {
+                return Err(QueueError::InvalidConfig(
+                    "Persisted result must fit in 4 KiB; store large results by reference".into(),
+                ));
+            }
+            if let Some(completions) = &self.completions {
+                crate::diagnostics::measure(
+                    crate::diagnostics::PG_COMPLETE_DISPATCH,
+                    completions.submit(tenant, id, token, result),
+                )
+                .await?;
+                return Ok(Outcome::Done);
+            }
+        }
+        if let Operation::Dequeue(queues, duration) = op {
+            let valid_duration = chrono::Duration::from_std(*duration)
+                .ok()
+                .and_then(|duration| Utc::now().checked_add_signed(duration))
+                .is_some();
+            if duration.is_zero()
+                || !valid_duration
+                || queues.iter().any(|queue| queue.contains('\0'))
+            {
+                return Err(QueueError::InvalidConfig("PostgreSQL claim requires representable positive duration and queue names without NUL".into()));
+            }
+            if let Some(claims) = &self.claims {
+                return Ok(Outcome::Lease(
+                    crate::diagnostics::measure(
+                        crate::diagnostics::PG_CLAIM_DISPATCH,
+                        claims.submit(tenant, queues, *duration),
+                    )
+                    .await?,
+                ));
+            }
+        }
+        // Bound producers before they enter the shared pool queue. A burst of
+        // admissions must not strand already leased jobs behind thousands of
+        // waiting INSERTs; worker claims/acks retain connection capacity.
+        let _admission = match op {
+            Operation::Enqueue(_) => Some(
+                crate::diagnostics::measure(
+                    crate::diagnostics::PG_ENQUEUE_SLOT,
+                    self.enqueue_slots.acquire(),
+                )
+                .await
+                .map_err(error)?,
+            ),
+            _ => None,
+        };
+        let mut client = crate::diagnostics::measure(crate::diagnostics::PG_POOL, self.pool.get())
+            .await
+            .map_err(error)?;
         if let Operation::Enqueue(message) = op {
             let mut state = TenantState::default();
-            state.apply_at(tenant, op, Utc::now())?;
+            state.apply_at(
+                tenant,
+                &Operation::Enqueue(super::durable::metadata_message(message)),
+                Utc::now(),
+            )?;
             let stored = state.jobs.values().next().unwrap();
             let r = &stored.record;
             let value = metadata(stored)?;
             // One atomic statement: database timestamps replace temporary local
             // constructor timestamps before anything becomes visible.
-            let row = client
-                .query_typed_one(
+            let row = crate::diagnostics::measure(
+                crate::diagnostics::PG_INSERT,
+                client.query_typed_one(
                     include_str!("postgres_enqueue.sql"),
                     &[
                         (&tenant, Type::TEXT),
@@ -249,9 +482,10 @@ impl PostgresStore {
                         (&message.run_at, Type::TIMESTAMPTZ),
                         (&message.payload_bytes, Type::BYTEA),
                     ],
-                )
-                .await
-                .map_err(error)?;
+                ),
+            )
+            .await
+            .map_err(error)?;
             return Ok(Outcome::Id(row.get::<_, String>(0).into()));
         }
         if let Operation::Dequeue(queues, duration) = op {
@@ -287,6 +521,29 @@ impl PostgresStore {
                 token,
                 until,
             ))));
+        }
+        if let Operation::Complete(id, token, result) = op {
+            let row = client
+                .query_typed_one(
+                    include_str!("postgres_complete.sql"),
+                    &[
+                        (&tenant, Type::TEXT),
+                        (&id.as_str(), Type::TEXT),
+                        (&token.as_str(), Type::TEXT),
+                        (result, Type::TEXT),
+                    ],
+                )
+                .await
+                .map_err(error)?;
+            return match row.get::<_, i32>(0) {
+                0 => Ok(Outcome::Done),
+                1 => Err(QueueError::JobNotFound(id.clone())),
+                2 => Err(QueueError::JobCanceled),
+                3 => Err(QueueError::JobAlreadyTerminal),
+                4 => Err(QueueError::InvalidLeaseToken { job_id: id.clone() }),
+                5 => Err(QueueError::LeaseExpired),
+                _ => Err(error("Unexpected completion outcome")),
+            };
         }
         if let Operation::Snapshots(ids) = op {
             let keys: Vec<&str> = ids.iter().map(|id| id.as_str()).collect();
@@ -344,6 +601,49 @@ impl PostgresStore {
             let count = client.execute("DELETE FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND NOT active AND updated_at < $2", &[&tenant,before]).await.map_err(error)?;
             return Ok(Outcome::Purged(count as usize));
         }
+        // A metadata read followed by a fenced compare-and-swap needs two round
+        // trips rather than BEGIN/lock/time/update/COMMIT. The write checks the
+        // database clock again: a lease that expired in transit cannot commit.
+        if let Operation::Complete(id, ..)
+        | Operation::Fail(id, ..)
+        | Operation::Heartbeat(id, ..)
+        | Operation::Cancel(id) = op
+        {
+            for _ in 0..32 {
+                let row = client.query_typed_opt(
+                    "SELECT state,clock_timestamp() FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND id=$2",
+                    &[(&tenant,Type::TEXT),(&id.as_str(),Type::TEXT)]).await.map_err(error)?;
+                let Some(row) = row else {
+                    return if matches!(op, Operation::Cancel(_)) {
+                        Ok(Outcome::Canceled(false))
+                    } else {
+                        Err(QueueError::JobNotFound(id.clone()))
+                    };
+                };
+                let previous: serde_json::Value = row.get(0);
+                let stored: StoredRecord =
+                    serde_json::from_value(previous.clone()).map_err(error)?;
+                let mut state = TenantState::default();
+                state.jobs.insert(id.clone(), stored);
+                let outcome = state.apply_at(tenant, op, row.get(1))?;
+                if matches!(outcome, Outcome::Canceled(false)) {
+                    return Ok(outcome);
+                }
+                let stored = &state.jobs[id];
+                let r = &stored.record;
+                let value = metadata(stored)?;
+                let require_lease = !matches!(op, Operation::Cancel(_));
+                let changed = client.query_typed_opt(
+                    "WITH locked AS MATERIALIZED (SELECT id FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND id=$2 FOR UPDATE), stamped AS MATERIALIZED (SELECT id,clock_timestamp() AS now FROM locked) UPDATE dogrs_queue_jobs_v2 j SET state=$3,updated_at=$4,eligible_at=$5,lease_until=$6,status=$7,active=$8,payload=COALESCE(payload,$9) FROM stamped WHERE j.tenant=$1 AND j.id=stamped.id AND j.state=$10 AND (NOT $11 OR j.lease_until > stamped.now) RETURNING j.id",
+                    &[(&tenant,Type::TEXT),(&id.as_str(),Type::TEXT),(&value,Type::JSONB),(&r.updated_at,Type::TIMESTAMPTZ),(&eligible(stored),Type::TIMESTAMPTZ),(&r.lease_until(),Type::TIMESTAMPTZ),(&r.status.name(),Type::TEXT),(&!r.status.is_terminal(),Type::BOOL),(&r.message.payload_bytes,Type::BYTEA),(&previous,Type::JSONB),(&require_lease,Type::BOOL)]
+                ).await.map_err(error)?;
+                if changed.is_some() {
+                    return Ok(outcome);
+                }
+                tokio::task::yield_now().await;
+            }
+            return Err(error("PostgreSQL job contention: retry operation"));
+        }
         let tx = client.transaction().await.map_err(error)?;
         let rows = match op {
             Operation::Reap => tx.query_typed("SELECT state FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND lease_until < statement_timestamp() ORDER BY lease_until LIMIT 256 FOR UPDATE SKIP LOCKED", &[(&tenant,Type::TEXT)]).await.map_err(error)?,
@@ -372,11 +672,27 @@ impl PostgresStore {
 fn metadata(stored: &StoredRecord) -> QueueResult<serde_json::Value> {
     let mut record = stored.record.clone();
     record.message.payload_bytes.clear();
-    serde_json::to_value(StoredRecord {
+    let value = serde_json::to_value(StoredRecord {
         record,
         token: stored.token.clone(),
     })
-    .map_err(error)
+    .map_err(error)?;
+    fn has_nul(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::String(s) => s.contains('\0'),
+            serde_json::Value::Array(values) => values.iter().any(has_nul),
+            serde_json::Value::Object(values) => values
+                .iter()
+                .any(|(key, value)| key.contains('\0') || has_nul(value)),
+            _ => false,
+        }
+    }
+    if has_nul(&value) {
+        return Err(QueueError::InvalidConfig(
+            "PostgreSQL metadata cannot contain NUL".into(),
+        ));
+    }
+    Ok(value)
 }
 fn decode_payload(row: &tokio_postgres::Row) -> QueueResult<StoredRecord> {
     let mut stored: StoredRecord = serde_json::from_value(row.get(0)).map_err(error)?;
@@ -432,6 +748,13 @@ async fn persist(tx: &Transaction<'_>, stored: &StoredRecord) -> QueueResult<()>
 #[async_trait]
 impl StateStore for PostgresStore {
     async fn update(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        let stage = match op {
+            Operation::Enqueue(_) => Some(crate::diagnostics::PG_ENQUEUE_TOTAL),
+            Operation::Dequeue(..) => Some(crate::diagnostics::PG_CLAIM_TOTAL),
+            Operation::Complete(..) => Some(crate::diagnostics::PG_COMPLETE_TOTAL),
+            _ => None,
+        };
+        let _scope = stage.map(crate::diagnostics::Scope::new);
         tokio::time::timeout(self.timeout, self.update_inner(tenant,op)).await.map_err(|_| error("PostgreSQL queue operation timed out; commit outcome may be unknown; use idempotency keys"))?
     }
     async fn tenants(&self) -> QueueResult<Vec<String>> {
