@@ -186,13 +186,22 @@ impl BatchWriter {
                     }
                 }
                 for group in &mut groups {
+                    let queued = group.queued.take();
+                    if enqueue && group.writes.len() == 1 {
+                        // Count borrowed requests only when diagnostics are enabled.
+                        // This records admission to a mixed batch, not durable success.
+                        crate::diagnostics::elapsed(
+                            crate::diagnostics::NATS_PIGGYBACK_METADATA_QUEUE,
+                            queued,
+                        );
+                    }
                     crate::diagnostics::elapsed(
                         if group.writes.len() > 1 {
                             crate::diagnostics::NATS_ENQUEUE_BATCH_QUEUE
                         } else {
                             crate::diagnostics::NATS_UPDATE_BATCH_QUEUE
                         },
-                        group.queued.take(),
+                        queued,
                     );
                 }
                 let context = context.clone();
