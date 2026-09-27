@@ -11,6 +11,46 @@ use std::{
     time::Instant,
 };
 
+// Offer cohorts distinguish startup stalls from sustained admission pressure.
+// These counters do not alter scheduling, bounds, deadlines or the pass gate.
+struct AdmissionCohorts {
+    accepted_seconds: Vec<AtomicUsize>,
+    overloaded_seconds: Vec<AtomicUsize>,
+    accepted_tenants: Vec<AtomicUsize>,
+    overloaded_tenants: Vec<AtomicUsize>,
+}
+impl AdmissionCohorts {
+    fn new(seconds: usize, tenants: usize) -> Self {
+        let zeros = |n| (0..n).map(|_| AtomicUsize::new(0)).collect();
+        Self {
+            accepted_seconds: zeros(seconds),
+            overloaded_seconds: zeros(seconds),
+            accepted_tenants: zeros(tenants),
+            overloaded_tenants: zeros(tenants),
+        }
+    }
+    fn accept(&self, tenant: usize, sequence: usize) {
+        self.accepted_seconds[sequence / 10].fetch_add(1, Ordering::Relaxed);
+        self.accepted_tenants[tenant].fetch_add(1, Ordering::Relaxed);
+    }
+    fn overload(&self, tenant: usize, sequence: usize) {
+        self.overloaded_seconds[sequence / 10].fetch_add(1, Ordering::Relaxed);
+        self.overloaded_tenants[tenant].fetch_add(1, Ordering::Relaxed);
+    }
+    fn report(&self) -> serde_json::Value {
+        let counts = |v: &[AtomicUsize]| {
+            v.iter()
+                .map(|n| n.load(Ordering::Relaxed))
+                .collect::<Vec<_>>()
+        };
+        json!({"basis":"scheduled offer second and tenant ordinal; acceptance requires acknowledgement",
+            "accepted_by_offer_second":counts(&self.accepted_seconds),
+            "overloaded_by_offer_second":counts(&self.overloaded_seconds),
+            "accepted_by_tenant":counts(&self.accepted_tenants),
+            "overloaded_by_tenant":counts(&self.overloaded_tenants)})
+    }
+}
+
 pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     if std::env::var("DOGRS_ADMISSION_MODE").as_deref() == Ok("dogrs-admission") {
         return super::admission::dogrs(backend).await;
@@ -44,6 +84,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     );
     let prefix = tenant()?;
     let backend = Arc::new(backend);
+    let cohorts = Arc::new(AdmissionCohorts::new(seconds, tenants));
     let accepted = Arc::new(AtomicUsize::new(0));
     let completed = Arc::new(AtomicUsize::new(0));
     let overload = Arc::new(AtomicUsize::new(0));
@@ -138,6 +179,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     }
     let mut producers = tokio::task::JoinSet::new();
     for t in 0..tenants {
+        let cohorts = cohorts.clone();
         let backend = backend.clone();
         let tenant = format!("{prefix}-{t}");
         let accepted = accepted.clone();
@@ -158,8 +200,10 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
                 }
                 let Ok(permit) = slots.clone().try_acquire_owned() else {
                     overload.fetch_add(1, Ordering::SeqCst);
+                    cohorts.overload(t, n);
                     continue;
                 };
+                let cohorts = cohorts.clone();
                 let backend = backend.clone();
                 let tenant = tenant.clone();
                 let accepted = accepted.clone();
@@ -179,6 +223,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
                     match backend.enqueue(QueueCtx::new(&tenant), message).await {
                         Ok(id) => {
                             accepted.fetch_add(1, Ordering::SeqCst);
+                            cohorts.accept(t, n);
                             ids.lock().unwrap().push((tenant, id));
                         }
                         Err(e) => errors.lock().unwrap().push(format!("enqueue: {e}")),
@@ -309,7 +354,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     };
     println!(
         "{}",
-        json!({"nats_layout":std::env::var("DOGRS_NATS_LAYOUT").unwrap_or_else(|_|"combined".into()),"nats_connections":std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_|"shared".into()),"payload_pattern":"unique-per-tenant-and-sequence","stage_timings":stage_timings,"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":10,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed_in_capacity_phase,"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed,"overload_recovery":overload_recovery,"latency_includes_recovery":recovery_seconds>0})
+        json!({"admission_cohorts":cohorts.report(),"nats_layout":std::env::var("DOGRS_NATS_LAYOUT").unwrap_or_else(|_|"combined".into()),"nats_connections":std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_|"shared".into()),"payload_pattern":"unique-per-tenant-and-sequence","stage_timings":stage_timings,"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":10,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed_in_capacity_phase,"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed,"overload_recovery":overload_recovery,"latency_includes_recovery":recovery_seconds>0})
     );
     anyhow::ensure!(passed, "queue capacity gate failed");
     Ok(())
