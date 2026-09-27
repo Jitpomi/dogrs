@@ -4,6 +4,12 @@ Pluggable transport adapters for the DogRS framework. This crate provides unifor
 
 By separating the network layer from your core logic, the exact same `DogApp` service registry can be exposed across multiple protocols simultaneously without modifying your business code.
 
+## Migrating from dog-axum
+
+`dog-axum` is now a deprecated compatibility wrapper around this crate. See the
+[migration guide](MIGRATION.md) for direct Axum/Tower integration and API changes.
+The HTTP feature uses server-neutral HTTP/Tower types; Axum is only one host.
+
 ## Abstractions
 
 ### The `IntoDogService` Trait

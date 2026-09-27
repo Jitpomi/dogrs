@@ -14,7 +14,7 @@ pub struct FieldContext {
 }
 
 /// Field processor callback type
-pub type FieldProcessor = Box<
+pub type FieldProcessor = std::sync::Arc<
     dyn Fn(&mut FieldContext) -> Result<(), Box<dyn std::error::Error + Send + Sync>> + Send + Sync,
 >;
 
@@ -50,8 +50,8 @@ impl Clone for MultipartConfig {
             file_fields: self.file_fields.clone(),
             text_fields: self.text_fields.clone(),
             include_metadata: self.include_metadata,
-            field_processors: HashMap::new(), // Can't clone function pointers
-            global_processors: Vec::new(),    // Can't clone function pointers
+            field_processors: self.field_processors.clone(),
+            global_processors: self.global_processors.clone(),
         }
     }
 }
@@ -59,7 +59,9 @@ impl Clone for MultipartConfig {
 /// How to encode file data in the JSON output
 #[derive(Clone, Debug, PartialEq)]
 pub enum FileEncoding {
-    /// Base64 encode file contents (default)
+    /// Request-scoped temporary file (legacy BlobRef shape). Consume it in the handler.
+    TempFile,
+    /// Base64 encode file contents
     Base64,
     /// Store file info but not contents (for large files)
     Metadata,
@@ -70,10 +72,10 @@ pub enum FileEncoding {
 impl Default for MultipartConfig {
     fn default() -> Self {
         Self {
-            max_file_size: Some(100 * 1024 * 1024),  // 100MB
-            max_total_size: Some(500 * 1024 * 1024), // 500MB
-            allowed_content_types: HashSet::new(),   // Allow all
-            file_encoding: FileEncoding::Base64,
+            max_file_size: Some(10 * 1024 * 1024),  // 10 MiB
+            max_total_size: Some(10 * 1024 * 1024), // 10 MiB
+            allowed_content_types: HashSet::new(),  // Allow all
+            file_encoding: FileEncoding::TempFile,
             file_fields: HashSet::new(), // Auto-detect
             text_fields: HashSet::new(), // Auto-detect
             include_metadata: true,
@@ -139,7 +141,7 @@ impl MultipartConfig {
             + 'static,
     {
         self.field_processors
-            .insert(field_name.to_string(), Box::new(processor));
+            .insert(field_name.to_string(), std::sync::Arc::new(processor));
         self
     }
 
@@ -151,7 +153,7 @@ impl MultipartConfig {
             + Sync
             + 'static,
     {
-        self.global_processors.push(Box::new(processor));
+        self.global_processors.push(std::sync::Arc::new(processor));
         self
     }
 }
@@ -220,216 +222,207 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let mut inner = self.inner.clone();
+        let replacement = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, replacement);
         let config = self.config.clone();
-
         Box::pin(async move {
-            // Check if this is a multipart request
-            let content_type = req
+            let multipart = req
                 .headers()
                 .get("content-type")
                 .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-
-            println!(
-                "🔧 MultipartToJson middleware called with content-type: '{}'",
-                content_type
-            );
-
-            if content_type.starts_with("multipart/form-data") {
-                println!(
-                    "🔧 MultipartToJson middleware: Converting multipart to JSON with BlobRef"
-                );
-
-                match convert_multipart_to_json(req, &config).await {
-                    Ok(json_req) => {
-                        println!("✅ MultipartToJson middleware: Successfully converted to JSON with BlobRef");
-                        inner.call(json_req).await
-                    }
-                    Err(e) => {
-                        println!("❌ MultipartToJson middleware: Failed to convert: {}", e);
-                        let response = Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .body(Body::from(format!("Failed to parse multipart data: {}", e)))
-                            .unwrap();
-                        Ok(response)
-                    }
-                }
-            } else {
-                println!("🔧 MultipartToJson middleware: Passing through non-multipart request");
-                // Pass through non-multipart requests
-                inner.call(req).await
+                .is_some_and(|v| {
+                    v.split(';')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .eq_ignore_ascii_case("multipart/form-data")
+                });
+            if !multipart {
+                return inner.call(req).await;
+            }
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                convert_multipart_to_json(req, &config),
+            )
+            .await
+            .unwrap_or(Err((StatusCode::REQUEST_TIMEOUT, "Upload timed out")))
+            {
+                Ok((request, _temporary_files)) => inner.call(request).await,
+                Err((status, message)) => Ok(Response::builder()
+                    .status(status)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"message":message}).to_string()))
+                    .unwrap()),
             }
         })
     }
 }
 
+type UploadError = (StatusCode, &'static str);
+type ConvertedUpload = (Request<Body>, Vec<tempfile::TempPath>);
+
 async fn convert_multipart_to_json(
     req: Request<Body>,
     config: &MultipartConfig,
-) -> Result<Request<Body>, Box<dyn std::error::Error + Send + Sync>> {
-    // Store original headers before extracting multipart data
-    let original_headers = req.headers().clone();
-
-    // Extract boundary from content-type header
-    let content_type = original_headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    let boundary = content_type
-        .split("boundary=")
-        .nth(1)
-        .ok_or("Missing boundary in multipart content-type")?;
-
-    // Use multer instead of Axum's parser for large file support
-    let body_stream = req.into_body();
-    let body_bytes = axum::body::to_bytes(body_stream, 200 * 1024 * 1024)
-        .await // 200MB limit
-        .map_err(|e| format!("Failed to read request body: {}", e))?;
-
-    let mut multipart = multer::Multipart::new(
-        futures::stream::once(async { Ok::<bytes::Bytes, multer::Error>(body_bytes) }),
-        boundary,
+) -> Result<ConvertedUpload, UploadError> {
+    use base64::Engine;
+    use tokio::io::AsyncWriteExt;
+    let bad = (StatusCode::BAD_REQUEST, "Invalid multipart data");
+    let too_large = (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "Multipart size limit exceeded",
     );
-    let mut json_map = HashMap::new();
-
-    while let Some(field) = multipart.next_field().await? {
-        let name = field.name().unwrap_or("unknown").to_string();
-        let content_type = field.content_type().map(|ct| ct.to_string());
-        let filename = field.file_name().map(|f| f.to_string());
-
-        // Determine if this is a file field
-        let is_file_field = if !config.file_fields.is_empty() {
+    let internal = (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Upload processing failed",
+    );
+    let (mut parts, body) = req.into_parts();
+    let boundary = multer::parse_boundary(
+        parts
+            .headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(bad)?,
+    )
+    .map_err(|_| bad)?;
+    // Even an explicitly unlimited legacy configuration retains a finite safety ceiling.
+    let total_limit = config.max_total_size.unwrap_or(200 * 1024 * 1024);
+    let constraints = multer::Constraints::new().size_limit(
+        multer::SizeLimit::new()
+            .whole_stream(total_limit as u64)
+            .per_field(config.max_file_size.unwrap_or(total_limit) as u64),
+    );
+    let mut multipart =
+        multer::Multipart::with_constraints(body.into_data_stream(), boundary, constraints);
+    let classify = |error: multer::Error| match error {
+        multer::Error::FieldSizeExceeded { .. } | multer::Error::StreamSizeExceeded { .. } => {
+            too_large
+        }
+        _ => bad,
+    };
+    let mut values = serde_json::Map::new();
+    let mut files = Vec::new();
+    let output_limit = total_limit.saturating_mul(2).saturating_add(64 * 1024);
+    let mut output_size = 2usize;
+    while let Some(mut field) = multipart.next_field().await.map_err(classify)? {
+        if values.len() >= 1024 {
+            return Err(too_large);
+        }
+        let name = field.name().ok_or(bad)?.to_string();
+        if values.contains_key(&name) {
+            return Err((StatusCode::BAD_REQUEST, "Duplicate multipart field"));
+        }
+        let filename = field.file_name().map(str::to_owned);
+        let content_type = field.content_type().map(ToString::to_string);
+        let is_file = if !config.file_fields.is_empty() {
             config.file_fields.contains(&name)
         } else if !config.text_fields.is_empty() {
             !config.text_fields.contains(&name)
         } else {
-            // Auto-detect: has filename or content-type suggests file
             filename.is_some()
                 || content_type
                     .as_ref()
                     .is_some_and(|ct| !ct.starts_with("text/"))
         };
-
-        if is_file_field {
-            // Handle file field with BlobRef approach - stream to temp storage
-            println!(
-                "   Processing file field '{}' with content-type: {:?}",
-                name, content_type
-            );
-
-            // Create temp file for streaming
-            let temp_id = uuid::Uuid::new_v4();
-            let temp_path = format!("/tmp/multipart_{}_{}", name, temp_id);
-
-            // Ensure temp directory exists
-            if let Some(parent) = std::path::Path::new(&temp_path).parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-            }
-
-            let mut temp_file = tokio::fs::File::create(&temp_path)
-                .await
-                .map_err(|e| format!("Failed to create temp file: {}", e))?;
-
-            let mut total_size = 0u64;
-            let mut stream = field;
-
-            // Stream chunks directly to disk - no memory buffering
-            while let Some(chunk) = stream.chunk().await.map_err(|e| {
-                println!("❌ Failed to read chunk from file field '{}': {}", name, e);
-                e
-            })? {
-                use tokio::io::AsyncWriteExt;
-                temp_file
-                    .write_all(&chunk)
-                    .await
-                    .map_err(|e| format!("Failed to write chunk: {}", e))?;
-                total_size += chunk.len() as u64;
-            }
-
-            // Flush and close the file
-            use tokio::io::AsyncWriteExt;
-            temp_file
-                .flush()
-                .await
-                .map_err(|e| format!("Failed to flush file: {}", e))?;
-            drop(temp_file);
-
-            println!(
-                "   File field '{}' streamed to temp file: {} bytes",
-                name, total_size
-            );
-
-            // Check file size limits
-            if let Some(max_size) = config.max_file_size {
-                if total_size > max_size as u64 {
-                    return Err(format!(
-                        "File '{}' exceeds maximum size of {} bytes",
-                        name, max_size
-                    )
-                    .into());
-                }
-            }
-
-            // Create BlobRef instead of storing file data
-            let blob_ref = serde_json::json!({
-                "key": format!("temp/{}", temp_id),
-                "temp_path": temp_path,
-                "filename": filename,
-                "content_type": content_type,
-                "size": total_size
-            });
-
-            json_map.insert(name.clone(), blob_ref);
-
-            // Check content type if restricted
-            if !config.allowed_content_types.is_empty() {
-                if let Some(ct) = &content_type {
-                    if !config.allowed_content_types.contains(ct) {
-                        return Err(format!(
-                            "Content type '{}' not allowed for file '{}'",
-                            ct, name
-                        )
-                        .into());
-                    }
-                }
-            }
-
-            println!("   File field '{}': {} bytes -> BlobRef", name, total_size);
-        } else {
-            // Handle text fields
-            let value = field.text().await?;
-            json_map.insert(name.clone(), json!(value));
-            println!("   Text field '{}': {}", name, value);
+        if is_file
+            && !config.allowed_content_types.is_empty()
+            && !content_type
+                .as_ref()
+                .is_some_and(|ct| config.allowed_content_types.contains(ct))
+        {
+            return Err((
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "File content type not allowed",
+            ));
         }
+        let mut data = Vec::new();
+        while let Some(chunk) = field.chunk().await.map_err(classify)? {
+            if data.len().saturating_add(chunk.len()) > config.max_file_size.unwrap_or(total_limit)
+            {
+                return Err(too_large);
+            }
+            data.extend_from_slice(&chunk);
+        }
+        let mut context = FieldContext {
+            name: name.clone(),
+            filename,
+            content_type,
+            data,
+            metadata: HashMap::new(),
+        };
+        if is_file {
+            for processor in &config.global_processors {
+                processor(&mut context).map_err(|_| internal)?;
+            }
+        }
+        if let Some(processor) = config.field_processors.get(&name) {
+            processor(&mut context).map_err(|_| internal)?;
+        }
+        if context.data.len() > config.max_file_size.unwrap_or(total_limit) {
+            return Err(too_large);
+        }
+        let value = if !is_file {
+            json!(String::from_utf8(context.data).map_err(|_| bad)?)
+        } else {
+            let mut value = serde_json::Map::new();
+            match config.file_encoding {
+                FileEncoding::Skip => {
+                    values.insert(name, serde_json::Value::Null);
+                    continue;
+                }
+                FileEncoding::TempFile => {
+                    let temp = tempfile::NamedTempFile::new().map_err(|_| internal)?;
+                    let (file, path) = temp.into_parts();
+                    // Retain ownership before any await so cancellation removes the file.
+                    files.push(path);
+                    let mut file = tokio::fs::File::from_std(file);
+                    file.write_all(&context.data).await.map_err(|_| internal)?;
+                    file.flush().await.map_err(|_| internal)?;
+                    value.insert(
+                        "key".into(),
+                        json!(format!("temp/{}", uuid::Uuid::new_v4())),
+                    );
+                    value.insert(
+                        "temp_path".into(),
+                        json!(files.last().unwrap().to_string_lossy()),
+                    );
+                }
+                FileEncoding::Base64 => {
+                    value.insert(
+                        "data".into(),
+                        json!(base64::engine::general_purpose::STANDARD.encode(&context.data)),
+                    );
+                }
+                FileEncoding::Metadata => {}
+            }
+            value.insert("size".into(), json!(context.data.len()));
+            if config.include_metadata {
+                value.insert("filename".into(), json!(context.filename));
+                value.insert("content_type".into(), json!(context.content_type));
+                value.insert("metadata".into(), json!(context.metadata));
+            }
+            serde_json::Value::Object(value)
+        };
+        output_size = output_size
+            .saturating_add(serde_json::to_vec(&value).map_err(|_| internal)?.len())
+            .saturating_add(serde_json::to_vec(&name).map_err(|_| internal)?.len())
+            .saturating_add(2);
+        if output_size > output_limit {
+            return Err(too_large);
+        }
+        values.insert(name, value);
     }
-
-    // Convert to JSON body
-    let json_body = json!(json_map);
-    let json_bytes = serde_json::to_vec(&json_body)?;
-
-    // Create new request with JSON body and preserve original headers
-    let (mut parts, _) = Request::new(Body::empty()).into_parts();
-
-    // Copy all original headers
-    parts.headers = original_headers;
-
-    // Update content-type and content-length for JSON body
+    let bytes = serde_json::to_vec(&values).map_err(|_| internal)?;
+    // Base64 and processor output are bounded too; allow base64's 4/3 expansion.
+    if bytes.len() > total_limit.saturating_mul(2).saturating_add(64 * 1024) {
+        return Err(too_large);
+    }
     parts
         .headers
         .insert("content-type", "application/json".parse().unwrap());
-    parts.headers.insert(
-        "content-length",
-        json_bytes.len().to_string().parse().unwrap(),
-    );
-
-    let new_body = Body::from(json_bytes);
-    let new_req = Request::from_parts(parts, new_body);
-
-    println!("   Converted to JSON with {} fields", json_map.len());
-
-    Ok(new_req)
+    parts
+        .headers
+        .insert("content-length", bytes.len().to_string().parse().unwrap());
+    parts.headers.remove("transfer-encoding");
+    Ok((Request::from_parts(parts, Body::from(bytes)), files))
 }

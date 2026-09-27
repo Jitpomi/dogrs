@@ -417,3 +417,8 @@ where
             ))
         })
 }
+
+/// Moving from the deprecated Axum wrapper to direct transport integration.
+#[cfg(feature = "http")]
+#[doc = include_str!("../MIGRATION.md")]
+pub mod migration {}
