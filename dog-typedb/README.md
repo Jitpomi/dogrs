@@ -79,4 +79,25 @@ Run against a disposable local **3.13.6** server:
 TYPEDB_ADDRESS=127.0.0.1:1729 cargo test -p dog-typedb --all-targets --locked -- --include-ignored
 ```
 
-The live test creates and deletes a randomly named database. CI runs it explicitly. Provider failover, backup restoration, and deployment-specific capacity are separate operational tests.
+For a hosted server, securely populate `TYPEDB_ADDRESS`, `TYPEDB_USERNAME`, and
+`TYPEDB_PASSWORD` in the test process environment, then run:
+
+```sh
+cargo test -p dog-typedb --test live_database --locked -- --ignored
+```
+
+Remote connections require explicit credentials and always use TLS with system
+trust roots. Only loopback addresses allow the local default credentials and
+plaintext connection; `TYPEDB_TLS=true` also enables TLS for loopback.
+
+The live test creates and deletes a randomly named database, so the configured
+user needs database creation/deletion permissions. It never selects an existing
+application database. CI runs it explicitly against a local server; this alone
+does not establish TypeDB Cloud validation. Provider failover, backup restoration,
+and deployment-specific capacity are separate operational tests.
+
+On 2026-09-27, the live suite also passed against TypeDB Cloud 3.13.6 over TLS
+on its free single-node GCP plan (2 burstable vCPUs, 4 GB RAM, 10 GB storage).
+The test completed in 9.44 seconds, including deleting its temporary database.
+This validates the covered transaction and query-limit behaviors on that hosted
+configuration; it is not a load, failover, or backup-restoration certification.
