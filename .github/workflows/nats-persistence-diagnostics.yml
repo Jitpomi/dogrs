@@ -1,0 +1,49 @@
+name: NATS persistence diagnostics
+run-name: NATS persistence diagnostic (buffered cases are not release qualification)
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Collect queue timings and server stacks
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify diagnostic failure handling
+        run: python3 -m unittest discover -s dog-examples/hosted-system -p 'test_diagnostic_result.py'
+      - run: cargo build -p hosted-system --release --features redis,nats,queue-diagnostics --locked
+      - name: Compare fixed 60-second synchronous and buffered workloads
+        run: python3 dog-examples/hosted-system/compare_nats_fsync.py
+        env:
+          DOGRS_SYSTEM_BINARY: target/release/hosted-system
+          DOGRS_FSYNC_PROFILE: ${{ inputs.profile && '1' || '0' }}
+      - name: Explain measured capacity separately from diagnostic completion
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          path = pathlib.Path('provider-attribution/fsync-comparison.json')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Persistence diagnostic\n\nA completed experiment is not a production capacity pass. Buffered cases weaken power-loss durability.\n\n')
+              if path.exists():
+                  report = json.loads(path.read_text())
+                  summary.write(f"Experiment completed: {report.get('experiment_completed', False)}\n\n")
+                  summary.write('| Trial | Sync | Accepted | Completed | Overload | Late | Workload gate |\n|---|---|---:|---:|---:|---:|---|\n')
+                  for row in report['runs']:
+                      m = row.get('measurement') or {}
+                      summary.write(f"| {row['trial']} | {row['sync_interval']} | {m.get('accepted')} | {m.get('completed')} | {m.get('overload')} | {m.get('late_offers')} | {'Met' if row.get('workload_gate_met') else 'Not met'} |\n")
+              else:
+                  summary.write('No report produced. Inspect build or setup failure.\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nats-persistence-diagnostics
+          path: provider-attribution

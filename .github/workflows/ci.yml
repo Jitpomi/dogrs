@@ -23,6 +23,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
+      - name: Check diagnostic result classification
+        run: python3 -m unittest discover -s dog-examples/hosted-system -p 'test_diagnostic_result.py'
       - run: cargo test --workspace --all-targets --locked
       - run: cargo test --workspace --doc --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings

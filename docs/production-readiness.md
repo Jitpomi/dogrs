@@ -5,6 +5,36 @@ is 10 jobs/second per tenant, 100 tenants (1,000 jobs/second aggregate), payload
 to 64 KiB, and recovery after a five-minute outage. These are acceptance targets,
 not promises that a free hosted database can provide that capacity.
 
+## Current evidence (27 September 2026)
+
+The queue implementation at `bf38746` passed the complete correctness and recovery
+CI suite. PostgreSQL and Redis each accepted, completed and verified all 60,000
+distinct 64 KiB jobs in the sustained 100-tenant workload, with zero overload,
+late offers or errors. [CI](https://github.com/Jitpomi/dogrs/actions/runs/36332851103),
+[capacity results](https://github.com/Jitpomi/dogrs/actions/runs/36332850985).
+
+NATS has not passed the same gate with three file replicas and synchronous disk
+acknowledgement on the tested runner. Matched same-binary, same-runner comparisons
+identified synchronous replication-log persistence as a cause of overload.
+Without queue/stack profiling, synchronous controls admitted 57,535 and 57,975
+jobs; buffered controls admitted, completed and verified all 60,000 with zero
+overloads. One buffered run still had 13 late offers. All replicas shared one
+virtual disk. Buffered controls weaken power-loss durability and are **not**
+production qualification. This does not establish NATS's absolute capacity or
+rule out further adapter optimizations.
+[Matched diagnostic](https://github.com/Jitpomi/dogrs/actions/runs/36334661808).
+
+The manual **NATS persistence diagnostics** workflow records a completed experiment
+separately from its workload verdict. Only fully accounted-for, error-free capacity
+misses are diagnostic outcomes; setup failures, runtime errors, missing results
+and unverified accepted jobs fail the workflow. The **Provider capacity** gate
+retains its strict pass/fail behavior. Merging reviewed code does not certify
+the unresolved NATS deployment target or publish a release.
+
+The sections below retain earlier measurements and investigation history. Where
+older results describe unresolved PostgreSQL or Redis capacity, use the dated
+evidence above for the latest tested implementation.
+
 ## Capacity gate
 
 `dog-examples/hosted-system/run_capacity.py postgres` uses a bounded open-loop
