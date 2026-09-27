@@ -271,3 +271,23 @@ At commit `2e9974b`, full CI passed and Redis passed the Linux 60-second target
 (36,160 admitted / 34,708 completed), and JetStream before the claim-cache and
 volume changes failed (53,718 admitted / 43,534 completed). Neither failure had
 operation errors, but admission drops and the completion deadline are failures.
+
+
+### Sustained acceptance gate
+
+At `636bba8`, full CI and the three-backend 10-second capacity matrix passed.
+The manual 60-second PostgreSQL run admitted and completed 50,237 of 60,000 jobs
+with 9,763 dropped offers; replicated JetStream admitted 55,086 and completed
+39,611, with 4,914 dropped offers. Both failed despite zero operation errors.
+PostgreSQL 3 ms commit grouping and a four-bucket/four-worker JetStream profile
+also failed, so neither replaces the defaults.
+
+The automatic pull-request capacity test now runs for 60 seconds, with 10/30-second
+checks still available explicitly. Its job summary reports offered, admitted,
+completed, verified and dropped counts alongside the unchanged acceptance rules.
+A shorter passing run cannot satisfy this sustained gate.
+
+The same PostgreSQL backend instance also passed a 300-second outage followed by
+restoration of its crash-persisted data into a fresh container: all 200 acknowledged
+64 KiB jobs survived, 50 expired owners were rejected, and 150 unfinished jobs
+completed. This tests restoration of the latest crash image, not an old backup.

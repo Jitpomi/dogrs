@@ -15,7 +15,7 @@ on:
       seconds:
         type: choice
         options: ['10', '30', '60']
-        default: '30'
+        default: '60'
       nats_shards:
         description: Fixed JetStream bucket count
         type: choice
@@ -57,7 +57,7 @@ jobs:
           python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
         env:
           BACKEND: ${{ matrix.backend }}
-          DURATION_SECONDS: ${{ inputs.seconds || '10' }}
+          DURATION_SECONDS: ${{ inputs.seconds || '60' }}
           PAYLOAD_BYTES: ${{ inputs.payload_bytes || '65536' }}
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
           DOGRS_CAPACITY_WORKERS: ${{ inputs.workers_per_tenant && inputs.workers_per_tenant != 'auto' && inputs.workers_per_tenant || (matrix.backend == 'nats' && '2' || '1') }}
@@ -66,6 +66,34 @@ jobs:
           DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
           DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '16') || '1' }}
+      - name: Explain capacity result
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, pathlib
+          logs = list(pathlib.Path("provider-capacity").glob("*/capacity.log"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## Sustained queue capacity\n\n")
+              found = False
+              for log in logs:
+                  for line in log.read_text().splitlines():
+                      try:
+                          result = json.loads(line)
+                      except ValueError:
+                          continue
+                      if not isinstance(result, dict) or "offered" not in result:
+                          continue
+                      found = True
+                      summary.write("**" + ("Passed" if result.get("passed") is True else "Failed") + "**\n\n")
+                      summary.write("| Measurement | Observed |\n|---|---:|\n")
+                      for key in ("tenants", "seconds", "payload_bytes", "offered", "accepted", "completed", "verified_terminal_once", "overload", "late_offers", "error_count", "elapsed_seconds"):
+                          value = result.get(key)
+                          if isinstance(value, (int, float)):
+                              summary.write(f"| {key} | {value} |\n")
+                      summary.write("\nEvery offered job must be admitted, completed and verified once, with no dropped or late offers, no operation errors, and at most five seconds to drain. Zero operation errors alone is not a pass.\n\n")
+              if not found:
+                  summary.write("The capacity measurement did not finish or was not started. Inspect the failed build/setup step and attached logs; this is not a capacity pass.\n")
+          PYTHON
       - uses: actions/upload-artifact@v4
         if: always()
         with:
