@@ -31,12 +31,14 @@ keys and a normal target of 240 KiB of value bytes per batch. This leaves framin
 headroom below JetStream's roughly 256 KiB Raft proposal grouping boundary, avoiding
 an acknowledgement that waits for many sequential WAL appends. A larger single
 logical operation still runs intact, up to the existing 2 MiB hard bound. Separate bounded execution lanes handle
-enqueue pairs and metadata updates: each allows one batch in flight and 128 queued
-requests. Producer backlog cannot occupy the metadata lane, and lease/completion
+enqueue pairs and metadata updates: the enqueue lane pipelines up to four
+batches while the metadata lane has its own execution slot. Each input channel holds at
+most 128 queued requests. Overlapping bounded acknowledgement waits avoids a
+serial round-trip ceiling for small batches. Producer backlog cannot occupy the metadata lane, and lease/completion
 updates never share a staging batch with large payloads. Atomic mode admits up to
 128 concurrent enqueue requests to fill that bounded queue; individual-write mode
 retains its 16-request default. `with_enqueue_concurrency` can override either
-request limit. Request concurrency does not increase the two executing-batch limit;
+request limit. Request concurrency does not increase the five executing-batch limit;
 the 2 MiB limit continues to bound large-payload batches. A quiet single-key update uses an ordinary write; an enqueue pair still uses one
 atomic commit. Batch frames are pipelined after the server confirms staging has begun. Each
 caller waits for the final commit acknowledgement; staging acknowledgements never

@@ -41,7 +41,7 @@ fn conflict(e: &jetstream::Error) -> bool {
 impl BatchWriter {
     pub(super) fn start(context: jetstream::Context, bucket: kv::Store) -> Self {
         // Reserve one execution lane for lease/completion metadata. A large
-        // producer backlog must not occupy both durable-write slots or put a
+        // producer backlog must not occupy every durable-write slot or put a
         // lease update behind payload staging in the same atomic batch.
         Self {
             updates: Self::lane(context.clone(), bucket.clone(), false),
@@ -51,8 +51,17 @@ impl BatchWriter {
     fn lane(context: jetstream::Context, bucket: kv::Store, enqueue: bool) -> mpsc::Sender<Group> {
         let (sender, mut receiver) = mpsc::channel::<Group>(ADMISSION_CAPACITY);
         tokio::spawn(async move {
+            // Small atomic batches should overlap their acknowledgement waits.
+            // One in-flight 3-job batch at 100 ms caps admission at 30 jobs/s
+            // regardless of how much unused capacity the provider has. Retain
+            // a separate metadata lane so producer pipelining cannot consume it.
+            let concurrency = if enqueue { 4 } else { 1 };
+            let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
             loop {
+                while running.len() >= concurrency {
+                    let _ = running.join_next().await;
+                }
                 let first = match deferred.take() {
                     Some(group) => group,
                     None => match receiver.recv().await {
@@ -98,30 +107,36 @@ impl BatchWriter {
                         group.queued.take(),
                     );
                 }
-                let _execution = crate::diagnostics::Scope::new(if enqueue {
-                    crate::diagnostics::NATS_ENQUEUE_BATCH_EXECUTE
-                } else {
-                    crate::diagnostics::NATS_UPDATE_BATCH_EXECUTE
+                let context = context.clone();
+                let bucket = bucket.clone();
+                running.spawn(async move {
+                    let _execution = crate::diagnostics::Scope::new(if enqueue {
+                        crate::diagnostics::NATS_ENQUEUE_BATCH_EXECUTE
+                    } else {
+                        crate::diagnostics::NATS_UPDATE_BATCH_EXECUTE
+                    });
+                    let outcomes = tokio::time::timeout(
+                        Duration::from_secs(5),
+                        execute(&context, &bucket, &groups),
+                    )
+                    .await
+                    .unwrap_or_else(|_| Err(error("timed out; commit outcome may be unknown")));
+                    match outcomes {
+                        Ok(outcomes) => {
+                            for (group, outcome) in groups.into_iter().zip(outcomes) {
+                                let _ = group.reply.send(outcome);
+                            }
+                        }
+                        Err(e) => {
+                            for group in groups {
+                                let _ = group.reply.send(Err(e.clone()));
+                            }
+                        }
+                    }
                 });
-                let outcomes = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    execute(&context, &bucket, &groups),
-                )
-                .await
-                .unwrap_or_else(|_| Err(error("timed out; commit outcome may be unknown")));
-                match outcomes {
-                    Ok(outcomes) => {
-                        for (group, outcome) in groups.into_iter().zip(outcomes) {
-                            let _ = group.reply.send(outcome);
-                        }
-                    }
-                    Err(e) => {
-                        for group in groups {
-                            let _ = group.reply.send(Err(e.clone()));
-                        }
-                    }
-                }
+                while running.try_join_next().is_some() {}
             }
+            while running.join_next().await.is_some() {}
         });
         sender
     }
@@ -246,7 +261,7 @@ async fn execute(
         // Only a known atomic rejection can reach this branch. Each logical
         // operation remains atomic; an enqueue pair is never split into writes.
         None => {
-            // Keep the lane's one-commit bound even during conflicts. Expanding
+            // Keep each executing batch's one-commit bound even during conflicts. Expanding
             // one rejected batch into many concurrent requests defeats admission
             // backpressure precisely when writers contend for the same scopes.
             let mut outcomes = Vec::with_capacity(groups.len());
@@ -562,6 +577,46 @@ mod tests {
         while let Some(id) = tasks.join_next().await {
             assert!(ids.contains(&id.unwrap()));
         }
+        // Race the first submission of a scope across independent writers and
+        // indexes, not just duplicate lookups of an already committed job.
+        let peer = Arc::new(
+            NatsBackend::from_context(js.clone(), &bucket.name, 1024 * 1024)
+                .await
+                .unwrap(),
+        );
+        peer.get_snapshot(QueueCtx::new("t"), ids.iter().next().unwrap().clone())
+            .await
+            .unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(16));
+        for n in 0..16 {
+            let backend = if n % 2 == 0 {
+                backend.clone()
+            } else {
+                peer.clone()
+            };
+            let barrier = barrier.clone();
+            tasks.spawn(async move {
+                barrier.wait().await;
+                backend
+                    .enqueue(
+                        QueueCtx::new("t"),
+                        JobMessage::new("work", vec![128; 65536], "bytes", "q")
+                            .with_idempotency_key("fresh-race"),
+                    )
+                    .await
+                    .unwrap()
+            });
+        }
+        let mut winners = HashSet::new();
+        while let Some(id) = tasks.join_next().await {
+            winners.insert(id.unwrap());
+        }
+        assert_eq!(
+            winners.len(),
+            1,
+            "only one fresh scope may win across writers"
+        );
+        ids.extend(winners);
         let mut keys = bucket.keys().await.unwrap();
         let mut payloads = 0;
         while let Some(key) = keys.next().await {
@@ -570,7 +625,7 @@ mod tests {
             }
         }
         assert_eq!(
-            payloads, 128,
+            payloads, 129,
             "losing enqueue pairs must leave no orphan payloads"
         );
         let mut consumers = tokio::task::JoinSet::new();
