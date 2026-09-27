@@ -54,6 +54,7 @@ try:
   'postgres_payload_storage':payload_storage,
   'postgres_shared_buffers_mb_per_instance':1024//pg_instances if a.backend=='postgres' and a.capacity else None,
   'postgres_max_wal_mb_per_instance':4096//pg_instances if a.backend=='postgres' and a.capacity else None,
+  'payload_pattern':'unique-per-tenant-and-sequence' if a.capacity else 'recovery-fixture',
   'measurement':a.admission_mode or ('queue-capacity' if a.capacity else 'recovery'),
   'comparison_tenant':os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT') if a.capacity else None,
   'nats_atomic':os.environ.get('DOGRS_NATS_ATOMIC')!='0',

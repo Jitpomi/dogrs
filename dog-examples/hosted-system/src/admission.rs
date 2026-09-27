@@ -318,13 +318,14 @@ async fn measure<B: Admission + 'static>(backend: B, mode: &str) -> Result<()> {
                 requests.spawn(async move {
                     let _permit = permit;
                     let begin = Instant::now();
+                    let seed = ((t as u64) << 32) | n as u64;
                     match tokio::time::timeout(
                         timeout,
-                        backend.put(&tenant, n, super::capacity::make_payload(n as u64, bytes)),
+                        backend.put(&tenant, n, super::capacity::make_payload(seed, bytes)),
                     )
                     .await
                     {
-                        Ok(Ok(id)) => accepted.lock().unwrap().push((tenant, n, id)),
+                        Ok(Ok(id)) => accepted.lock().unwrap().push((tenant, seed, id)),
                         outcome => errors.lock().unwrap().push(format!("{outcome:?}")),
                     }
                     latency
@@ -346,7 +347,7 @@ async fn measure<B: Admission + 'static>(backend: B, mode: &str) -> Result<()> {
     let admitted = accepted.len();
     let mut verified = 0;
     let mut reads = tokio::task::JoinSet::new();
-    for (tenant, n, id) in accepted {
+    for (tenant, seed, id) in accepted {
         if reads.len() >= 32 {
             reads.join_next().await.unwrap()??;
             verified += 1;
@@ -355,7 +356,7 @@ async fn measure<B: Admission + 'static>(backend: B, mode: &str) -> Result<()> {
         reads.spawn(async move {
             let payload = backend.read(&tenant, &id).await?;
             anyhow::ensure!(
-                payload == super::capacity::make_payload(n as u64, bytes),
+                payload == super::capacity::make_payload(seed, bytes),
                 "payload mismatch"
             );
             Ok::<_, anyhow::Error>(())
