@@ -56,7 +56,8 @@ try:
   'postgres_max_wal_mb_per_instance':4096//pg_instances if a.backend=='postgres' and a.capacity else None,
   'measurement':a.admission_mode or ('queue-capacity' if a.capacity else 'recovery'),
   'comparison_tenant':os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT') if a.capacity else None,
-  'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),
+  'nats_atomic':os.environ.get('DOGRS_NATS_ATOMIC')!='0',
+  'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),
   'nats_storage':'anonymous Docker volume at /data',
  },indent=2))
  env={**os.environ,'DOGRS_BACKEND':a.backend,'DOGRS_TEST_TENANT':run.replace('dogrs-fault-','dogrs-test-fault-'),'DOGRS_RECOVERY_MANIFEST':str(folder/'manifest.json')}
@@ -104,7 +105,7 @@ try:
    if a.capacity and os.environ.get('DOGRS_QUEUE_TIMINGS')=='1':
     profile_port=port();profile_ports[name]=profile_port
     profile_args=['-p',f'127.0.0.1:{profile_port}:6543'];profile_command=['--profile','6543']
-   launch(name,*profile_args,'--network',network,'-v','/data','-p',f'127.0.0.1:{number}:4222','-p',f'127.0.0.1:{monitor}:8222','-v',f'{config}:/etc/nats.conf:ro',os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),'-c','/etc/nats.conf',*profile_command)
+   launch(name,*profile_args,'--network',network,'-v','/data','-p',f'127.0.0.1:{number}:4222','-p',f'127.0.0.1:{monitor}:8222','-v',f'{config}:/etc/nats.conf:ro',os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),'-c','/etc/nats.conf',*profile_command)
    monitors[name]=monitor
   for number in numbers:wait_port(number)
   deadline=time.monotonic()+60

@@ -11,6 +11,7 @@ pub struct NatsConfig {
     pub subject: String,
 }
 pub struct NatsStore {
+    pub(super) writer: Option<super::nats_batch::BatchWriter>,
     pub(super) enqueue_slots: tokio::sync::Semaphore,
     pub(super) bucket: kv::Store,
     pub(super) max_state_bytes: usize,
@@ -93,6 +94,25 @@ impl NatsBackend {
         Self::from_store_with_max_payload(bucket, 1024 * 1024)
     }
 
+    /// Open a bucket through its authenticated context. Buckets with atomic
+    /// publishing enabled coalesce concurrent conditional writes into durable
+    /// commits. Other buckets retain the compatible individual-write path.
+    /// Provision `allow_atomic_publish=true` on NATS 2.12+ to enable batching.
+    /// No stream configuration is changed by this constructor.
+    pub async fn from_context(
+        context: jetstream::Context,
+        name: &str,
+        max_payload: usize,
+    ) -> QueueResult<Self> {
+        let bucket = context.get_key_value(name).await.map_err(error)?;
+        let atomic = bucket.stream.cached_info().config.allow_atomic_publish;
+        let mut backend = Self::from_store_with_max_payload(bucket.clone(), max_payload)?;
+        if atomic {
+            backend.store.writer = Some(super::nats_batch::BatchWriter::start(context, bucket));
+        }
+        Ok(backend)
+    }
+
     /// Supply the smaller of the server and account payload limits. Hosted account
     /// limits may be lower than Client::server_info().max_payload. This reserves
     /// framing space and future completion metadata before admitting a job.
@@ -111,6 +131,7 @@ impl NatsBackend {
         let max_state_bytes = state_budget(max_payload, config.max_message_size)?;
         Ok(Self {
             store: NatsStore {
+                writer: None,
                 enqueue_slots: tokio::sync::Semaphore::new(16),
                 bucket,
                 max_state_bytes,

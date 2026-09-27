@@ -26,6 +26,11 @@ on:
         type: choice
         options: ['10', '30', '60']
         default: '60'
+      nats_atomic:
+        description: Conditional atomic writer comparison on the same runner
+        type: choice
+        options: ['on', 'off', 'compare']
+        default: 'on'
       nats_shards:
         description: Fixed JetStream bucket count
         type: choice
@@ -111,6 +116,16 @@ jobs:
           if [ "$PRODUCER_CAP" != none ]; then
             export DOGRS_PG_ENQUEUE_CONCURRENCY="$PRODUCER_CAP"
           fi
+          if [ "$NATS_ATOMIC" = compare ]; then
+            test "$BACKEND" = nats
+            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-atomic
+            status=0
+            for atomic in 0 1 1 0; do
+              DOGRS_NATS_ATOMIC="$atomic" python3 dog-examples/hosted-system/run_recovery.py nats --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
+          fi
+          if [ "$NATS_ATOMIC" = off ]; then export DOGRS_NATS_ATOMIC=0; fi
           if [ "$PG_PAYLOAD_STORAGE" = compare ]; then
             test "$BACKEND" = postgres
             test "$PG_INSTANCES" = 1
@@ -187,6 +202,7 @@ jobs:
           PG_INSTANCES: ${{ inputs.postgres_instances || '1' }}
           DOGRS_PG_INSTANCES: ${{ inputs.postgres_instances != 'compare' && inputs.postgres_instances || '1' }}
           PG_SHARDS: ${{ inputs.postgres_shards || '1' }}
+          NATS_ATOMIC: ${{ inputs.nats_atomic || 'on' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
           DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '16') || (matrix.backend == 'postgres' && inputs.postgres_shards != 'compare' && inputs.postgres_shards) || '1' }}
       - name: Explain capacity result

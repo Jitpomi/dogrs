@@ -3662,6 +3662,7 @@ dependencies = [
  "dog-core",
  "dog-queue",
  "dog-transport",
+ "futures",
  "google-cloud-pubsub",
  "lapin",
  "rdkafka",

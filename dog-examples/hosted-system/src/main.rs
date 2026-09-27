@@ -409,10 +409,17 @@ async fn main() -> Result<()> {
                         .await?;
                         let mut config = bucket.stream.cached_info().config.clone();
                         config.allow_direct = false;
+                        config.allow_atomic_publish =
+                            std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
                         js.update_stream(config).await?;
-                        backends.push(Arc::new(dog_queue::backend::nats::NatsBackend::from_store(
-                            js.get_key_value(name).await?,
-                        )?));
+                        backends.push(Arc::new(
+                            dog_queue::backend::nats::NatsBackend::from_context(
+                                js.clone(),
+                                &name,
+                                1024 * 1024,
+                            )
+                            .await?,
+                        ));
                     }
                     return capacity::run(dog_queue::backend::sharded::ShardedBackend::new(
                         backends,
@@ -439,10 +446,15 @@ async fn main() -> Result<()> {
                 };
                 let mut config = bucket.stream.cached_info().config.clone();
                 config.allow_direct = false;
+                config.allow_atomic_publish =
+                    std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
                 js.update_stream(config).await?;
-                let backend = dog_queue::backend::nats::NatsBackend::from_store(
-                    js.get_key_value(&name).await?,
-                )?
+                let backend = dog_queue::backend::nats::NatsBackend::from_context(
+                    js.clone(),
+                    &name,
+                    1024 * 1024,
+                )
+                .await?
                 .with_lease_duration(Duration::from_secs(
                     if role == "capacity-local" { 300 } else { 2 },
                 ));

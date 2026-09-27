@@ -76,17 +76,28 @@ pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()
             jobs: Vec::new(),
             old_leases: Vec::new(),
         };
-        for seed in 0..200u64 {
-            let id = backend
-                .enqueue(
-                    ctx.clone(),
-                    JobMessage::new("recovery", bytes(seed), "bytes", "recovery")
-                        .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1))
-                        .with_idempotency_key(seed.to_string()),
-                )
-                .await?;
-            manifest.jobs.push((id, seed));
+        use futures::StreamExt;
+        let mut submissions = futures::stream::iter(0..200u64)
+            .map(|seed| {
+                let ctx = ctx.clone();
+                let backend = &backend;
+                async move {
+                    let id = backend
+                        .enqueue(
+                            ctx,
+                            JobMessage::new("recovery", bytes(seed), "bytes", "recovery")
+                                .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1))
+                                .with_idempotency_key(seed.to_string()),
+                        )
+                        .await?;
+                    Ok::<_, dog_queue::QueueError>((id, seed))
+                }
+            })
+            .buffer_unordered(16);
+        while let Some(result) = submissions.next().await {
+            manifest.jobs.push(result?);
         }
+        drop(submissions);
         for n in 0..100 {
             let job = backend
                 .dequeue(ctx.clone(), &["recovery"])

@@ -87,7 +87,10 @@ reads, set no TTL and use discard-new, then call `from_store_with_max_payload(bu
 Use the smaller of the server and account limits; hosted account limits can be
 lower than the server INFO value. The older `from_store` convenience assumes a
 1 MiB payload limit. `NatsConfig.subject`
-now names that KV bucket, not a Core NATS subject.
+now names that KV bucket, not a Core NATS subject. For NATS 2.12+ concurrent workloads,
+`from_context` can use the stream’s atomic-publish capability to share durable
+replication work without changing revision checks or the stored format. See
+[JetStream write batching](NATS.md).
 
 ## Capacity, security and migration
 

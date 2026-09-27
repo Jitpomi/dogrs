@@ -21,7 +21,7 @@ fn error(e: impl std::fmt::Display) -> QueueError {
 }
 // NATS 2.11 may use code 10164; async-nats 0.50 only maps 10071 to
 // WrongLastRevision. Inspect structured causes rather than matching error text.
-fn revision_conflict(error: &(dyn std::error::Error + 'static)) -> bool {
+pub(super) fn revision_conflict(error: &(dyn std::error::Error + 'static)) -> bool {
     let mut cause = Some(error);
     while let Some(error) = cause {
         if let Some(server) = error.downcast_ref::<async_nats::jetstream::Error>() {
@@ -78,10 +78,23 @@ impl RetiredRevisions {
     }
 }
 pub(super) struct Index {
+    claims: dashmap::DashSet<(String, JobId)>,
     retired: std::sync::Mutex<RetiredRevisions>,
     entries: dashmap::DashMap<String, Arc<TenantIndex>>,
     notifications: dashmap::DashMap<String, Arc<tokio::sync::Notify>>,
     task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+// Local hint only. The server CAS remains the ownership authority. Cancellation
+// releases the hint; a remotely committed lease is still fenced by its revision.
+struct ClaimReservation<'a> {
+    index: &'a Index,
+    key: (String, JobId),
+}
+impl Drop for ClaimReservation<'_> {
+    fn drop(&mut self) {
+        self.index.claims.remove(&self.key);
+        self.index.notification(&self.key.0).notify_waiters();
+    }
 }
 impl Drop for Index {
     fn drop(&mut self) {
@@ -116,7 +129,10 @@ impl Index {
         )> = None;
         for entry in entries.iter() {
             let row = entry.value().1.as_ref().map_err(|e| error(e.clone()))?;
-            if !skipped.contains(&row.record.job_id)
+            if !self
+                .claims
+                .contains(&(tenant.to_owned(), row.record.job_id.clone()))
+                && !skipped.contains(&row.record.job_id)
                 && queues.contains(&row.record.message.queue)
                 && row.record.message.run_at <= now
                 && row.record.status.is_eligible(now)
@@ -223,6 +239,7 @@ impl NatsStore {
         self.index
             .get_or_try_init(|| async {
                 let index = Arc::new(Index {
+                    claims: Default::default(),
                     retired: Default::default(),
                     entries: Default::default(),
                     notifications: Default::default(),
@@ -484,6 +501,19 @@ impl NatsStore {
         value: Vec<u8>,
         revision: u64,
     ) -> QueueResult<Option<u64>> {
+        if let Some(writer) = &self.writer {
+            let revision = crate::diagnostics::measure(
+                crate::diagnostics::NATS_CAS,
+                writer.submit(key, value.clone(), revision),
+            )
+            .await?;
+            if let Some(revision) = revision {
+                self.index()
+                    .await?
+                    .observe(key.into(), revision, value, false);
+            }
+            return Ok(revision);
+        }
         match crate::diagnostics::measure(
             crate::diagnostics::NATS_CAS,
             self.bucket.update(key, value.clone().into(), revision),
@@ -598,13 +628,25 @@ impl NatsStore {
                 ));
             }
             // Immutable payload must be durable before a discoverable job is committed.
-            crate::diagnostics::measure(
-                crate::diagnostics::NATS_PAYLOAD_CREATE,
-                self.bucket
-                    .create(payload(tenant, &id), message.payload_bytes.clone().into()),
-            )
-            .await
-            .map_err(error)?;
+            if let Some(writer) = &self.writer {
+                if crate::diagnostics::measure(
+                    crate::diagnostics::NATS_PAYLOAD_CREATE,
+                    writer.submit(&payload(tenant, &id), message.payload_bytes.clone(), 0),
+                )
+                .await?
+                .is_none()
+                {
+                    return Err(error("immutable payload key already exists"));
+                }
+            } else {
+                crate::diagnostics::measure(
+                    crate::diagnostics::NATS_PAYLOAD_CREATE,
+                    self.bucket
+                        .create(payload(tenant, &id), message.payload_bytes.clone().into()),
+                )
+                .await
+                .map_err(error)?;
+            }
             // Optimistically create a new scope with revision zero, avoiding a
             // leader read on the common first enqueue. Existing scopes (including
             // tombstones) conflict and use the dedupe/reuse path below. Only an
@@ -799,6 +841,16 @@ impl NatsStore {
                 | Operation::Heartbeat(id, ..) => id.clone(),
                 _ => unreachable!(),
             };
+            let _reservation = if matches!(op, Operation::Dequeue(..)) {
+                let key = (tenant.to_owned(), id.clone());
+                if !index.claims.insert(key.clone()) {
+                    skipped_hints.insert(id);
+                    continue;
+                }
+                Some(ClaimReservation { index, key })
+            } else {
+                None
+            };
             if matches!(op, Operation::Dequeue(..)) {
                 let key = cell(tenant, slot(&id)?);
                 let cached = index.tenant(tenant).and_then(|entries| {
@@ -951,6 +1003,7 @@ mod tests {
     async fn discovery_wakes_only_for_new_runnable_revisions() {
         use futures::FutureExt;
         let index = Index {
+            claims: Default::default(),
             retired: Default::default(),
             entries: Default::default(),
             notifications: Default::default(),
@@ -971,6 +1024,24 @@ mod tests {
         first.as_mut().enable();
         index.observe(key.clone(), 1, serde_json::to_vec(&row).unwrap(), false);
         assert!(first.now_or_never().is_some());
+        let reservation_key = ("test".to_string(), row.record.job_id.clone());
+        index.claims.insert(reservation_key.clone());
+        let reservation = ClaimReservation {
+            index: &index,
+            key: reservation_key,
+        };
+        assert!(index
+            .candidate("test", &["q".into()], &Default::default())
+            .unwrap()
+            .is_none());
+        drop(reservation);
+        assert_eq!(
+            index
+                .candidate("test", &["q".into()], &Default::default())
+                .unwrap(),
+            Some(row.record.job_id.clone())
+        );
+
         let duplicate = changed.notified();
         tokio::pin!(duplicate);
         duplicate.as_mut().enable();
