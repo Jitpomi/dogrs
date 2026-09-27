@@ -94,8 +94,9 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y linux-tools-generic
-          profiler=$(find /usr/lib/linux-tools -type f -name perf | sort -V | tail -1)
+          profiler=$(find -L /usr/lib/linux-tools -type f -name perf | sort -V | tail -1)
           test -n "$profiler"
+          "$profiler" version
           echo "DOGRS_PERF=$profiler" >> "$GITHUB_ENV"
       - run: |
           if [ "$PRODUCER_CAP" != none ]; then

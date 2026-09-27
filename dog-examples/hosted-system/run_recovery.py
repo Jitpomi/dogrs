@@ -143,6 +143,7 @@ try:
       invocation=['sudo','-n','-E',profiler,'record','-a','-e','cpu-clock','-F','49','--buildid-all','-o',str(folder/'perf.data'),'--',*invocation]
      result=subprocess.run(invocation,env=env,stdout=output,stderr=subprocess.STDOUT,timeout=300)
      if profiler:
+      command('sudo','-n','chmod','0644',str(folder/'perf.data'))
       (folder/'cpu-profile.txt').write_text(command('sudo','-n',profiler,'report','--stdio','--no-children','--sort','comm,dso,symbol','--percent-limit','0.5','-i',str(folder/'perf.data')))
     after=resource.getrusage(resource.RUSAGE_CHILDREN)
     (folder/'client-cpu.json').write_text(json.dumps({'user_seconds':after.ru_utime-before.ru_utime,'system_seconds':after.ru_stime-before.ru_stime}))
