@@ -1,4 +1,4 @@
-name: NATS batch-size attribution
+name: NATS bounded producer-window attribution
 on:
   pull_request:
     paths: ['.github/workflows/provider-capacity.yml', 'dog-queue/**', 'dog-examples/hosted-system/**', 'Cargo.lock']
