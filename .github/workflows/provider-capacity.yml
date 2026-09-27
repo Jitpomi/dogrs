@@ -1,7 +1,7 @@
 name: Provider capacity
 on:
   pull_request:
-    paths: ['.github/workflows/provider-capacity.yml', 'dog-queue/**', 'dog-examples/hosted-system/**', 'Cargo.lock']
+    paths: ['.github/scripts/**', 'Cargo.toml', '.github/workflows/provider-capacity.yml', 'dog-queue/**', 'dog-examples/hosted-system/**', 'Cargo.lock']
   workflow_dispatch:
     inputs:
       mode:
@@ -96,8 +96,31 @@ on:
 permissions:
   contents: read
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      required: ${{ steps.changes.outputs.required }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Verify capacity scope selection
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: Determine whether the capacity workload changed
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            echo 'required=true' >> "$GITHUB_OUTPUT"
+          else
+            python3 .github/scripts/capacity_scope.py "$BASE_SHA" "$HEAD_SHA"
+          fi
   capacity:
-    if: ${{ inputs.mode != 'attribution' }}
+    needs: scope
+    if: ${{ needs.scope.outputs.required == 'true' && inputs.mode != 'attribution' }}
     strategy:
       fail-fast: false
       matrix:
