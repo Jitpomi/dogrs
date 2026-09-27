@@ -124,7 +124,7 @@ jobs:
           if [ "$NATS_CONNECTIONS" = compare ]; then
             test "$BACKEND" = nats
             test "$NATS_ATOMIC" = on
-            python3 dog-examples/hosted-system/compare_nats_callers.py
+            python3 dog-examples/hosted-system/compare_nats_shards.py
             exit $?
           fi
           export DOGRS_NATS_CONNECTIONS="$NATS_CONNECTIONS"
