@@ -54,6 +54,11 @@ on:
         type: choice
         options: ['on', 'off', 'compare']
         default: 'on'
+      postgres_payload_storage:
+        description: Compression experiment for binary payloads (durability unchanged)
+        type: choice
+        options: ['extended', 'external', 'compare']
+        default: 'extended'
       postgres_instances:
         description: Independent PostgreSQL servers sharing total connection and buffer budgets
         type: choice
@@ -101,6 +106,19 @@ jobs:
       - run: |
           if [ "$PRODUCER_CAP" != none ]; then
             export DOGRS_PG_ENQUEUE_CONCURRENCY="$PRODUCER_CAP"
+          fi
+          if [ "$PG_PAYLOAD_STORAGE" = compare ]; then
+            test "$BACKEND" = postgres
+            test "$PG_INSTANCES" = 1
+            test "$PG_SHARDS" = 1
+            test "$DOGRS_PG_FIXTURE_PARTITIONS" = 0
+            test "$PG_WAL_INIT" = on
+            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-payload-compression
+            status=0
+            for storage in extended external external extended; do
+              DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
           fi
           if [ "$PG_WAL_INIT" = compare ]; then
             test "$BACKEND" = postgres
@@ -159,6 +177,8 @@ jobs:
           DOGRS_PG_FIXTURE_PARTITIONS: ${{ inputs.postgres_fixture_partitions || '0' }}
           PG_WAL_INIT: ${{ inputs.postgres_wal_init_zero || 'on' }}
           DOGRS_PG_WAL_INIT_ZERO: ${{ inputs.postgres_wal_init_zero != 'compare' && inputs.postgres_wal_init_zero || 'on' }}
+          PG_PAYLOAD_STORAGE: ${{ inputs.postgres_payload_storage || 'extended' }}
+          DOGRS_PG_PAYLOAD_STORAGE: ${{ inputs.postgres_payload_storage != 'compare' && inputs.postgres_payload_storage || 'extended' }}
           PG_INSTANCES: ${{ inputs.postgres_instances || '1' }}
           DOGRS_PG_INSTANCES: ${{ inputs.postgres_instances != 'compare' && inputs.postgres_instances || '1' }}
           PG_SHARDS: ${{ inputs.postgres_shards || '1' }}

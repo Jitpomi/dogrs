@@ -10,6 +10,8 @@ if a.admission_mode and not a.capacity:p.error('--admission-mode requires --capa
 if a.overload_drain_seconds and (not a.capacity or a.admission_mode):p.error('overload drain requires the full queue capacity mode')
 wal_init_zero=os.environ.get('DOGRS_PG_WAL_INIT_ZERO','on')
 if wal_init_zero not in ('on','off'):p.error('WAL initialization must be on or off')
+payload_storage=os.environ.get('DOGRS_PG_PAYLOAD_STORAGE','extended')
+if payload_storage not in ('extended','external'):p.error('payload storage must be extended or external')
 pg_instances=int(os.environ.get('DOGRS_PG_INSTANCES','1'))
 if pg_instances not in (1,4):p.error('PostgreSQL instances must be 1 or 4')
 if pg_instances>1 and (a.backend!='postgres' or not a.capacity or a.admission_mode or os.environ.get('DOGRS_PG_FIXTURE_PARTITIONS','0')!='0'):p.error('independent PostgreSQL instances require ordinary full queue capacity')
@@ -47,6 +49,7 @@ try:
   'storage_shards':pg_instances if pg_instances>1 else int(os.environ.get('DOGRS_CAPACITY_SHARDS','1')),
   'postgres_instances':pg_instances,
   'postgres_wal_init_zero':wal_init_zero,
+  'postgres_payload_storage':payload_storage,
   'postgres_shared_buffers_mb_per_instance':1024//pg_instances if a.backend=='postgres' and a.capacity else None,
   'postgres_max_wal_mb_per_instance':4096//pg_instances if a.backend=='postgres' and a.capacity else None,
   'measurement':a.admission_mode or ('queue-capacity' if a.capacity else 'recovery'),
@@ -85,6 +88,10 @@ try:
    create=schema.split(';',1)[0]+' PARTITION BY HASH (tenant);'
    create+='\n'.join(f'CREATE TABLE dogrs_queue_jobs_v2_p{i} PARTITION OF dogrs_queue_jobs_v2 FOR VALUES WITH (MODULUS {partitions},REMAINDER {i});' for i in range(partitions))
    command('docker','exec',name,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-c',create)
+  if payload_storage=='external':
+   assert pg_instances==1 and not partitions and int(os.environ.get('DOGRS_CAPACITY_SHARDS','1'))==1,'payload storage diagnostic requires one unpartitioned store'
+   schema=(pathlib.Path(__file__).resolve().parents[2]/'dog-queue/src/backend/postgres_schema.sql').read_text()
+   command('docker','exec',name,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-c',schema+'\nALTER TABLE dogrs_queue_jobs_v2 ALTER COLUMN payload SET STORAGE EXTERNAL;')
  elif a.backend=='redis':
   number=port();name=run+'-redis'
   launch(name,'-p',f'127.0.0.1:{number}:6379','redis:7.4-alpine','redis-server','--appendonly','yes','--appendfsync','always','--maxmemory-policy','noeviction')
@@ -163,6 +170,7 @@ try:
   if a.backend=='postgres':
    for node_name,node_folder in pg_nodes:
     (node_folder/'durability-settings.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT name,setting FROM pg_settings WHERE name IN ('fsync','synchronous_commit','full_page_writes','wal_init_zero','wal_recycle','wal_sync_method') ORDER BY name"))
+    (node_folder/'payload-storage.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT n.nspname,c.relname,a.attstorage,a.attcompression FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relname='dogrs_queue_jobs_v2' AND a.attname='payload' AND NOT a.attisdropped"))
     (node_folder/'io-profile.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT * FROM pg_stat_io WHERE object='wal'; SELECT * FROM pg_stat_wal;"))
     (node_folder/'query-profile.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT left(query,180) AS query,calls,round(mean_exec_time::numeric,3) AS mean_ms,round(total_exec_time::numeric,1) AS total_ms,shared_blks_read,shared_blks_hit,wal_bytes FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 12"))
   print(json.dumps({'backend':a.backend,'restored_to_fresh_container':a.restore,'outage_seconds':a.outage_seconds,'replicas':3 if a.backend=='nats' else 1,'sync_policy':'always' if a.backend in ('redis','nats') else 'PostgreSQL default fsync/synchronous_commit','measurement':a.admission_mode or 'queue-capacity','passed':result.returncode==0,'capacity_log':str(folder/'capacity.log')}))
