@@ -270,6 +270,7 @@ jobs:
         run: python3 dog-examples/hosted-system/compare_nats_fsync.py
         env:
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
+          DOGRS_FSYNC_PROFILE: ${{ inputs.profile_queue && '1' || '0' }}
       - name: Explain comparison scope
         if: always()
         run: |
@@ -277,7 +278,7 @@ jobs:
           import json, os, pathlib
           report = pathlib.Path('provider-attribution/fsync-comparison.json')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('## Fsync attribution — diagnostic only\n\nBuffered cases weaken power-loss durability and cannot certify a production release. All cases are instrumented.\n\n')
+              summary.write('## Fsync attribution — diagnostic only\n\nBuffered cases weaken power-loss durability and cannot certify a production release. Queue/stack profiling is recorded in the report.\n\n')
               if report.exists():
                   data = json.loads(report.read_text())
                   summary.write('| Trial | Sync interval | Accepted | Completed | Overload |\n|---|---|---:|---:|---:|\n')

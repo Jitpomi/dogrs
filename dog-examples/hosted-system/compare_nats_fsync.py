@@ -2,7 +2,7 @@
 """Diagnostic only: identical DogRS source, different provider fsync policy.
 
 Buffered cases deliberately weaken power-loss durability and NEVER qualify a
-production release. All cases are instrumented and retain the workload deadline.
+production release. All cases retain the workload deadline; queue/stack profiling is optional.
 """
 import hashlib
 import json
@@ -17,6 +17,9 @@ root.mkdir(exist_ok=True)
 if (root / 'fsync-comparison.json').exists():
     raise SystemExit('Choose a fresh report directory')
 binary = pathlib.Path(os.environ['DOGRS_SYSTEM_BINARY']).resolve()
+profile = os.environ.get('DOGRS_FSYNC_PROFILE', '1')
+if profile not in ('0', '1'):
+    raise SystemExit('DOGRS_FSYNC_PROFILE must be 0 or 1')
 original = (repo / 'dog-examples/hosted-system/run_recovery.py').read_text()
 runner = repo / 'dog-examples/hosted-system/_fsync_diagnostic_runner.py'
 assert not runner.exists()
@@ -33,6 +36,7 @@ for key, command in {
 (root / 'hardware.json').write_text(json.dumps(hardware, indent=2))
 report = {
     'production_acceptance': False,
+    'queue_and_stack_profiling': profile == '1',
     'source_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip(),
     'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
     'description': 'Same binary, fresh R3 providers per case, always/2m/2m/always; buffered cases are NOT production acceptance.',
@@ -65,7 +69,7 @@ try:
         env = dict(os.environ, DOGRS_SYSTEM_BINARY=str(binary), DOGRS_CAPACITY_SHARDS='16',
                    DOGRS_CAPACITY_WORKERS='8', DOGRS_CAPACITY_INFLIGHT='32',
                    DOGRS_NATS_CONNECTIONS='per-shard', DOGRS_NATS_ATOMIC='1',
-                   DOGRS_QUEUE_TIMINGS='1', DOGRS_CAPACITY_COMPARISON_TENANT='dogrs-test-fsync-attribution')
+                   DOGRS_QUEUE_TIMINGS=profile, DOGRS_CAPACITY_COMPARISON_TENANT='dogrs-test-fsync-attribution')
         for key in ['DOGRS_ADMISSION_MODE', 'DOGRS_PERF']:
             env.pop(key, None)
         result = subprocess.run([sys.executable, str(runner), 'nats', '--capacity', '--seconds', '60',
