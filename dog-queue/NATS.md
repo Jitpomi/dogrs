@@ -27,7 +27,10 @@ writers and readers using either mode can share the bucket.
 Each enqueue atomically commits its immutable payload and discoverable metadata
 together. A rejected idempotency-scope update leaves neither key partially written.
 The atomic writer groups only concurrent operations, with at most 128 distinct
-keys and 2 MiB of value bytes per batch. Separate bounded execution lanes handle
+keys and a normal target of 240 KiB of value bytes per batch. This leaves framing
+headroom below JetStream's roughly 256 KiB Raft proposal grouping boundary, avoiding
+an acknowledgement that waits for many sequential WAL appends. A larger single
+logical operation still runs intact, up to the existing 2 MiB hard bound. Separate bounded execution lanes handle
 enqueue pairs and metadata updates: each allows one batch in flight and 128 queued
 requests. Producer backlog cannot occupy the metadata lane, and lease/completion
 updates never share a staging batch with large payloads. Atomic mode admits up to

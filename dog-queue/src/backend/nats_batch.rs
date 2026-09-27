@@ -9,6 +9,11 @@ use tokio::sync::{mpsc, oneshot};
 const MAX_MESSAGES: usize = 128;
 pub(super) const ADMISSION_CAPACITY: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
+// JetStream splits Raft proposals at roughly 256 KiB. Large atomic batches
+// wait for several durable appends before releasing any caller. Keep normal
+// batches under that boundary, leaving room for headers/replication framing.
+// A single larger logical operation remains valid and is never split.
+const TARGET_BATCH_BYTES: usize = 240 * 1024;
 struct Write {
     key: String,
     value: Vec<u8>,
@@ -68,7 +73,7 @@ impl BatchWriter {
                     // A logical operation (including an enqueue's payload and metadata)
                     // is indivisible. Distinct expected subjects are required by ADR-50.
                     if count + group.writes.len() > MAX_MESSAGES
-                        || bytes + size > MAX_BYTES
+                        || bytes + size > TARGET_BATCH_BYTES
                         || group.writes.iter().any(|w| keys.contains(&w.key))
                     {
                         deferred = Some(group);
@@ -447,6 +452,27 @@ mod tests {
         assert!(outcomes[0].as_ref().unwrap().is_none());
         assert!(outcomes[1].as_ref().unwrap().is_some());
         assert!(bucket.get("orphan").await.unwrap().is_none());
+        // The coalescing target must not reject or split a valid large job.
+        let writer = BatchWriter::start(js.clone(), bucket.clone());
+        writer
+            .enqueue(
+                "large-payload".into(),
+                vec![5; 512 * 1024],
+                "large-job",
+                vec![6; 1024],
+                0,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            bucket.get("large-payload").await.unwrap().unwrap().as_ref(),
+            &vec![5; 512 * 1024]
+        );
+        assert_eq!(
+            bucket.get("large-job").await.unwrap().unwrap().as_ref(),
+            &vec![6; 1024]
+        );
         js.delete_key_value(&bucket.name).await.unwrap();
     }
     #[tokio::test]
