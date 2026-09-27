@@ -25,7 +25,7 @@ pub enum ServiceMiddleware<L> {
     None,
 }
 
-type MiddlewareFn = Box<dyn Fn(Router<()>) -> Router<()> + Send + Sync>;
+type MiddlewareFn = Arc<dyn Fn(Router<()>) -> Router<()> + Send + Sync>;
 
 impl<L> ServiceMiddleware<L>
 where
@@ -108,7 +108,7 @@ where
         Self {
             app: Arc::clone(&self.app),
             router: self.router.clone(),
-            pending_middleware: vec![], // Can't clone closures, so start fresh
+            pending_middleware: self.pending_middleware.clone(),
         }
     }
 }
@@ -131,7 +131,7 @@ where
     }
 
     pub fn use_router(mut self, path: &str, router: Router<()>) -> Self {
-        self.router = layer_defaults(self.router.nest(path, router));
+        self.router = self.router.nest(path, layer_defaults(router));
         self
     }
 
@@ -196,7 +196,7 @@ where
             router = middleware_fn(router);
         }
 
-        self.router = layer_defaults(self.router.nest(path, router));
+        self.router = self.router.nest(path, layer_defaults(router));
         self
     }
 
@@ -241,10 +241,13 @@ where
         let service_name = Arc::new(service_name.to_string());
         let router = rest::service_router(Arc::clone(&service_name), Arc::clone(&self.app));
 
-        // Apply the specific middleware to this service router
-        let router = router.layer(middleware);
+        // Apply shared middleware as well as this service-specific layer.
+        let mut router = router.layer(middleware);
+        for middleware_fn in &self.pending_middleware {
+            router = middleware_fn(router);
+        }
 
-        self.router = layer_defaults(self.router.nest(path, router));
+        self.router = self.router.nest(path, layer_defaults(router));
         self
     }
 
@@ -258,7 +261,7 @@ where
     {
         // Store middleware to be applied to next service
         self.pending_middleware
-            .push(Box::new(move |router| router.layer(layer.clone())));
+            .push(Arc::new(move |router| router.layer(layer.clone())));
         self
     }
 

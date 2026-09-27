@@ -11,7 +11,48 @@ use dog_core::{
 use http::{HeaderValue, Request, Response, StatusCode};
 use http_body_util::BodyExt;
 
-#[derive(Clone)]
+/// A route resolved by the hosting router. Only trusted server code should set
+/// this extension; incoming HTTP headers cannot create it. The URI remains intact.
+#[derive(Clone, Debug)]
+pub struct HttpRoute {
+    pub service: String,
+    pub method: DogMethod,
+    pub id: Option<String>,
+}
+
+/// Transport-neutral REST parameters, compatible with the former dog-axum type.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct RestParams {
+    pub provider: String,
+    pub headers: HashMap<String, String>,
+    pub query: HashMap<String, String>,
+    pub method: String,
+    pub path: String,
+    pub raw_query: Option<String>,
+}
+
+impl RestParams {
+    pub fn from_parts(
+        provider: &str,
+        headers: &http::HeaderMap,
+        query: HashMap<String, String>,
+        method: &str,
+        uri: &http::Uri,
+    ) -> Self {
+        Self {
+            provider: provider.into(),
+            headers: headers
+                .iter()
+                .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
+                .collect(),
+            query,
+            method: method.into(),
+            path: uri.path().into(),
+            raw_query: uri.query().map(str::to_owned),
+        }
+    }
+}
+
 pub struct DogHttpService<R, P>
 where
     R: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
@@ -20,6 +61,20 @@ where
     app: DogApp<R, P>,
     options: HttpOptions,
     service_name: Option<String>,
+}
+
+impl<R, P> Clone for DogHttpService<R, P>
+where
+    R: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+    P: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + Clone + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            app: self.app.clone(),
+            options: self.options.clone(),
+            service_name: self.service_name.clone(),
+        }
+    }
 }
 
 impl<R, P> DogHttpService<R, P>
@@ -105,7 +160,9 @@ where
             // 3. Parse Method and Path to extract service name and method kind
             let path = parts.uri.path().trim_matches('/');
             let mut path_parts = path.split('/');
-            let (service, id) = if let Some(ref fixed_service) = service_name {
+            let (service, id) = if let Some(route) = parts.extensions.get::<HttpRoute>() {
+                (route.service.clone(), route.id.clone())
+            } else if let Some(ref fixed_service) = service_name {
                 let id = if let Some(first_segment) = path_parts.next() {
                     if first_segment == fixed_service {
                         path_parts.next().map(|s| s.to_string())
@@ -141,7 +198,9 @@ where
             };
 
             // Determine method based on HTTP method and headers
-            let method = if let Some(custom_method) = parts
+            let method = if let Some(route) = parts.extensions.get::<HttpRoute>() {
+                route.method.clone()
+            } else if let Some(custom_method) = parts
                 .headers
                 .get("x-service-method")
                 .and_then(|h| h.to_str().ok())
@@ -172,67 +231,19 @@ where
                 }
             };
 
-            // 4. Parse parameters into DogParams matching RestParams structure
-            let mut params_map = HashMap::new();
-            params_map.insert(
-                "provider".to_string(),
-                serde_json::Value::String("rest".to_string()),
-            );
-            params_map.insert(
-                "method".to_string(),
-                serde_json::Value::String(parts.method.to_string()),
-            );
-            params_map.insert(
-                "path".to_string(),
-                serde_json::Value::String(parts.uri.path().to_string()),
-            );
-
-            if let Some(query_str) = parts.uri.query() {
-                params_map.insert(
-                    "raw_query".to_string(),
-                    serde_json::Value::String(query_str.to_string()),
-                );
-                if let Ok(queries) =
-                    serde_urlencoded::from_str::<HashMap<String, String>>(query_str)
-                {
-                    let mut query_map = HashMap::new();
-                    for (k, v) in queries {
-                        query_map.insert(k, serde_json::Value::String(v));
-                    }
-                    params_map.insert(
-                        "query".to_string(),
-                        serde_json::to_value(query_map).unwrap(),
-                    );
-                }
-            } else {
-                params_map.insert(
-                    "query".to_string(),
-                    serde_json::Value::Object(serde_json::Map::new()),
-                );
-                params_map.insert("raw_query".to_string(), serde_json::Value::Null);
-            }
-
-            let mut headers_map = HashMap::new();
-            for (k, v) in &parts.headers {
-                if let Ok(s) = v.to_str() {
-                    headers_map.insert(k.to_string(), s.to_string());
-                }
-            }
-            params_map.insert(
-                "headers".to_string(),
-                serde_json::to_value(headers_map).unwrap(),
-            );
-
-            // AuthParams wraps the same REST fields in `inner`. Plain params ignore it.
-            params_map.insert("inner".into(), serde_json::to_value(&params_map).unwrap());
-
-            // Put standard headers into metadata
-            let mut metadata = HashMap::new();
-            for (k, v) in &parts.headers {
-                if let Ok(s) = v.to_str() {
-                    metadata.insert(k.to_string(), serde_json::Value::String(s.to_string()));
-                }
-            }
+            let route = parts.extensions.get::<HttpRoute>();
+            let (service, method, id) = match route {
+                Some(route) => (
+                    route.service.clone(),
+                    route.method.clone(),
+                    route.id.clone(),
+                ),
+                None => (service, method, id),
+            };
+            let (params, metadata) = match request_params(&parts) {
+                Ok(value) => value,
+                Err(error) => return Ok(make_error_response(error, &request_id)),
+            };
 
             // 5. Read body
             let limit = options.body_limit.unwrap_or(10 * 1024 * 1024); // default 10MB
@@ -282,7 +293,8 @@ where
                     Ok(val) => Some(val),
                     Err(err) => {
                         return Ok(make_error_response(
-                            DogError::bad_request(format!("Invalid JSON: {}", err)),
+                            DogError::bad_request(format!("Invalid JSON: {}", err))
+                                .with_errors(serde_json::json!({"_schema": [err.to_string()]})),
                             &request_id,
                         ));
                     }
@@ -299,7 +311,7 @@ where
                 method,
                 id,
                 tenant,
-                params: DogParams::from(params_map),
+                params,
                 payload,
                 metadata,
             };
@@ -336,6 +348,90 @@ where
             }
         })
     }
+}
+
+fn request_params(
+    parts: &http::request::Parts,
+) -> Result<(DogParams, HashMap<String, serde_json::Value>), DogError> {
+    let query = serde_urlencoded::from_str(parts.uri.query().unwrap_or(""))
+        .map_err(|_| DogError::bad_request("Invalid query parameters"))?;
+    let rest = RestParams::from_parts(
+        "rest",
+        &parts.headers,
+        query,
+        parts.method.as_str(),
+        &parts.uri,
+    );
+    let mut params: HashMap<String, serde_json::Value> =
+        serde_json::from_value(serde_json::to_value(&rest).unwrap()).unwrap();
+    params.insert("inner".into(), serde_json::to_value(&rest).unwrap());
+    let metadata = rest
+        .headers
+        .into_iter()
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .collect();
+    Ok((DogParams::from(params), metadata))
+}
+
+/// Dispatch a custom HTTP operation through the same parameter conversion,
+/// payload limit and application deadline as the Tower service.
+pub async fn call_custom<R, P>(
+    app: &DogApp<R, P>,
+    service: &str,
+    method: &str,
+    request: Request<Option<R>>,
+    options: &HttpOptions,
+) -> Result<serde_json::Value, DogError>
+where
+    R: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+    P: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + Clone + 'static,
+{
+    let (parts, body) = request.into_parts();
+    let (params, metadata) = request_params(&parts)?;
+    let payload = body
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|_| DogError::general_error("Could not serialize request payload"))?;
+    if let Some(value) = &payload {
+        let bytes = serde_json::to_vec(value)
+            .map_err(|_| DogError::general_error("Could not serialize request payload"))?;
+        if bytes.len() > options.body_limit.unwrap_or(10 * 1024 * 1024) {
+            return Err(DogError::bad_request("Request body exceeds limit"));
+        }
+    }
+    let header = |name: &str| {
+        parts
+            .headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    let request = DogRequest {
+        request_id: Some(
+            header(
+                options
+                    .request_id_header
+                    .as_deref()
+                    .unwrap_or("x-request-id"),
+            )
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        ),
+        tenant: TenantContext::new(
+            header(options.tenant_header.as_deref().unwrap_or("x-tenant-id"))
+                .unwrap_or_else(|| "default".into()),
+        ),
+        transport: DogTransportKind::Http,
+        service: service.into(),
+        method: DogMethod::Custom(method.into()),
+        id: None,
+        params,
+        payload,
+        metadata,
+    };
+    Ok(crate::dispatch(app, request, options.request_timeout_secs)
+        .await?
+        .payload
+        .unwrap_or(serde_json::Value::Null))
 }
 
 fn make_error_response_with_options(

@@ -133,3 +133,16 @@ updates NATS to the maintained client/TLS stack, and disables the Actix demo's
 unused legacy HTTP/2 implementation. Tonic and Axum retain current HTTP/2 support.
 The optional RustCrypto JWT backend is removed rather than exposing the unpatched
 RSA private-key timing path. Use `jwt-aws-lc-rs` for HMAC, RSA and ECDSA support.
+
+
+## Axum integration migration
+
+`dog-axum` is deprecated as a standalone integration and now delegates REST and
+custom/OAuth dispatch to `dog-transport`. New applications should use the
+server-neutral HTTP/Tower service directly. Existing builder APIs remain for
+migration; deprecation does not currently emit compiler warnings.
+
+Read [Migrating from dog-axum](../dog-transport/MIGRATION.md) before upgrading,
+especially for multipart defaults, temporary-file lifetime, and processor behavior.
+The guide includes compiled direct-Axum examples and preserves the choice of
+server, authentication backend, and storage provider.

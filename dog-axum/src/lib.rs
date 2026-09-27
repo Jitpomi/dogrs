@@ -1,9 +1,4 @@
-//! Library template created with FerrisUp
-
-//! dog-axum: Axum adapter for DogRS.
-//!
-//! This crate will expose helpers to build Axum routers
-//! from DogRS services and apps.
+#![doc = include_str!("../README.md")]
 
 pub mod app;
 mod error;

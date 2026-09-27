@@ -25,7 +25,7 @@ explains server composition and Iroh's shared endpoint support.
 | --- | --- |
 | `dog-core` | Services, hooks, application builder and explicit tenant context |
 | `dog-transport` | HTTP/Tower, gRPC/Tonic, NDJSON CLI, Iroh and HTTP streaming adapters |
-| `dog-axum` | Axum-specific REST helpers |
+| `dog-axum` | Deprecated compatibility wrapper; [migrate to dog-transport](dog-transport/MIGRATION.md) |
 | `dog-auth` | Authentication strategies and typed JWT access/refresh verification |
 | `dog-auth-local` | Password authentication and password protection hooks |
 | `dog-auth-oauth` | Provider-verified OAuth identities and authorization-code support |
