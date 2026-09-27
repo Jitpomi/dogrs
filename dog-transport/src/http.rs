@@ -236,11 +236,32 @@ where
 
             // 5. Read body
             let limit = options.body_limit.unwrap_or(10 * 1024 * 1024); // default 10MB
-            let body_bytes = match http_body_util::Limited::new(body, limit).collect().await {
-                Ok(collected) => collected.to_bytes(),
-                Err(err) => {
+            let seconds = options.request_timeout_secs.unwrap_or(30);
+            if !(1..=86400).contains(&seconds) {
+                return Ok(make_error_response(
+                    DogError::new(
+                        dog_core::errors::ErrorKind::GeneralError,
+                        "Invalid transport timeout",
+                    ),
+                    &request_id,
+                ));
+            }
+            let body_bytes = match tokio::time::timeout(
+                std::time::Duration::from_secs(seconds),
+                http_body_util::Limited::new(body, limit).collect(),
+            )
+            .await
+            {
+                Ok(Ok(collected)) => collected.to_bytes(),
+                Err(_) => {
                     return Ok(make_error_response(
-                        DogError::bad_request(format!("Failed to read request body: {}", err)),
+                        DogError::timeout("Request body timed out"),
+                        &request_id,
+                    ))
+                }
+                Ok(Err(_)) => {
+                    return Ok(make_error_response(
+                        DogError::bad_request("Could not read request body within its size limit"),
                         &request_id,
                     ));
                 }
@@ -284,7 +305,7 @@ where
             };
 
             // 7. Dispatch to app.handle()
-            match app.handle(dog_req).await {
+            match crate::dispatch(&app, dog_req, options.request_timeout_secs).await {
                 Ok(dog_res) => {
                     let mut res = Response::builder()
                         .status(StatusCode::OK)

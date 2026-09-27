@@ -20,6 +20,9 @@ struct TestService;
 #[async_trait]
 impl DogService<TestData, ()> for TestService {
     async fn get(&self, _ctx: &TenantContext, id: &str, _params: ()) -> anyhow::Result<TestData> {
+        if id == "stall" {
+            std::future::pending::<()>().await;
+        }
         Ok(TestData {
             id: Some(id.to_string()),
             message: "Hello from Iroh!".to_string(),
@@ -32,6 +35,57 @@ impl DogService<TestData, ()> for TestService {
             message: "Hello from Iroh Find!".to_string(),
         }])
     }
+}
+
+#[tokio::test]
+async fn stalled_iroh_dispatch_times_out_and_connection_remains_usable() -> anyhow::Result<()> {
+    let mut builder = DogApp::builder();
+    builder.register_service("test_service", Arc::new(TestService));
+    let alpn = b"dogrs/test/deadline/0".to_vec();
+    let mut options = IrohOptions::new(alpn.clone()).relay_url("disabled");
+    options.request_timeout_secs = Some(1);
+    let router = builder.build().into_service(options).await?;
+    let client = Endpoint::builder(presets::N0)
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .bind()
+        .await?;
+    let conn = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client.connect(loopback_addr(router.endpoint()), &alpn),
+    )
+    .await??;
+    for id in ["stall", "healthy"] {
+        let (mut send, mut recv) = conn.open_bi().await?;
+        let request = DogRequest {
+            request_id: Some(id.into()),
+            transport: dog_core::DogTransportKind::Internal,
+            service: "test_service".into(),
+            method: DogMethod::Get,
+            id: Some(id.into()),
+            tenant: TenantContext::new("test"),
+            params: DogParams::default(),
+            payload: None,
+            metadata: HashMap::new(),
+        };
+        write_frame(&mut send, &serde_json::to_vec(&request)?).await?;
+        send.finish()?;
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(5), read_frame(&mut recv))
+                .await??;
+        let response: DogResponse = serde_json::from_slice(&response)?;
+        if id == "stall" {
+            assert!(response.metadata["error"]
+                .as_str()
+                .unwrap()
+                .contains("timed out"));
+        } else {
+            assert!(response.payload.is_some());
+        }
+    }
+    conn.close(0u32.into(), b"done");
+    client.close().await;
+    router.shutdown().await?;
+    Ok(())
 }
 
 /// Helper to read framed bytes (prefixed by 4-byte big-endian length)

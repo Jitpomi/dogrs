@@ -3,6 +3,7 @@ let socket = null;
 let reconnectTimer = null;
 let statsTimer = null;
 let activeRequests = new Map();
+let inFlightRequest = null;
 let devices = [];
 
 // DOM elements
@@ -175,6 +176,7 @@ function setupWebSocket() {
     socket.onopen = () => {
         logToConsole('WebSocket connection established.', null, 'system');
         wsStatusBadge.className = 'status-badge ws connected';
+        fetchDevices(); // Reconcile updates missed while disconnected.
         requestStats();
     };
     
@@ -199,6 +201,12 @@ function setupWebSocket() {
     socket.onclose = () => {
         logToConsole('WebSocket connection closed.', null, 'error');
         wsStatusBadge.className = 'status-badge ws disconnected';
+        inFlightRequest = null;
+        const pending = [...activeRequests.values()];
+        activeRequests.clear();
+        for (const callback of pending) {
+            callback({ error: 'Connection closed; the action outcome may be unknown. Refresh before retrying.' });
+        }
         
         // Reconnect logic
         if (!reconnectTimer) {
@@ -243,6 +251,11 @@ function handleWSBroadcast(broadcast) {
 function sendWSRequest(method, payload, callback) {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
         logToConsole('Cannot send WebSocket request: connection closed.', null, 'error');
+        callback?.({ error: 'Connection closed. Please reconnect before trying again.' });
+        return;
+    }
+    if (inFlightRequest !== null) {
+        callback?.({ error: 'Another action is running. Please wait for it to finish.' });
         return;
     }
     
@@ -272,11 +285,19 @@ function sendWSRequest(method, payload, callback) {
     }
     
     logToConsole(`WS SEND (${requestId})`, wsReq, 'ws-sent');
-    socket.send(JSON.stringify(wsReq));
+    inFlightRequest = requestId;
+    try {
+        socket.send(JSON.stringify(wsReq));
+    } catch (error) {
+        inFlightRequest = null;
+        activeRequests.delete(requestId);
+        callback?.({ error: 'Could not send the action. Refresh before retrying.' });
+    }
 }
 
 // Handle WebSocket responses
 function handleWSResponse(res) {
+    if (res.request_id === inFlightRequest) inFlightRequest = null;
     const callback = activeRequests.get(res.request_id);
     if (callback) {
         activeRequests.delete(res.request_id);
@@ -291,6 +312,7 @@ function handleWSResponse(res) {
 
 // Request real-time stats via WebSocket
 function requestStats() {
+    if (inFlightRequest !== null) return;
     sendWSRequest({ Custom: 'stats' }, {}, (res) => {
         if (res.error) {
             logToConsole(`Failed to fetch stats: ${res.error}`, null, 'error');

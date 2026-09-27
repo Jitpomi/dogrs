@@ -91,7 +91,9 @@ where
                 .ok_or_else(|| Status::invalid_argument("headers must be an object"))?;
             headers.insert("authorization".into(), token.into());
         }
-        let response = self.app.handle(req).await.map_err(status)?;
+        let response = crate::dispatch(&self.app, req, self.options.request_timeout_secs)
+            .await
+            .map_err(status)?;
         Ok(Response::new(proto::CallResponse {
             response_json: serde_json::to_vec(&response)
                 .map_err(|_| Status::internal("Could not encode response"))?,
