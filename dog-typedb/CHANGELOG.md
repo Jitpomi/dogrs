@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Pin/test TypeDB driver and server 3.13.6; remove unsupported compatibility claims.
+- Ignore literal/comment/variable keywords during automatic transaction routing.
+- Add `QueryOptions`, explicit-mode `execute_query_with_options`, adapter options, and schema-batch options.
+- Fail on answer/JSON-byte limits without committing writes; stop draining excess answers.
+- Apply a whole-operation deadline and propagate column-access errors.
+- Require every explicit schema file, preserve caller order, and reject duplicates/missing/empty files before opening the transaction.
+- Document uncertain commit outcomes and migration from search paths/truncated results.
+
+
 ## [0.1.8] — 2026-06-07 — TypeDB Driver 3.11 Compatibility
 
 ### Changed

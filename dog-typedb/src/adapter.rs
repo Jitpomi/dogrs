@@ -14,6 +14,7 @@ pub trait TypeDBState {
 pub struct TypeDBAdapter {
     driver: Arc<TypeDBDriver>,
     database: String,
+    options: crate::QueryOptions,
 }
 
 impl TypeDBAdapter {
@@ -21,7 +22,14 @@ impl TypeDBAdapter {
         Self {
             driver: state.driver().clone(),
             database: state.database().to_string(),
+            options: crate::QueryOptions::default(),
         }
+    }
+
+    pub fn with_options(mut self, options: crate::QueryOptions) -> Result<Self> {
+        options.validate()?;
+        self.options = options;
+        Ok(self)
     }
 
     /// Execute a write query (insert, delete, update operations)
@@ -31,7 +39,14 @@ impl TypeDBAdapter {
             .and_then(|q| q.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
 
-        crate::transactions::execute_write_query(&self.driver, &self.database, query).await
+        crate::execute_query_with_options(
+            &self.driver,
+            &self.database,
+            query,
+            crate::TransactionType::Write,
+            &self.options,
+        )
+        .await
     }
 
     /// Execute a read query (match operations)
@@ -42,7 +57,14 @@ impl TypeDBAdapter {
             .and_then(|q| q.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
 
-        crate::transactions::execute_read_transaction(&self.driver, &self.database, query).await
+        crate::execute_query_with_options(
+            &self.driver,
+            &self.database,
+            query,
+            crate::TransactionType::Read,
+            &self.options,
+        )
+        .await
     }
 
     /// Execute a schema query (define operations)
@@ -52,6 +74,13 @@ impl TypeDBAdapter {
             .and_then(|q| q.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'query' field"))?;
 
-        crate::transactions::execute_schema_query(&self.driver, &self.database, query).await
+        crate::execute_query_with_options(
+            &self.driver,
+            &self.database,
+            query,
+            crate::TransactionType::Schema,
+            &self.options,
+        )
+        .await
     }
 }
