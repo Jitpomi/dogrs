@@ -57,7 +57,10 @@ Only one child commit runs at a time within the original execution slot. A singl
 conflict in 64 operations therefore requires at most 13 attempts rather than 65;
 if every operation conflicts, the bounded worst case is 127 attempts. Transport errors,
 timeouts and malformed acknowledgements are **not** automatically replayed: their
-commit outcome may be unknown. A batch execution is bounded to five seconds. Optional `queue-diagnostics`
+commit outcome may be unknown. A batch execution, including all conflict splitting, is bounded to five seconds.
+If a later child times out, earlier confirmed child outcomes are preserved. The
+in-flight child is uncertain; children not yet attempted are reported separately
+and are not submitted after the deadline. Optional `queue-diagnostics`
 timings distinguish frame submission and final durable acknowledgement waiting;
 only the final acknowledgement establishes success.
 

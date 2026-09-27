@@ -116,12 +116,7 @@ impl BatchWriter {
                     } else {
                         crate::diagnostics::NATS_UPDATE_BATCH_EXECUTE
                     });
-                    let outcomes = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        execute(&context, &bucket, &groups),
-                    )
-                    .await
-                    .unwrap_or_else(|_| Err(error("timed out; commit outcome may be unknown")));
+                    let outcomes = execute(&context, &bucket, &groups).await;
                     match outcomes {
                         Ok(outcomes) => {
                             for (group, outcome) in groups.into_iter().zip(outcomes) {
@@ -253,6 +248,22 @@ async fn execute(
 }
 async fn execute_groups<'a, F, Fut>(
     groups: &'a [Group],
+    attempt: F,
+) -> QueueResult<Vec<QueueResult<Option<Vec<u64>>>>>
+where
+    F: FnMut(Vec<&'a Write>) -> Fut,
+    Fut: std::future::Future<Output = QueueResult<Option<Vec<u64>>>>,
+{
+    execute_groups_until(
+        groups,
+        tokio::time::Instant::now() + Duration::from_secs(5),
+        attempt,
+    )
+    .await
+}
+async fn execute_groups_until<'a, F, Fut>(
+    groups: &'a [Group],
+    deadline: tokio::time::Instant,
     mut attempt: F,
 ) -> QueueResult<Vec<QueueResult<Option<Vec<u64>>>>>
 where
@@ -266,8 +277,21 @@ where
     let mut pending = vec![groups];
     let mut outcomes = Vec::with_capacity(groups.len());
     while let Some(part) = pending.pop() {
+        // One deadline bounds all conflict splitting. Preserve already confirmed
+        // siblings instead of letting an outer timeout erase their outcomes.
+        if tokio::time::Instant::now() >= deadline {
+            outcomes.extend(groups[outcomes.len()..].iter().map(|_| {
+                Err(error(
+                    "batch deadline expired before this operation was attempted",
+                ))
+            }));
+            break;
+        }
         let writes: Vec<_> = part.iter().flat_map(|g| &g.writes).collect();
-        match attempt(writes).await {
+        match tokio::time::timeout_at(deadline, attempt(writes))
+            .await
+            .unwrap_or_else(|_| Err(error("timed out; commit outcome may be unknown")))
+        {
             Ok(Some(revisions)) => {
                 let mut offset = 0;
                 for group in part {
@@ -463,6 +487,68 @@ mod tests {
                 );
             }
         }
+    }
+    #[tokio::test]
+    async fn timeout_preserves_confirmed_siblings_and_does_not_attempt_pending_parts() {
+        let groups = groups(4);
+        let mut calls = Vec::new();
+        let outcomes = execute_groups_until(
+            &groups,
+            tokio::time::Instant::now() + Duration::from_millis(100),
+            |writes| {
+                let keys: Vec<_> = writes.iter().map(|w| w.key.clone()).collect();
+                calls.push(keys.clone());
+                async move {
+                    if writes.len() > 2 {
+                        Ok(None) // Definitively rejected; splitting is safe.
+                    } else if keys[0] == "metadata-0" {
+                        Ok(Some(vec![41, 42]))
+                    } else {
+                        // This operation was submitted, but its acknowledgement
+                        // never arrives. It must not erase the confirmed sibling.
+                        std::future::pending().await
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.len(), 4); // Root, left half, first job, second job.
+        assert_eq!(outcomes.len(), 4);
+        assert_eq!(outcomes[0].as_ref().unwrap(), &Some(vec![41, 42]));
+        assert!(outcomes[1]
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("outcome may be unknown"));
+        for outcome in &outcomes[2..] {
+            assert!(outcome
+                .as_ref()
+                .unwrap_err()
+                .to_string()
+                .contains("before this operation was attempted"));
+        }
+        assert!(calls
+            .iter()
+            .skip(1)
+            .all(|keys| !keys.iter().any(|key| key == "metadata-2")));
+    }
+    #[tokio::test]
+    async fn expired_batch_deadline_does_not_start_a_commit() {
+        let groups = groups(2);
+        let outcomes = execute_groups_until(&groups, tokio::time::Instant::now(), |_| {
+            panic!("an expired batch must not start a new commit");
+            #[allow(unreachable_code)]
+            std::future::ready(Ok(None))
+        })
+        .await
+        .unwrap();
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().all(|outcome| outcome
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("before this operation was attempted")));
     }
     async fn fixture() -> (jetstream::Context, kv::Store) {
         let client = async_nats::connect(std::env::var("DOGRS_NATS_URL").unwrap())
