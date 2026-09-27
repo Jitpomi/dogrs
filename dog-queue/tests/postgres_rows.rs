@@ -17,6 +17,14 @@ async fn backend() -> PostgresBackend {
 async fn schema_and_dispatch_bounds_are_validated_before_connecting() {
     for options in [
         PostgresOptions {
+            enqueue_batch_size: 0,
+            ..Default::default()
+        },
+        PostgresOptions {
+            enqueue_batch_size: 65,
+            ..Default::default()
+        },
+        PostgresOptions {
             schema: Some(String::new()),
             ..Default::default()
         },
@@ -644,7 +652,25 @@ async fn completion_waiting_on_row_lock_cannot_cross_lease_deadline() {
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
 async fn blocked_producers_do_not_starve_completion_on_default_pool() {
-    let backend = Arc::new(backend().await);
+    for batch_size in [1, 16] {
+        blocked_producers_preserve_worker_capacity(batch_size).await;
+    }
+}
+async fn blocked_producers_preserve_worker_capacity(batch_size: usize) {
+    let backend = Arc::new(
+        PostgresBackend::new_with_tls_options(
+            PostgresConfig {
+                connection_string: std::env::var("DOGRS_POSTGRES_URL").unwrap(),
+            },
+            tokio_postgres::NoTls,
+            PostgresOptions {
+                enqueue_batch_size: batch_size,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap(),
+    );
     let ctx = QueueCtx::new(format!("admission-{}", uuid::Uuid::new_v4()));
     let mut submissions = Vec::new();
     for n in 0..12 {
@@ -703,7 +729,10 @@ async fn blocked_producers_do_not_starve_completion_on_default_pool() {
                 .await
                 .unwrap()
                 .get(0);
-            if blocked >= 3 {
+            // Independent mode fills the three producer slots. Batched mode
+            // has one executing dispatcher; the other submissions wait outside
+            // the pool. Both must leave completion capacity available.
+            if blocked >= if batch_size == 1 { 3 } else { 1 } {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -993,4 +1022,101 @@ async fn invalid_postgres_text_does_not_poison_other_completions() {
             .as_deref(),
         Some("good")
     );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn concurrent_enqueue_batches_preserve_scoped_dedupe_payloads_and_schedules() {
+    let options = PostgresOptions {
+        max_connections: 16,
+        batch_concurrency: Some(2),
+        ..Default::default()
+    };
+    let mut peers = Vec::new();
+    for _ in 0..2 {
+        peers.push(Arc::new(
+            PostgresBackend::new_with_tls_options(
+                PostgresConfig {
+                    connection_string: std::env::var("DOGRS_POSTGRES_URL").unwrap(),
+                },
+                tokio_postgres::NoTls,
+                options.clone(),
+            )
+            .await
+            .unwrap(),
+        ));
+    }
+    let prefix = uuid::Uuid::new_v4().to_string();
+    let scheduled = chrono::Utc::now() + chrono::Duration::hours(1);
+    let mut tasks = tokio::task::JoinSet::new();
+    for n in 0usize..128 {
+        let backend = peers[n % 2].clone();
+        let prefix = prefix.clone();
+        tasks.spawn(async move {
+            let tenant = format!("{prefix}-{}", (n / 2) % 8);
+            let queue = format!("q{}", (n / 16) % 2);
+            let kind = format!("k{}", (n / 32) % 2);
+            let message = JobMessage::new(
+                &kind,
+                vec![
+                    n as u8;
+                    if n.is_multiple_of(8) {
+                        600 * 1024
+                    } else {
+                        65536
+                    }
+                ],
+                "bytes",
+                &queue,
+            )
+            .with_idempotency_key("same-key");
+            let message = if (n / 32).is_multiple_of(2) {
+                message.with_run_at(scheduled)
+            } else {
+                message
+            };
+            let id = backend
+                .enqueue(QueueCtx::new(&tenant), message)
+                .await
+                .unwrap();
+            (tenant, queue, kind, id)
+        });
+    }
+    let mut scopes = std::collections::HashMap::new();
+    while let Some(result) = tasks.join_next().await {
+        let (tenant, queue, kind, id) = result.unwrap();
+        if let Some(previous) = scopes.insert((tenant, queue, kind), id.clone()) {
+            assert_eq!(previous, id);
+        }
+    }
+    assert_eq!(scopes.len(), 32);
+    for ((tenant, queue, kind), id) in scopes {
+        let row = peers[0]
+            .get_record(QueueCtx::new(&tenant), id)
+            .await
+            .unwrap();
+        let n = row.message.payload_bytes[0] as usize;
+        assert_eq!(
+            row.message.payload_bytes,
+            vec![
+                n as u8;
+                if n.is_multiple_of(8) {
+                    600 * 1024
+                } else {
+                    65536
+                }
+            ]
+        );
+        assert_eq!(row.message.queue, queue);
+        assert_eq!(row.message.job_type, kind);
+        assert_eq!(row.tenant_id, tenant);
+        if (n / 32).is_multiple_of(2) {
+            assert_eq!(
+                row.message.run_at.timestamp_micros(),
+                scheduled.timestamp_micros()
+            );
+        } else {
+            assert_eq!(row.message.run_at, row.created_at);
+        }
+    }
 }

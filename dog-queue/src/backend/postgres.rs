@@ -9,6 +9,8 @@ use tokio_postgres::{types::Type, Client, NoTls, Transaction};
 mod claims;
 #[path = "postgres_completions.rs"]
 mod completions;
+#[path = "postgres_enqueues.rs"]
+mod enqueues;
 
 #[derive(Clone)]
 pub struct PostgresConfig {
@@ -28,13 +30,17 @@ pub struct PostgresOptions {
     /// one connection when possible) for worker operations. An explicit cap may
     /// use the full pool for producer-only deployments.
     pub enqueue_concurrency: Option<u32>,
+    /// Concurrent submissions per durable statement (1..=64), also bounded by
+    /// 512 KiB of payload per batch. One oversized job is submitted alone.
+    /// Set to 1 for independent commits.
+    pub enqueue_batch_size: usize,
     /// Maximum acknowledgments coalesced into one durable SQL statement (1..=64).
     /// Set to 1 for independent commits without cross-job row-lock coupling.
     pub completion_batch_size: usize,
     /// Maximum distinct-tenant claims per durable statement (1..=64).
     /// Set to 1 for independent claims. Same-tenant calls are always separated.
     pub claim_batch_size: usize,
-    /// Executing statements per claim/completion dispatcher. None uses one
+    /// Executing statements per enqueue/claim/completion dispatcher. None uses one
     /// quarter of the pool, capped at four. An explicit limit lets fixed shards
     /// share an application-wide statement budget without multiplying it.
     pub batch_concurrency: Option<usize>,
@@ -48,6 +54,7 @@ impl Default for PostgresOptions {
             max_connections: 4,
             operation_timeout: Duration::from_secs(10),
             enqueue_concurrency: None,
+            enqueue_batch_size: 16,
             completion_batch_size: 64,
             claim_batch_size: 16,
             batch_concurrency: None,
@@ -82,6 +89,7 @@ pub struct PostgresStore {
     enqueue_slots: tokio::sync::Semaphore,
     completions: Option<completions::Completions>,
     claims: Option<claims::Claims>,
+    enqueues: Option<enqueues::Enqueues>,
 }
 pub type PostgresBackend = DurableBackend<PostgresStore>;
 fn error(e: impl std::fmt::Display + 'static) -> QueueError {
@@ -142,6 +150,7 @@ impl PostgresBackend {
             || options.operation_timeout.is_zero()
             || !(1..=64).contains(&options.completion_batch_size)
             || !(1..=64).contains(&options.claim_batch_size)
+            || !(1..=64).contains(&options.enqueue_batch_size)
             || options
                 .batch_concurrency
                 .is_some_and(|n| n == 0 || n > options.max_connections as usize)
@@ -219,10 +228,21 @@ impl PostgresBackend {
                 options.operation_timeout,
             )
         });
+        let enqueues = (options.enqueue_batch_size > 1).then(|| {
+            enqueues::Enqueues::start(
+                pool.clone(),
+                options
+                    .batch_concurrency
+                    .unwrap_or_else(|| ((options.max_connections as usize) / 4).clamp(1, 4)),
+                options.enqueue_batch_size,
+                options.operation_timeout,
+            )
+        });
         let store = PostgresStore {
             pool,
             completions,
             claims,
+            enqueues,
             timeout: options.operation_timeout,
             enqueue_slots: tokio::sync::Semaphore::new(options.enqueue_concurrency.unwrap_or_else(
                 || {
@@ -380,6 +400,9 @@ impl PostgresStore {
             Operation::Enqueue(_) => Some(self.enqueue_slots.acquire().await.map_err(error)?),
             _ => None,
         };
+        if let (Operation::Enqueue(message), Some(enqueues)) = (op, &self.enqueues) {
+            return Ok(Outcome::Id(enqueues.submit(tenant, message).await?));
+        }
         let mut client = self.pool.get().await.map_err(error)?;
         if let Operation::Enqueue(message) = op {
             let mut state = TenantState::default();
