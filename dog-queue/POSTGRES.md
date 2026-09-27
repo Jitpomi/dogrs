@@ -24,10 +24,50 @@ also bounded. A timeout can have an unknown commit outcome: use idempotency keys
 and reconcile status rather than blindly creating a new logical job.
 
 Lease checks and transitions read PostgreSQL time after acquiring row locks.
-Worker wall clocks do not decide lease ownership. Caller-specified absolute
-`run_at` and retry timestamps still require the application to supply correct
-UTC times. Clock jumps on the database host are an operational concern; this
+Worker wall clocks do not decide lease ownership. `JobMessage::new` uses the
+clock-independent `JobMessage::IMMEDIATE` marker (Unix epoch), which PostgreSQL
+resolves to database time when inserting the job. An immediate submission cannot
+be delayed merely because its producer's clock is ahead. Explicit `with_run_at`
+timestamps remain absolute UTC, even if they appear past-dated to a fast producer.
+For an immediate retry, pass `Some(JobMessage::IMMEDIATE)`. Other absolute retry
+timestamps still require the application to supply correct UTC times.
+Clock jumps on the database host are an operational concern; this
 adapter does not claim to solve arbitrary changes to the authoritative clock.
+
+## Fixed storage schemas
+
+`PostgresOptions.schema` selects an isolated storage namespace. Startup creates it
+transactionally when needed; every connection, including a reconnect, restores
+that schema without falling back to `public`. Names are quoted as identifiers,
+limited to 63 bytes, and cannot name PostgreSQL system schemas. Creating a new
+schema requires database CREATE permission; an existing schema needs the normal
+table/function/trigger permissions. `None` preserves the connection's configured
+`search_path` and existing storage behavior.
+
+Separate schemas have separate physical job and large-payload tables. The
+provider-neutral `ShardedBackend` can route tenants over a fixed list of these
+backends. For example, four backends with distinct schema names can share a total
+64-connection budget using these options for each:
+
+```rust
+# use dog_queue::backend::postgres::PostgresOptions;
+let options = PostgresOptions {
+    schema: Some("jobs_0".into()), // jobs_1, jobs_2, jobs_3 for the other stores
+    max_connections: 16,
+    batch_concurrency: Some(1),
+    ..Default::default()
+};
+```
+
+Place their `Arc<PostgresBackend>` values in a fixed order in
+`ShardedBackend::new`. This keeps the total producer limit at 48 and executing
+claim/completion statements at four per kind across the four stores. Pool budgets
+multiply across application instances. This is a supported topology, not a
+throughput guarantee; qualify it on the deployment's actual workload.
+
+Schema names, shard count and shard order identify persisted storage. Opening a
+different schema does not move existing jobs. Drain or perform a verified offline
+tenant migration before changing a live routing topology.
 
 ## Offline upgrade from the v1 tenant ledger
 
@@ -94,6 +134,12 @@ to 1 for independent claims. Each SQL batch includes at most one request per
 tenant, including when callers request overlapping queues. This prevents two
 requests in the same statement from leasing the same row. Row locking uses
 `SKIP LOCKED`, and ownership is returned only after the statement commits.
+
+`PostgresOptions.batch_concurrency` optionally limits executing statements per
+dispatcher (claim and completion separately), from one through the pool size.
+The default remains one quarter of the pool, capped at four. Use explicit budgets
+when composing multiple backends so adding stores does not silently multiply
+worker statement concurrency.
 
 PostgreSQL cannot store NUL characters in text or JSONB strings. Tenant, queue,
 lease, result and metadata inputs are checked before submission so an invalid

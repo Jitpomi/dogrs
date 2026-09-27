@@ -12,6 +12,235 @@ async fn backend() -> PostgresBackend {
     .await
     .unwrap()
 }
+
+#[tokio::test]
+async fn schema_and_dispatch_bounds_are_validated_before_connecting() {
+    for options in [
+        PostgresOptions {
+            schema: Some(String::new()),
+            ..Default::default()
+        },
+        PostgresOptions {
+            schema: Some("pg_catalog".into()),
+            ..Default::default()
+        },
+        PostgresOptions {
+            schema: Some("bad\0name".into()),
+            ..Default::default()
+        },
+        PostgresOptions {
+            schema: Some("a".repeat(64)),
+            ..Default::default()
+        },
+        PostgresOptions {
+            batch_concurrency: Some(0),
+            ..Default::default()
+        },
+        PostgresOptions {
+            batch_concurrency: Some(5),
+            max_connections: 4,
+            ..Default::default()
+        },
+    ] {
+        let result = PostgresBackend::new_with_tls_options(
+            PostgresConfig {
+                connection_string: "intentionally invalid connection config".into(),
+            },
+            tokio_postgres::NoTls,
+            options,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(dog_queue::QueueError::InvalidConfig(_))
+        ));
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL with CREATE SCHEMA permission"]
+async fn explicit_schemas_isolate_storage_and_survive_reconnect() {
+    async fn scoped(uri: &str, schema: &str) -> PostgresBackend {
+        PostgresBackend::new_with_tls_options(
+            PostgresConfig {
+                connection_string: uri.into(),
+            },
+            tokio_postgres::NoTls,
+            PostgresOptions {
+                schema: Some(schema.into()),
+                batch_concurrency: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+    let base = std::env::var("DOGRS_POSTGRES_URL").unwrap();
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let app = format!("dogrs-schema-{tag}");
+    let uri = format!("{base} application_name={app}");
+    let names = [format!("dogrs_{tag}_\"a"), format!("dogrs_{tag}_b")];
+    // Concurrent creation/opening of one namespace must converge on one store.
+    let (a, peer, b) = tokio::join!(
+        scoped(&uri, &names[0]),
+        scoped(&uri, &names[0]),
+        scoped(&uri, &names[1])
+    );
+    let ctx = QueueCtx::new("same-tenant");
+    let message = |byte| {
+        JobMessage::new("schema", vec![byte; 65536], "bytes", "q").with_idempotency_key("same-key")
+    };
+    let id_a = a.enqueue(ctx.clone(), message(1)).await.unwrap();
+    let id_b = b.enqueue(ctx.clone(), message(2)).await.unwrap();
+    assert_ne!(
+        id_a, id_b,
+        "idempotency must be scoped to the configured store"
+    );
+    assert_eq!(
+        peer.get_record(ctx.clone(), id_a.clone())
+            .await
+            .unwrap()
+            .message
+            .payload_bytes,
+        vec![1; 65536]
+    );
+    assert!(matches!(
+        a.get_record(ctx.clone(), id_b.clone()).await,
+        Err(dog_queue::QueueError::JobNotFound(_))
+    ));
+    let job = peer.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+    a.ack_complete(ctx.clone(), id_a.clone(), job.lease_token, None)
+        .await
+        .unwrap();
+    let (admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let connection = tokio::spawn(connection);
+    let stores = admin.query(
+        "SELECT c.reltoastrelid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relname='dogrs_queue_jobs_v2' AND n.nspname=ANY($1)",
+        &[&names.as_slice()],
+    ).await.unwrap();
+    assert_eq!(stores.len(), 2);
+    assert_ne!(
+        stores[0].get::<_, u32>(0),
+        stores[1].get::<_, u32>(0),
+        "schemas must own separate physical payload stores"
+    );
+    admin
+        .execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name=$1",
+            &[&app],
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let (Ok(left), Ok(right)) = (
+                a.get_record(ctx.clone(), id_a.clone()).await,
+                b.get_record(ctx.clone(), id_b.clone()).await,
+            ) {
+                assert!(left.status.is_terminal());
+                assert_eq!(left.message.payload_bytes, vec![1; 65536]);
+                assert_eq!(right.message.payload_bytes, vec![2; 65536]);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("reconnections must restore the configured storage schema");
+    drop((a, peer, b));
+    for name in names {
+        admin
+            .batch_execute(&format!(
+                "DROP SCHEMA \"{}\" CASCADE",
+                name.replace('"', "\"\"")
+            ))
+            .await
+            .unwrap();
+    }
+    connection.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn immediate_jobs_use_server_time_without_advancing_explicit_schedules() {
+    use tokio_postgres::types::Type;
+    let backend = backend().await;
+    let tenant = QueueCtx::new(format!("clock-{}", uuid::Uuid::new_v4()));
+    let (client, connection) = tokio_postgres::connect(
+        &std::env::var("DOGRS_POSTGRES_URL").unwrap(),
+        tokio_postgres::NoTls,
+    )
+    .await
+    .unwrap();
+    let connection = tokio::spawn(connection);
+    let server_now: chrono::DateTime<chrono::Utc> = client
+        .query_one("SELECT clock_timestamp()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    // Model the envelope produced by a caller whose clock is one hour ahead.
+    // Exercise the real admission SQL, not a sleep or a changed database clock.
+    let caller_now = server_now + chrono::Duration::hours(1);
+    for future in [false, true] {
+        let requested = if future {
+            // Future on the DB, but past on the simulated fast caller.
+            server_now + chrono::Duration::minutes(1)
+        } else {
+            JobMessage::IMMEDIATE
+        };
+        let id = JobId::new();
+        let payload = vec![17u8; 65536];
+        let message = JobMessage::new("clock", vec![], "bytes", "q")
+            .with_run_at(requested)
+            .with_idempotency_key(id.to_string());
+        let mut record = JobRecord::new(id.clone(), &tenant.tenant_id, message.clone());
+        record.created_at = caller_now;
+        record.updated_at = caller_now;
+        let state = serde_json::json!({"record":record,"token":null});
+        client
+            .query_typed_one(
+                include_str!("../src/backend/postgres_enqueue.sql"),
+                &[
+                    (&tenant.tenant_id, Type::TEXT),
+                    (&id.as_str(), Type::TEXT),
+                    (&state, Type::JSONB),
+                    (&message.queue, Type::TEXT),
+                    (&message.job_type, Type::TEXT),
+                    (&message.idempotency_key, Type::TEXT),
+                    (&i32::from(message.priority.as_u8()), Type::INT4),
+                    (&requested, Type::TIMESTAMPTZ),
+                    (&payload, Type::BYTEA),
+                ],
+            )
+            .await
+            .unwrap();
+        let stored = backend
+            .get_record(tenant.clone(), id.clone())
+            .await
+            .unwrap();
+        let claim = backend.dequeue(tenant.clone(), &["q"]).await.unwrap();
+        if future {
+            assert!(
+                claim.is_none(),
+                "explicit future schedule must be preserved"
+            );
+            assert_eq!(stored.message.run_at, requested);
+        } else {
+            let claim =
+                claim.expect("caller-due job must be immediately claimable on server clock");
+            assert_eq!(claim.record.job_id, id);
+            assert_eq!(claim.record.message.payload_bytes, payload);
+            assert_eq!(stored.message.run_at, stored.created_at);
+            backend
+                .ack_complete(tenant.clone(), id, claim.lease_token, None)
+                .await
+                .unwrap();
+        }
+    }
+    connection.abort();
+}
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
 async fn parallel_claims_do_not_serialize_unrelated_jobs_or_duplicate_owners() {
@@ -231,8 +460,26 @@ async fn retained_history_does_not_enter_the_claim_scan() {
         .unwrap();
     let plan: serde_json::Value=client.query_one("EXPLAIN (ANALYZE, FORMAT JSON) SELECT id FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND queue=ANY($2) AND eligible_at <= statement_timestamp() AND status IN ('enqueued','retrying') ORDER BY priority DESC,created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED", &[&tenant.tenant_id,&vec!["q"]]).await.unwrap().get(0);
     let explain = plan.to_string();
+    // PostgreSQL assigns child indexes their own names on a partitioned table.
+    // Accept only the actual descendants of our active-job indexes, not an
+    // arbitrary index that might scan retained terminal history.
+    let indexes = client
+        .query(
+            "WITH RECURSIVE indexes(oid) AS (
+               SELECT oid FROM pg_class WHERE oid IN
+                 ('dogrs_queue_claim_v2'::regclass,'dogrs_queue_runnable_v2'::regclass)
+               UNION ALL
+               SELECT i.inhrelid FROM pg_inherits i JOIN indexes p ON i.inhparent=p.oid
+             ) SELECT c.relname::text FROM indexes i JOIN pg_class c ON c.oid=i.oid",
+            &[],
+        )
+        .await
+        .unwrap();
     assert!(
-        explain.contains("dogrs_queue_claim_v2") || explain.contains("dogrs_queue_runnable_v2"),
+        indexes.iter().any(|row| {
+            let name: String = row.get(0);
+            explain.contains(&format!("\"Index Name\":\"{name}\""))
+        }),
         "claim must use an active-job index: {explain}"
     );
     assert_eq!(
@@ -289,7 +536,7 @@ async fn binary_payload_survives_heartbeat_retry_and_completion() {
             id.clone(),
             first.lease_token,
             "retry".into(),
-            Some(chrono::Utc::now()),
+            Some(JobMessage::IMMEDIATE),
         )
         .await
         .unwrap();

@@ -17,6 +17,11 @@ pub struct PostgresConfig {
 /// PostgreSQL-specific tuning. It is not part of the portable queue contract.
 #[derive(Clone)]
 pub struct PostgresOptions {
+    /// Optional isolated storage schema, created transactionally at startup.
+    /// Combine fixed schemas with ShardedBackend to distribute table/TOAST
+    /// contention. Schema names and shard order are persistent storage topology.
+    /// None preserves the connection's configured search_path.
+    pub schema: Option<String>,
     pub max_connections: u32,
     pub operation_timeout: Duration,
     /// Producer concurrency cap. None reserves a quarter of the pool (at least
@@ -29,17 +34,23 @@ pub struct PostgresOptions {
     /// Maximum distinct-tenant claims per durable statement (1..=64).
     /// Set to 1 for independent claims. Same-tenant calls are always separated.
     pub claim_batch_size: usize,
+    /// Executing statements per claim/completion dispatcher. None uses one
+    /// quarter of the pool, capped at four. An explicit limit lets fixed shards
+    /// share an application-wide statement budget without multiplying it.
+    pub batch_concurrency: Option<usize>,
     /// Explicit offline v1 -> v2 migration. Stop every old worker/API first.
     pub migrate_legacy: bool,
 }
 impl Default for PostgresOptions {
     fn default() -> Self {
         Self {
+            schema: None,
             max_connections: 4,
             operation_timeout: Duration::from_secs(10),
             enqueue_concurrency: None,
             completion_batch_size: 64,
             claim_batch_size: 16,
+            batch_concurrency: None,
             migrate_legacy: false,
         }
     }
@@ -116,16 +127,30 @@ impl PostgresBackend {
         T::TlsConnect: Send,
         <T::TlsConnect as tokio_postgres::tls::TlsConnect<tokio_postgres::Socket>>::Future: Send,
     {
+        if options.schema.as_ref().is_some_and(|name| {
+            name.is_empty()
+                || name.len() > 63
+                || name.contains('\0')
+                || name.starts_with("pg_")
+                || name == "information_schema"
+        }) {
+            return Err(QueueError::InvalidConfig(
+                "PostgreSQL schema must be a non-system name of 1..=63 bytes without NUL".into(),
+            ));
+        }
         if options.max_connections == 0
             || options.operation_timeout.is_zero()
             || !(1..=64).contains(&options.completion_batch_size)
             || !(1..=64).contains(&options.claim_batch_size)
             || options
+                .batch_concurrency
+                .is_some_and(|n| n == 0 || n > options.max_connections as usize)
+            || options
                 .enqueue_concurrency
                 .is_some_and(|n| n == 0 || n > options.max_connections)
         {
             return Err(QueueError::InvalidConfig(
-                "positive pool size and timeout required; enqueue concurrency must be within pool size; batch sizes must be 1..=64".into(),
+                "positive pool size and timeout required; enqueue concurrency must be within pool size; batch sizes must be 1..=64 and batch concurrency within pool size".into(),
             ));
         }
         let statement_timeout = options
@@ -134,10 +159,12 @@ impl PostgresBackend {
             .min(i32::MAX as u128)
             .max(1)
             .to_string();
+        let schema = options.schema.clone();
         let connect: Connector = Arc::new(move || {
             let uri = config.connection_string.clone();
             let tls = tls.clone();
             let statement_timeout = statement_timeout.clone();
+            let schema = schema.clone();
             Box::pin(async move {
                 let (client, connection) =
                     tokio_postgres::connect(&uri, tls).await.map_err(error)?;
@@ -153,6 +180,15 @@ impl PostgresBackend {
                     )
                     .await
                     .map_err(error)?;
+                if let Some(schema) = schema {
+                    client
+                        .query_one(
+                            "SELECT set_config('search_path', quote_ident($1) || ', pg_catalog', false)",
+                            &[&schema],
+                        )
+                        .await
+                        .map_err(error)?;
+                }
                 Ok(client)
             })
         });
@@ -166,7 +202,9 @@ impl PostgresBackend {
         let completions = (options.completion_batch_size > 1).then(|| {
             completions::Completions::start(
                 pool.clone(),
-                ((options.max_connections as usize) / 4).clamp(1, 4),
+                options
+                    .batch_concurrency
+                    .unwrap_or_else(|| ((options.max_connections as usize) / 4).clamp(1, 4)),
                 options.completion_batch_size,
                 options.operation_timeout,
             )
@@ -174,7 +212,9 @@ impl PostgresBackend {
         let claims = (options.claim_batch_size > 1).then(|| {
             claims::Claims::start(
                 pool.clone(),
-                ((options.max_connections as usize) / 4).clamp(1, 4),
+                options
+                    .batch_concurrency
+                    .unwrap_or_else(|| ((options.max_connections as usize) / 4).clamp(1, 4)),
                 options.claim_batch_size,
                 options.operation_timeout,
             )
@@ -193,9 +233,12 @@ impl PostgresBackend {
                 },
             ) as usize),
         };
-        tokio::time::timeout(store.timeout, store.initialize(options.migrate_legacy))
-            .await
-            .map_err(|_| error("PostgreSQL schema initialization timed out"))??;
+        tokio::time::timeout(
+            store.timeout,
+            store.initialize(options.migrate_legacy, options.schema.as_deref()),
+        )
+        .await
+        .map_err(|_| error("PostgreSQL schema initialization timed out"))??;
         Ok(Self {
             store,
             lease_duration: Duration::from_secs(300),
@@ -219,7 +262,7 @@ async fn schema_ready(client: &impl tokio_postgres::GenericClient) -> QueueResul
 }
 
 impl PostgresStore {
-    async fn initialize(&self, migrate: bool) -> QueueResult<()> {
+    async fn initialize(&self, migrate: bool, schema: Option<&str>) -> QueueResult<()> {
         let mut client = self.pool.get().await.map_err(error)?;
         if schema_ready(&*client).await? {
             return Ok(());
@@ -233,6 +276,16 @@ impl PostgresStore {
         .map_err(error)?;
         if schema_ready(&tx).await? {
             return tx.commit().await.map_err(error);
+        }
+        if let Some(schema) = schema {
+            // quote_ident handles the connection setting; double embedded quotes
+            // here because PostgreSQL DDL cannot bind an identifier parameter.
+            tx.batch_execute(&format!(
+                "CREATE SCHEMA IF NOT EXISTS \"{}\"",
+                schema.replace('"', "\"\"")
+            ))
+            .await
+            .map_err(error)?;
         }
         tx.batch_execute(include_str!("postgres_schema.sql"))
             .await

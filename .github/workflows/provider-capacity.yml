@@ -45,6 +45,11 @@ on:
         type: choice
         options: ['0', '16', 'compare']
         default: '0'
+      postgres_shards:
+        description: Fixed PostgreSQL storage schemas sharing the total 64-connection budget
+        type: choice
+        options: ['1', '4', '16', 'compare']
+        default: '1'
       workers_per_tenant:
         description: Worker concurrency (auto preserves the baseline)
         type: choice
@@ -74,6 +79,15 @@ jobs:
           if [ "$PRODUCER_CAP" != none ]; then
             export DOGRS_PG_ENQUEUE_CONCURRENCY="$PRODUCER_CAP"
           fi
+          if [ "$PG_SHARDS" = compare ]; then
+            test "$BACKEND" = postgres
+            test "$DOGRS_PG_FIXTURE_PARTITIONS" = 0
+            status=0
+            for shards in 1 4 16 16 4 1; do
+              DOGRS_CAPACITY_SHARDS="$shards" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
+          fi
           if [ "$DOGRS_PG_FIXTURE_PARTITIONS" = compare ]; then
             test "$BACKEND" = postgres
             status=0
@@ -94,8 +108,9 @@ jobs:
           DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
           DOGRS_PG_PROFILE: ${{ inputs.profile_postgres && '1' || '0' }}
           DOGRS_PG_FIXTURE_PARTITIONS: ${{ inputs.postgres_fixture_partitions || '0' }}
+          PG_SHARDS: ${{ inputs.postgres_shards || '1' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
-          DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '16') || '1' }}
+          DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '16') || (matrix.backend == 'postgres' && inputs.postgres_shards != 'compare' && inputs.postgres_shards) || '1' }}
       - name: Explain capacity result
         if: always()
         run: |

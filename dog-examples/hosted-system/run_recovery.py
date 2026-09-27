@@ -38,6 +38,7 @@ try:
   'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
   'postgres_wait_sampling':os.environ.get('DOGRS_PG_PROFILE')=='1',
   'postgres_fixture_partitions':int(os.environ.get('DOGRS_PG_FIXTURE_PARTITIONS','0')),
+  'storage_shards':int(os.environ.get('DOGRS_CAPACITY_SHARDS','1')),
   'measurement':a.admission_mode or ('queue-capacity' if a.capacity else 'recovery'),
   'comparison_tenant':os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT') if a.capacity else None,
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),

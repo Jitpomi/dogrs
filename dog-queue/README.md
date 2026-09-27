@@ -7,7 +7,7 @@ Tenant-scoped jobs with leases, retries, cancellation and typed handlers.
 | Backend | Job state | Feature |
 | --- | --- | --- |
 | Memory | Process memory; lost on restart | default |
-| PostgreSQL | Transactional, versioned tenant records | `postgres` |
+| PostgreSQL | Indexed per-job rows; optional isolated storage schemas | `postgres` |
 | Redis | Atomic compare-and-swap; enable AOF and replication | `redis` |
 | NATS | File-backed JetStream KV with revision checks | `nats` |
 | RabbitMQ | Durable ledger plus confirmed AMQP wakeups | `rabbitmq` |

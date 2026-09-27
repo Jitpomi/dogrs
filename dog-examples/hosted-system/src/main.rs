@@ -255,22 +255,69 @@ async fn main() -> Result<()> {
                     uri.contains("127.0.0.1") || uri.contains("localhost"),
                     "local capacity requires loopback"
                 );
+                let mut options = dog_queue::backend::postgres::PostgresOptions {
+                    max_connections: std::env::var("DOGRS_PG_POOL_SIZE")
+                        .unwrap_or_else(|_| "64".into())
+                        .parse()?,
+                    enqueue_concurrency: std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY")
+                        .ok()
+                        .map(|n| n.parse())
+                        .transpose()?,
+                    operation_timeout: Duration::from_secs(10),
+                    ..Default::default()
+                };
+                let shards: u32 = std::env::var("DOGRS_CAPACITY_SHARDS")
+                    .unwrap_or_else(|_| "1".into())
+                    .parse()?;
+                anyhow::ensure!(
+                    (1..=16).contains(&shards),
+                    "PostgreSQL shards must be 1..=16"
+                );
+                if shards > 1 {
+                    anyhow::ensure!(
+                        role == "capacity-local",
+                        "sharded topology is for the capacity fixture"
+                    );
+                    anyhow::ensure!(
+                        options.max_connections >= shards
+                            && options.max_connections.is_multiple_of(shards),
+                        "total pool size must divide evenly across shards"
+                    );
+                    options.max_connections /= shards;
+                    options.batch_concurrency = Some((4 / shards as usize).max(1));
+                    if let Some(cap) = options.enqueue_concurrency {
+                        anyhow::ensure!(
+                            cap >= shards && cap.is_multiple_of(shards),
+                            "producer cap must divide evenly across shards"
+                        );
+                        options.enqueue_concurrency = Some(cap / shards);
+                    }
+                    let mut backends = Vec::new();
+                    for shard in 0..shards {
+                        options.schema = Some(format!("dogrs_capacity_{shard}"));
+                        backends.push(Arc::new(
+                            dog_queue::backend::postgres::PostgresBackend::new_with_tls_options(
+                                dog_queue::backend::postgres::PostgresConfig {
+                                    connection_string: uri.clone(),
+                                },
+                                tokio_postgres::NoTls,
+                                options.clone(),
+                            )
+                            .await?,
+                        ));
+                    }
+                    return run_local(
+                        dog_queue::backend::sharded::ShardedBackend::new(backends)?,
+                        &role,
+                    )
+                    .await;
+                }
                 let backend = dog_queue::backend::postgres::PostgresBackend::new_with_tls_options(
                     dog_queue::backend::postgres::PostgresConfig {
                         connection_string: uri,
                     },
                     tokio_postgres::NoTls,
-                    dog_queue::backend::postgres::PostgresOptions {
-                        max_connections: std::env::var("DOGRS_PG_POOL_SIZE")
-                            .unwrap_or_else(|_| "64".into())
-                            .parse()?,
-                        enqueue_concurrency: std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY")
-                            .ok()
-                            .map(|n| n.parse())
-                            .transpose()?,
-                        operation_timeout: Duration::from_secs(10),
-                        ..Default::default()
-                    },
+                    options,
                 )
                 .await?;
                 return run_local(
