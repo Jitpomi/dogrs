@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Validate built-in field values through their Rust/Serde types, reject unknown
+  fields, and honor nullable types consistently on partial updates.
+- Normalize before validating each write method; isolate PATCH from create rules
+  and reject PATCH when no patch schema is declared.
+- Reject malformed/unknown/duplicate macro options and unsupported schemas at
+  compile time instead of silently omitting validation.
+- Add `max_len`, PATCH normalization, executable documentation and regression
+  coverage. See dog-schema's migration notes for stricter input behavior.
+
 ## [0.1.8] — 2026-06-07 — syn 2 Migration
 
 ### Changed

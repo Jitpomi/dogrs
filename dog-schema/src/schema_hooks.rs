@@ -157,10 +157,9 @@ where
 
         let meta = HookMeta::from_ctx(ctx);
 
-        let data = ctx
-            .data
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("ValidateData requires ctx.data on write methods"))?;
+        let data = ctx.data.as_ref().ok_or_else(|| {
+            crate::schema_error("Schema validation failed", "request data is required")
+        })?;
 
         (self.validator)(data, &meta)
     }
@@ -215,10 +214,9 @@ where
         let meta = HookMeta::from_ctx(ctx);
 
         // then mutably borrow data (no ctx immutable borrow needed now)
-        let data = ctx
-            .data
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("ResolveData requires ctx.data on write methods"))?;
+        let data = ctx.data.as_mut().ok_or_else(|| {
+            crate::schema_error("Schema validation failed", "request data is required")
+        })?;
 
         (self.resolver)(data, &meta)
     }
@@ -233,7 +231,7 @@ where
 #[must_use = "call .check() to propagate validation errors"]
 #[derive(Default)]
 pub struct Rules {
-    errors: Vec<anyhow::Error>,
+    errors: Vec<(String, String)>,
 }
 
 impl Rules {
@@ -244,8 +242,7 @@ impl Rules {
     /// Fails if `v`, after trimming whitespace, is empty.
     pub fn non_empty(mut self, field: &str, v: &str) -> Self {
         if v.trim().is_empty() {
-            self.errors
-                .push(anyhow::anyhow!("'{field}' must not be empty"));
+            self.errors.push((field.into(), "must not be empty".into()));
         }
         self
     }
@@ -255,7 +252,7 @@ impl Rules {
     pub fn min_len(mut self, field: &str, v: &str, n: usize) -> Self {
         if v.trim().chars().count() < n {
             self.errors
-                .push(anyhow::anyhow!("'{field}' must be at least {n} chars"));
+                .push((field.into(), format!("must be at least {n} chars")));
         }
         self
     }
@@ -264,7 +261,7 @@ impl Rules {
     pub fn max_len(mut self, field: &str, v: &str, n: usize) -> Self {
         if v.trim().chars().count() > n {
             self.errors
-                .push(anyhow::anyhow!("'{field}' must be at most {n} chars"));
+                .push((field.into(), format!("must be at most {n} chars")));
         }
         self
     }
@@ -281,10 +278,14 @@ impl Rules {
             let msg = self
                 .errors
                 .iter()
-                .map(|e| format!("- {e}"))
+                .map(|(field, message)| format!("- '{field}' {message}"))
                 .collect::<Vec<_>>()
                 .join("\n");
-            Err(anyhow::anyhow!("Schema validation failed:\n{msg}"))
+            let mut errors = crate::SchemaErrors::new();
+            for (field, message) in self.errors {
+                errors.push_field(&field, message);
+            }
+            Err(errors.into_unprocessable_anyhow(&format!("Schema validation failed:\n{msg}")))
         }
     }
 }
@@ -577,7 +578,12 @@ mod tests {
         let hook = ValidateData::<String, ()>::new(|_, _| Ok(()));
         let mut ctx = make_ctx(ServiceMethodKind::Create, None);
         let err = hook.run(&mut ctx).await.unwrap_err();
-        assert!(err.to_string().contains("ValidateData requires ctx.data"));
+        let dog = dog_core::errors::DogError::from_anyhow(&err).unwrap();
+        assert_eq!(dog.code(), 422);
+        assert_eq!(
+            dog.errors.as_ref().unwrap()["_schema"][0],
+            "request data is required"
+        );
     }
 
     // ── ResolveData ────────────────────────────────────────────────────────
@@ -610,7 +616,12 @@ mod tests {
         let hook = ResolveData::<String, ()>::new(|_, _| Ok(()));
         let mut ctx = make_ctx(ServiceMethodKind::Create, None);
         let err = hook.run(&mut ctx).await.unwrap_err();
-        assert!(err.to_string().contains("ResolveData requires ctx.data"));
+        let dog = dog_core::errors::DogError::from_anyhow(&err).unwrap();
+        assert_eq!(dog.code(), 422);
+        assert_eq!(
+            dog.errors.as_ref().unwrap()["_schema"][0],
+            "request data is required"
+        );
     }
 
     // ── SchemaBuilder / SchemaHooksExt ─────────────────────────────────────

@@ -3,7 +3,7 @@ name = "dog-schema-macros"
 version = "0.2.0"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
-description = "Procedural macros for DogRS schema generation - derive macros for validation and serialization"
+description = "Attribute macros for DogRS service validation and normalization"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Jitpomi/dogrs"
 documentation = "https://docs.rs/dog-schema-macros"
@@ -17,7 +17,4 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1"
 quote = "1"
-# TODO: migrate to syn 2 — syn 1 forces double-compilation when a downstream crate
-# also uses syn 2 (which is now the common case). Requires rewriting all
-# parse_macro_input!/AttributeArgs/NestedMeta usage to syn 2 APIs.
 syn = { version = "2", features = ["full", "extra-traits"] }

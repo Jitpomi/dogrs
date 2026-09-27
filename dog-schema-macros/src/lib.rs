@@ -1,614 +1,414 @@
+//! Implementation of `dog_schema::schema`. See dog-schema for the public API.
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{
-    parse_macro_input, spanned::Spanned, Attribute, Expr, ExprLit, ItemMod, Lit, LitBool, LitStr,
-    Meta,
-};
+use quote::{format_ident, quote};
+use syn::{ext::IdentExt, parse_macro_input, spanned::Spanned, ItemMod, LitStr, Meta};
 
-// ---------------------------------------------------------------------------
-// Top-level attribute args parser  (#[schema(service = "...", ...)])
-// ---------------------------------------------------------------------------
 struct SchemaArgs {
-    service: Option<LitStr>,
-    error_message: Option<LitStr>,
-    backend: Option<LitStr>,
+    service: LitStr,
+    message: LitStr,
+    backend: String,
 }
-
 impl syn::parse::Parse for SchemaArgs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let mut service = None;
-        let mut error_message = None;
-        let mut backend = Option::None;
-
-        let metas = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated(input)?;
-        for meta in metas {
-            if let Meta::NameValue(nv) = meta {
-                let key = nv
-                    .path
-                    .get_ident()
-                    .map(|i| i.to_string())
-                    .unwrap_or_default();
-                if let Expr::Lit(ExprLit {
-                    lit: Lit::Str(s), ..
-                }) = nv.value
-                {
-                    match key.as_str() {
-                        "service" => service = Some(s),
-                        "error_message" => error_message = Some(s),
-                        "backend" => backend = Some(s),
-                        _ => {}
-                    }
-                }
+        let mut message = None;
+        let mut backend = None;
+        for meta in input.parse_terminated(Meta::parse, syn::Token![,])? {
+            let Meta::NameValue(nv) = &meta else {
+                return Err(syn::Error::new_spanned(meta, "expected key = string"));
+            };
+            let slot = if nv.path.is_ident("service") {
+                &mut service
+            } else if nv.path.is_ident("error_message") {
+                &mut message
+            } else if nv.path.is_ident("backend") {
+                &mut backend
+            } else {
+                return Err(syn::Error::new_spanned(meta, "unknown schema argument"));
+            };
+            if slot.is_some() {
+                return Err(syn::Error::new_spanned(meta, "duplicate schema argument"));
             }
+            let value = &nv.value;
+            *slot = Some(syn::parse2::<LitStr>(quote!(#value))?);
         }
-        Ok(SchemaArgs {
+        let service = service.ok_or_else(|| input.error("schema requires service = \"name\""))?;
+        if service.value().trim().is_empty() {
+            return Err(syn::Error::new_spanned(
+                service,
+                "service must not be empty",
+            ));
+        }
+        let backend = backend.unwrap_or_else(|| LitStr::new("built_in", service.span()));
+        if !matches!(backend.value().as_str(), "built_in" | "validator") {
+            return Err(syn::Error::new_spanned(
+                backend,
+                "backend must be built_in or validator",
+            ));
+        }
+        Ok(Self {
+            message: message
+                .unwrap_or_else(|| LitStr::new("Schema validation failed", service.span())),
             service,
-            error_message,
-            backend,
+            backend: backend.value(),
         })
     }
 }
 
-// ---------------------------------------------------------------------------
-// #[schema] proc-macro entry point
-// ---------------------------------------------------------------------------
 #[proc_macro_attribute]
 pub fn schema(args: TokenStream, item: TokenStream) -> TokenStream {
-    let SchemaArgs {
-        service,
-        error_message,
-        backend,
-    } = parse_macro_input!(args as SchemaArgs);
-
-    let mut module = parse_macro_input!(item as ItemMod);
-
-    let service = match service {
-        Some(s) => s,
-        None => {
-            return syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "#[schema] requires a `service` argument: #[schema(service = \"my_service\")]",
-            )
-            .to_compile_error()
-            .into();
-        }
-    };
-    let error_message = error_message
-        .unwrap_or_else(|| LitStr::new("Schema validation failed", proc_macro2::Span::call_site()));
-    let backend =
-        backend.unwrap_or_else(|| LitStr::new("built_in", proc_macro2::Span::call_site()));
-
-    let (_, items) = match &mut module.content {
-        Some((brace, items)) => (brace, items),
-        None => {
-            return syn::Error::new(module.span(), "#[schema] requires an inline module")
-                .to_compile_error()
-                .into();
-        }
-    };
-
-    let mut create_struct: Option<syn::ItemStruct> = None;
-    let mut patch_struct: Option<syn::ItemStruct> = None;
-
-    for it in items.iter() {
-        if let syn::Item::Struct(s) = it {
-            if has_marker_attr(&s.attrs, "create") {
-                create_struct = Some(s.clone());
-            }
-            if has_marker_attr(&s.attrs, "patch") {
-                patch_struct = Some(s.clone());
-            }
-        }
-    }
-
-    let Some(create_struct) = create_struct else {
-        return syn::Error::new(
-            module.span(),
-            "#[schema] module must contain a #[create] struct",
-        )
-        .to_compile_error()
-        .into();
-    };
-
-    let create_rules = collect_field_rules(&create_struct);
-    let patch_rules = patch_struct.as_ref().map(collect_field_rules);
-
-    // Remove internal marker attrs so they don't reach rustc.
-    strip_internal_attrs(items);
-
-    let create_ident = create_struct.ident.clone();
-    let patch_ident = patch_struct.as_ref().map(|s| s.ident.clone());
-
-    let resolve_create_fn = gen_resolve_create(&create_rules, &error_message);
-    let validate_create_fn =
-        gen_validate_create(&create_rules, &error_message, &backend, &create_ident);
-    let validate_patch_fn = patch_rules
-        .as_ref()
-        .map(|rules| {
-            let patch_ident = patch_ident
-                .as_ref()
-                .expect("patch rules implies patch struct");
-            gen_validate_patch(rules, &error_message, &backend, patch_ident)
-        })
-        .unwrap_or_else(|| quote! {});
-
-    let register_fn = gen_register_fn(&service, patch_rules.is_some());
-
-    if let Ok(it) = syn::parse2::<syn::Item>(resolve_create_fn) {
-        items.push(it);
-    }
-    if let Ok(it) = syn::parse2::<syn::Item>(validate_create_fn) {
-        items.push(it);
-    }
-    if !validate_patch_fn.is_empty() {
-        if let Ok(it) = syn::parse2::<syn::Item>(validate_patch_fn) {
-            items.push(it);
-        }
-    }
-    if let Ok(it) = syn::parse2::<syn::Item>(register_fn) {
-        items.push(it);
-    }
-
-    TokenStream::from(quote!(#module))
+    let args = parse_macro_input!(args as SchemaArgs);
+    let module = parse_macro_input!(item as ItemMod);
+    expand(args, module)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
-// ---------------------------------------------------------------------------
-// Attribute helpers — syn 2.x: path() is a METHOD, not a field
-// ---------------------------------------------------------------------------
-fn has_marker_attr(attrs: &[Attribute], name: &str) -> bool {
-    attrs.iter().any(|a| a.path().is_ident(name))
-}
-
-fn strip_internal_attrs(items: &mut [syn::Item]) {
-    for it in items.iter_mut() {
-        if let syn::Item::Struct(s) = it {
-            s.attrs.push(syn::parse_quote!(#[allow(dead_code)]));
-
-            // strip #[create]/#[patch]
-            s.attrs
-                .retain(|a| !(a.path().is_ident("create") || a.path().is_ident("patch")));
-
-            // strip #[dog(...)] on fields
-            if let syn::Fields::Named(named) = &mut s.fields {
-                for f in named.named.iter_mut() {
-                    f.attrs.retain(|a| !a.path().is_ident("dog"));
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// FieldRule extraction
-// ---------------------------------------------------------------------------
-#[derive(Clone)]
-enum FieldKind {
-    String,
-    Bool,
-    Other,
-}
-
-#[derive(Clone)]
-struct FieldRule {
-    json_key: String,
-    kind: FieldKind,
-    trim: bool,
-    min_len: Option<usize>,
-    default_bool: Option<bool>,
+struct Field {
+    key: String,
+    ty: syn::Type,
+    string: bool,
     optional: bool,
+    trim: bool,
+    min: Option<usize>,
+    max: Option<usize>,
+    default: Option<bool>,
 }
-
-fn collect_field_rules(st: &syn::ItemStruct) -> Vec<FieldRule> {
-    let mut rules = Vec::new();
-
-    let fields = match &st.fields {
-        syn::Fields::Named(n) => &n.named,
-        _ => return rules,
+fn inner_type(ty: &syn::Type) -> &syn::Type {
+    if let syn::Type::Path(p) = ty {
+        if let Some(seg) = p.path.segments.last() {
+            if seg.ident == "Option" {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return inner;
+                    }
+                }
+            }
+        }
+    }
+    ty
+}
+fn named(ty: &syn::Type, name: &str) -> bool {
+    matches!(ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == name))
+}
+fn fields(st: &syn::ItemStruct, backend: &str) -> syn::Result<Vec<Field>> {
+    if st
+        .attrs
+        .iter()
+        .chain(st.fields.iter().flat_map(|f| f.attrs.iter()))
+        .any(|a| a.path().is_ident("cfg") || a.path().is_ident("cfg_attr"))
+    {
+        return Err(syn::Error::new_spanned(st, "conditional schema structs or fields are unsupported; put cfg on the entire schema module"));
+    }
+    if !st.generics.params.is_empty() || st.generics.where_clause.is_some() {
+        return Err(syn::Error::new_spanned(
+            &st.generics,
+            "schema structs must not be generic",
+        ));
+    }
+    let syn::Fields::Named(fields) = &st.fields else {
+        return Err(syn::Error::new_spanned(st, "schema requires named fields"));
     };
-
-    for f in fields {
-        let Some(ident) = f.ident.clone() else {
-            continue;
+    if backend == "built_in" && st.attrs.iter().any(|a| a.path().is_ident("serde")) {
+        return Err(syn::Error::new_spanned(
+            st,
+            "serde attributes on schema structs require backend = \"validator\"",
+        ));
+    }
+    fields.named.iter().map(|f| {
+        let ty = inner_type(&f.ty);
+        let mut rule = Field {
+            key: f.ident.as_ref().unwrap().unraw().to_string(), ty: f.ty.clone(),
+            string: named(ty, "String"), optional: named(&f.ty, "Option"),
+            trim: false, min: None, max: None, default: None,
         };
-        let json_key = ident.to_string();
-
-        let mut rule = FieldRule {
-            json_key,
-            kind: field_kind(&f.ty),
-            trim: false,
-            min_len: None,
-            default_bool: None,
-            optional: is_option_type(&f.ty),
-        };
-
-        // Parse #[dog(trim, min_len(3), default = false)] on fields
+        let mut seen = std::collections::HashSet::new();
         for attr in &f.attrs {
-            if !attr.path().is_ident("dog") {
+            if backend == "built_in" && (attr.path().is_ident("serde") || attr.path().is_ident("validate")) {
+                return Err(syn::Error::new_spanned(attr, "serde/validate attributes require backend = \"validator\""));
+            }
+            if !attr.path().is_ident("dog") { continue; }
+            if backend == "validator" {
+                return Err(syn::Error::new_spanned(attr, "use serde and validate attributes with the validator backend; dog rules are built_in only"));
+            }
+            attr.parse_nested_meta(|meta| {
+                let Some(key) = meta.path.get_ident().map(ToString::to_string) else { return Err(meta.error("unknown dog rule")); };
+                if !seen.insert(key.clone()) { return Err(meta.error("duplicate dog rule")); }
+                match key.as_str() {
+                    "trim" => rule.trim = true,
+                    "optional" => rule.optional = true,
+                    "min_len" | "max_len" => {
+                        let content; syn::parenthesized!(content in meta.input);
+                        let n = content.parse::<syn::LitInt>()?.base10_parse::<usize>()?;
+                        if !content.is_empty() { return Err(content.error("expected one non-negative integer")); }
+                        if key == "min_len" { rule.min = Some(n); } else { rule.max = Some(n); }
+                    }
+                    "default" => rule.default = Some(meta.value()?.parse::<syn::LitBool>()?.value),
+                    _ => return Err(meta.error("unknown dog rule; supported: trim, optional, min_len, max_len, default")),
+                }
+                Ok(())
+            })?;
+        }
+        if (rule.trim || rule.min.is_some() || rule.max.is_some()) && !rule.string {
+            return Err(syn::Error::new_spanned(f, "trim and length rules require String or Option<String>"));
+        }
+        if rule.default.is_some() && !named(ty, "bool") {
+            return Err(syn::Error::new_spanned(f, "boolean defaults require bool or Option<bool>"));
+        }
+        if matches!((rule.min, rule.max), (Some(min), Some(max)) if min > max) {
+            return Err(syn::Error::new_spanned(f, "min_len must not exceed max_len"));
+        }
+        Ok(rule)
+    }).collect()
+}
+
+fn expand(args: SchemaArgs, mut module: ItemMod) -> syn::Result<proc_macro2::TokenStream> {
+    let span = module.span();
+    let (_, items) = module
+        .content
+        .as_mut()
+        .ok_or_else(|| syn::Error::new(span, "schema requires an inline module"))?;
+    let mut create = None;
+    let mut patch = None;
+    for item in items.iter_mut() {
+        if let syn::Item::Struct(st) = item {
+            let markers: Vec<_> = st
+                .attrs
+                .iter()
+                .filter(|a| a.path().is_ident("create") || a.path().is_ident("patch"))
+                .collect();
+            if markers.len() > 1 {
+                return Err(syn::Error::new_spanned(st, "one schema marker per struct"));
+            }
+            let Some(marker) = markers.first() else {
+                if st
+                    .fields
+                    .iter()
+                    .any(|f| f.attrs.iter().any(|a| a.path().is_ident("dog")))
+                {
+                    return Err(syn::Error::new_spanned(
+                        st,
+                        "dog rules require a create or patch struct",
+                    ));
+                }
                 continue;
-            }
-            // syn 2.x: attr.meta is a field; Meta::List carries tokens
-            if let Meta::List(ref list) = attr.meta {
-                // parse the comma-separated inner meta items from tokens
-                let nested = list.parse_args_with(
-                    syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
-                );
-                if let Ok(metas) = nested {
-                    for meta in metas {
-                        match meta {
-                            Meta::Path(p) => {
-                                if p.is_ident("trim") {
-                                    rule.trim = true;
-                                } else if p.is_ident("optional") {
-                                    rule.optional = true;
-                                }
-                            }
-                            Meta::List(ml) => {
-                                // min_len(3)
-                                if ml.path.is_ident("min_len") {
-                                    if let Ok(n) = ml.parse_args::<syn::LitInt>() {
-                                        if let Ok(v) = n.base10_parse::<usize>() {
-                                            rule.min_len = Some(v);
-                                        }
-                                    }
-                                }
-                            }
-                            // syn 2.x: MetaNameValue.value is Expr, not Lit
-                            Meta::NameValue(nv) if nv.path.is_ident("default") => {
-                                if let Expr::Lit(ExprLit {
-                                    lit: Lit::Bool(LitBool { value, .. }),
-                                    ..
-                                }) = nv.value
-                                {
-                                    rule.default_bool = Some(value);
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        rules.push(rule);
-    }
-
-    rules
-}
-
-fn is_option_type(ty: &syn::Type) -> bool {
-    match ty {
-        syn::Type::Path(p) => p.path.segments.last().is_some_and(|s| s.ident == "Option"),
-        _ => false,
-    }
-}
-
-fn field_kind(ty: &syn::Type) -> FieldKind {
-    let inner = match ty {
-        syn::Type::Path(p) => {
-            let last = p.path.segments.last();
-            if let Some(seg) = last {
-                if seg.ident == "Option" {
-                    if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
-                        if let Some(syn::GenericArgument::Type(t)) = ab.args.first() {
-                            return field_kind(t);
-                        }
-                    }
-                }
-            }
-            ty
-        }
-        _ => ty,
-    };
-
-    match inner {
-        syn::Type::Path(p) => {
-            if let Some(seg) = p.path.segments.last() {
-                if seg.ident == "String" {
-                    return FieldKind::String;
-                }
-                if seg.ident == "bool" {
-                    return FieldKind::Bool;
-                }
-            }
-            FieldKind::Other
-        }
-        _ => FieldKind::Other,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Code generation — unchanged from original
-// ---------------------------------------------------------------------------
-fn gen_resolve_create(rules: &[FieldRule], _error_message: &LitStr) -> proc_macro2::TokenStream {
-    let trim_stmts = rules
-        .iter()
-        .filter(|r| r.trim && matches!(r.kind, FieldKind::String))
-        .map(|r| {
-            let key = &r.json_key;
-            quote! {
-                if let Some(serde_json::Value::String(s)) = obj.get_mut(#key) {
-                    *s = s.trim().to_string();
-                }
-            }
-        });
-
-    let default_stmts = rules
-        .iter()
-        .filter_map(|r| r.default_bool.map(|v| (r, v)))
-        .map(|(r, v)| {
-            let key = &r.json_key;
-            quote! {
-                if !obj.contains_key(#key) {
-                    obj.insert(#key.to_string(), serde_json::Value::Bool(#v));
-                }
-            }
-        });
-
-    quote! {
-        pub fn resolve_create<P>(data: &mut serde_json::Value, _meta: &dog_schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
-        where
-            P: Send + Clone + 'static,
-        {
-            let Some(obj) = data.as_object_mut() else {
-                return Ok(());
             };
-
-            #(#trim_stmts)*
-            #(#default_stmts)*
-
-            Ok(())
-        }
-    }
-}
-
-fn gen_validate_create(
-    rules: &[FieldRule],
-    error_message: &LitStr,
-    backend: &LitStr,
-    create_ident: &syn::Ident,
-) -> proc_macro2::TokenStream {
-    if backend.value() == "validator" {
-        return quote! {
-            pub fn validate_create<P>(
-                data: &serde_json::Value,
-                _meta: &dog_schema::HookMeta<serde_json::Value, P>,
-            ) -> anyhow::Result<()>
-            where
-                P: Send + Clone + 'static,
-            {
-                let _parsed: #create_ident = dog_schema_validator::validate::<#create_ident>(data, #error_message)?;
-                Ok(())
+            if !matches!(marker.meta, Meta::Path(_)) {
+                return Err(syn::Error::new_spanned(marker, "marker takes no arguments"));
             }
-        };
-    }
-
-    let checks = rules.iter().map(|r| {
-        let key = &r.json_key;
-        let min_len = r.min_len;
-
-        match r.kind {
-            FieldKind::String => {
-                let min_len_check = if let Some(n) = min_len {
-                    quote! {
-                        if v.chars().count() < #n {
-                            errs.push_field(#key, format!("must be at least {} chars", #n));
-                        }
-                    }
-                } else {
-                    quote! {}
-                };
-
-                if r.optional {
-                    quote! {
-                        if let Some(v) = obj.get(#key).and_then(|v| v.as_str()) {
-                            if v.trim().is_empty() {
-                                errs.push_field(#key, "must not be empty");
-                            }
-                            #min_len_check
-                        }
-                    }
-                } else {
-                    quote! {
-                        match obj.get(#key) {
-                            None => errs.push_schema(format!("missing field `{}`", #key)),
-                            Some(val) => {
-                                if let Some(v) = val.as_str() {
-                                    if v.trim().is_empty() {
-                                        errs.push_field(#key, "must not be empty");
-                                    }
-                                    #min_len_check
-                                } else {
-                                    errs.push_field(#key, "must be a string");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            FieldKind::Bool => {
-                let allow_missing = r.default_bool.is_some() || r.optional;
-                if allow_missing {
-                    quote! {
-                        if let Some(val) = obj.get(#key) {
-                            if !val.is_boolean() {
-                                errs.push_field(#key, "must be a boolean");
-                            }
-                        }
-                    }
-                } else {
-                    quote! {
-                        match obj.get(#key) {
-                            None => errs.push_schema(format!("missing field `{}`", #key)),
-                            Some(val) => {
-                                if !val.is_boolean() {
-                                    errs.push_field(#key, "must be a boolean");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            FieldKind::Other => {
-                if r.optional {
-                    quote! {}
-                } else {
-                    quote! {
-                        if obj.get(#key).is_none() {
-                            errs.push_schema(format!("missing field `{}`", #key));
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    quote! {
-        pub fn validate_create<P>(data: &serde_json::Value, _meta: &dog_schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
-        where
-            P: Send + Clone + 'static,
-        {
-            let Some(obj) = data.as_object() else {
-                return Err(dog_schema::schema_error(#error_message, "expected JSON object"));
-            };
-
-            let mut errs = dog_schema::SchemaErrors::default();
-
-            #(#checks)*
-
-            if errs.is_empty() {
-                Ok(())
+            let target = if marker.path().is_ident("create") {
+                &mut create
             } else {
-                Err(errs.into_unprocessable_anyhow(#error_message))
-            }
-        }
-    }
-}
-
-fn gen_validate_patch(
-    rules: &[FieldRule],
-    error_message: &LitStr,
-    backend: &LitStr,
-    patch_ident: &syn::Ident,
-) -> proc_macro2::TokenStream {
-    if backend.value() == "validator" {
-        return quote! {
-            pub fn validate_patch<P>(
-                data: &serde_json::Value,
-                _meta: &dog_schema::HookMeta<serde_json::Value, P>,
-            ) -> anyhow::Result<()>
-            where
-                P: Send + Clone + 'static,
-            {
-                let _parsed: #patch_ident = dog_schema_validator::validate::<#patch_ident>(data, #error_message)?;
-                Ok(())
-            }
-        };
-    }
-
-    let checks = rules.iter().map(|r| {
-        let key = &r.json_key;
-        let min_len = r.min_len;
-
-        match r.kind {
-            FieldKind::String => {
-                let min_len_check = if let Some(n) = min_len {
-                    quote! {
-                        if v.chars().count() < #n {
-                            errs.push_field(#key, format!("must be at least {} chars", #n));
-                        }
-                    }
-                } else {
-                    quote! {}
-                };
-
-                quote! {
-                    if let Some(val) = obj.get(#key) {
-                        if val.is_null() {
-                            // allow null (treat as not provided)
-                        } else if let Some(v) = val.as_str() {
-                            if v.trim().is_empty() {
-                                errs.push_field(#key, "must not be empty");
-                            }
-                            #min_len_check
-                        } else {
-                            errs.push_field(#key, "must be a string");
-                        }
-                    }
-                }
-            }
-            FieldKind::Bool => {
-                quote! {
-                    if let Some(val) = obj.get(#key) {
-                        if val.is_null() {
-                            // allow null
-                        } else if !val.is_boolean() {
-                            errs.push_field(#key, "must be a boolean");
-                        }
-                    }
-                }
-            }
-            FieldKind::Other => {
-                quote! {
-                    if let Some(val) = obj.get(#key) {
-                        if val.is_null() {
-                            // allow null
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    quote! {
-        pub fn validate_patch<P>(data: &serde_json::Value, _meta: &dog_schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
-        where
-            P: Send + Clone + 'static,
-        {
-            let Some(obj) = data.as_object() else {
-                return Err(dog_schema::schema_error(#error_message, "expected JSON object"));
+                &mut patch
             };
-
-            let mut errs = dog_schema::SchemaErrors::default();
-
-            #(#checks)*
-
-            if errs.is_empty() {
-                Ok(())
-            } else {
-                Err(errs.into_unprocessable_anyhow(#error_message))
+            if target.is_some() {
+                return Err(syn::Error::new_spanned(st, "duplicate schema struct"));
+            }
+            *target = Some((st.ident.clone(), fields(st, &args.backend)?));
+            st.attrs
+                .retain(|a| !a.path().is_ident("create") && !a.path().is_ident("patch"));
+            st.attrs.push(syn::parse_quote!(#[allow(dead_code)]));
+            for f in &mut st.fields {
+                f.attrs.retain(|a| !a.path().is_ident("dog"));
             }
         }
     }
-}
-
-fn gen_register_fn(service: &LitStr, has_patch: bool) -> proc_macro2::TokenStream {
-    let svc = service.value();
-    let svc_lit = LitStr::new(&svc, service.span());
-
-    let patch = if has_patch {
-        quote! {
-            s.on_patch().validate(validate_patch);
-        }
+    let (create_ident, create_fields) =
+        create.ok_or_else(|| syn::Error::new(span, "schema requires a create struct"))?;
+    let mut generated = vec![
+        resolve("resolve_create", &create_fields, &args.message, true),
+        validate(
+            "validate_create",
+            &create_fields,
+            &args,
+            &create_ident,
+            false,
+        ),
+    ];
+    let patch_hooks = if let Some((ident, rules)) = patch {
+        generated.push(resolve("resolve_patch", &rules, &args.message, false));
+        generated.push(validate("validate_patch", &rules, &args, &ident, true));
+        quote! { s.on_patch().resolve(resolve_patch); s.on_patch().validate(validate_patch); }
     } else {
-        quote! {}
+        // A schema that only describes complete writes cannot validate a patch.
+        quote! { s.on_patch().validate(|_, _| Err(dog_schema::schema_error("Schema validation failed", "PATCH requires a patch schema"))); }
     };
-
-    quote! {
+    let service = args.service;
+    generated.push(quote! {
         pub fn register<P>(builder: &mut dog_core::DogAppBuilder<serde_json::Value, P>) -> anyhow::Result<()>
-        where
-            P: Send + Clone + 'static,
-        {
+        where P: Send + Clone + 'static {
             use dog_schema::SchemaHooksExt;
-
-            builder.service_hooks(#svc_lit, |h| {
-                h.schema(|s| {
-                    s.on_create().resolve(resolve_create).validate(validate_create);
-                    #patch
-                    s.on_update().validate(validate_create);
-                });
-            });
-
+            builder.service_hooks(#service, |h| { h.schema(|s| {
+                s.on_create().resolve(resolve_create);
+                s.on_create().validate(validate_create);
+                s.on_update().resolve(resolve_create);
+                s.on_update().validate(validate_create);
+                #patch_hooks
+            }); });
             Ok(())
         }
+    });
+    for generated in generated {
+        items.push(syn::parse2(generated)?);
+    }
+    Ok(quote!(#module))
+}
+fn resolve(
+    name: &str,
+    fields: &[Field],
+    message: &LitStr,
+    defaults: bool,
+) -> proc_macro2::TokenStream {
+    let name = format_ident!("{name}");
+    let rules = fields.iter().map(|f| {
+        let key = &f.key;
+        let trim = f.trim.then(|| quote! { if let Some(serde_json::Value::String(s)) = obj.get_mut(#key) { *s = s.trim().to_owned(); } });
+        let default = f.default.filter(|_| defaults).map(|value| quote! { obj.entry(#key).or_insert(serde_json::Value::Bool(#value)); });
+        quote! { #trim #default }
+    });
+    quote! {
+        pub fn #name<P>(data: &mut serde_json::Value, _meta: &dog_schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        where P: Send + Clone + 'static {
+            let obj = data.as_object_mut().ok_or_else(|| dog_schema::schema_error(#message, "expected JSON object"))?;
+            #(#rules)*
+            Ok(())
+        }
+    }
+}
+fn validate(
+    name: &str,
+    fields: &[Field],
+    args: &SchemaArgs,
+    ident: &syn::Ident,
+    patch: bool,
+) -> proc_macro2::TokenStream {
+    let name = format_ident!("{name}");
+    let message = &args.message;
+    let body = if args.backend == "validator" {
+        quote! { dog_schema_validator::validate::<#ident>(data, #message)?; }
+    } else {
+        let keys: Vec<_> = fields.iter().map(|f| &f.key).collect();
+        let checks = fields.iter().map(|f| {
+            let key = &f.key;
+            let ty = &f.ty;
+            let missing_allowed = patch || f.optional;
+            let min = f.min.map(|n| quote! { if text.chars().count() < #n { errs.push_field(#key, format!("must be at least {} chars", #n)); } });
+            let max = f.max.map(|n| quote! { if text.chars().count() > #n { errs.push_field(#key, format!("must be at most {} chars", #n)); } });
+            let string_rules = f.string.then(|| quote! {
+                if let Some(text) = value.as_str() {
+                    if text.trim().is_empty() { errs.push_field(#key, "must not be empty"); }
+                    #min #max
+                }
+            });
+            quote! {
+                match obj.get(#key) {
+                    None if !#missing_allowed => errs.push_field(#key, "is required"),
+                    Some(value) => {
+                        if serde_json::from_value::<#ty>(value.clone()).is_err() {
+                            // Do not echo user input or arbitrary custom deserializer errors.
+                            errs.push_field(#key, "invalid type or value");
+                        } else { #string_rules }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        quote! {
+            let obj = data.as_object().ok_or_else(|| dog_schema::schema_error(#message, "expected JSON object"))?;
+            let mut errs = dog_schema::SchemaErrors::new();
+            let allowed: &[&str] = &[#(#keys),*];
+            for key in obj.keys() { if !allowed.contains(&key.as_str()) { errs.push_field(key, "unknown field"); } }
+            #(#checks)*
+            if !errs.is_empty() { return Err(errs.into_unprocessable_anyhow(#message)); }
+        }
+    };
+    quote! {
+        pub fn #name<P>(data: &serde_json::Value, _meta: &dog_schema::HookMeta<serde_json::Value, P>) -> anyhow::Result<()>
+        where P: Send + Clone + 'static { #body Ok(()) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn args() -> SchemaArgs {
+        syn::parse_str("service = \"test\"").unwrap()
+    }
+    #[test]
+    fn rejects_invalid_arguments() {
+        for input in [
+            "service = \"x\", backend = \"typo\"",
+            "service = \"x\", servcie = \"y\"",
+            "service = false",
+            "service = \"\"",
+            "service = \"x\", service = \"y\"",
+            "service(\"x\")",
+            "",
+        ] {
+            assert!(syn::parse_str::<SchemaArgs>(input).is_err(), "{input}");
+        }
+    }
+    #[test]
+    fn rejects_invalid_or_ignored_field_rules() {
+        for attr in [
+            "min_lne(3)",
+            "min_len(\"3\")",
+            "min_len(-1)",
+            "min_len(1,2)",
+            "trim = true",
+            "default = 1",
+            "default = false",
+            "relation = \"users\"",
+            "trim, trim",
+            "min_len(5), max_len(1)",
+        ] {
+            let module = syn::parse_str(&format!(
+                "mod example {{ #[create] struct Create {{ #[dog({attr})] name: String }} }}"
+            ))
+            .unwrap();
+            assert!(expand(args(), module).is_err(), "{attr}");
+        }
+        let module = syn::parse_quote!(
+            mod example {
+                #[create]
+                struct Create {
+                    #[dog(trim)]
+                    count: u8,
+                }
+            }
+        );
+        assert!(expand(args(), module).is_err());
+    }
+    #[test]
+    fn rejects_ambiguous_structures() {
+        for input in [
+            "mod x;",
+            "mod x { #[create] struct X(String); }",
+            "mod x { #[create] struct X<T> { value: T } }",
+            "mod x { #[create] #[patch] struct X { name: String } }",
+            "mod x { #[create] struct X {} #[create] struct Y {} }",
+            "mod x { #[create(foo)] struct X {} }",
+            "mod x { #[create] struct X { #[cfg(feature=\"x\")] value: String } }",
+            "mod x { #[create] struct X {} struct Y { #[dog(trim)] name: String } }",
+            "mod x { #[create] #[serde(rename_all=\"camelCase\")] struct X { first_name: String } }",
+            "mod x { #[create] struct X { #[serde(rename=\"name\")] other: String } }",
+        ] { assert!(expand(args(), syn::parse_str(input).unwrap()).is_err(), "{input}"); }
+    }
+    #[test]
+    fn validator_backend_rejects_ignored_dog_rules() {
+        let args = syn::parse_str("service = \"x\", backend = \"validator\"").unwrap();
+        assert!(expand(
+            args,
+            syn::parse_quote!(
+                mod x {
+                    #[create]
+                    struct X {
+                        #[dog(trim)]
+                        name: String,
+                    }
+                }
+            )
+        )
+        .is_err());
     }
 }

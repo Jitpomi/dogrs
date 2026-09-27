@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 pub use dog_schema_macros::schema;
 
 use dog_core::errors::DogError;

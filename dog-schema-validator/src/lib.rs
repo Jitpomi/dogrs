@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use validator::Validate;
@@ -73,8 +75,11 @@ pub fn validate<T>(data: &Value, error_message: &str) -> anyhow::Result<T>
 where
     T: DeserializeOwned + Validate,
 {
-    let parsed: T = serde_json::from_value(data.clone()).map_err(|e| {
-        dog_schema::unprocessable(error_message, json!({"_schema": [e.to_string()]}))
+    let parsed: T = serde_json::from_value(data.clone()).map_err(|_| {
+        dog_schema::unprocessable(
+            error_message,
+            json!({"_schema": ["invalid data for schema"]}),
+        )
     })?;
 
     parsed.validate().map_err(|e| {
@@ -130,5 +135,61 @@ mod tests {
             "display_name must be at least 2 chars"
         );
         assert_eq!(errors["tags[0].email"][0], "tag email must be valid");
+    }
+}
+
+#[cfg(test)]
+mod macro_tests {
+    use super::*;
+    #[dog_schema::schema(service = "users", backend = "validator")]
+    mod model {
+        use crate as dog_schema_validator;
+        use serde::Deserialize;
+        use validator::Validate;
+        #[create]
+        #[derive(Deserialize, Validate)]
+        #[serde(deny_unknown_fields)]
+        pub struct Create {
+            #[serde(rename = "displayName")]
+            #[validate(length(min = 3))]
+            pub name: String,
+            pub age: u8,
+        }
+        #[patch]
+        #[derive(Deserialize, Validate)]
+        #[serde(deny_unknown_fields)]
+        pub struct Patch {
+            #[serde(rename = "displayName")]
+            #[validate(length(min = 3))]
+            pub name: Option<String>,
+        }
+    }
+    #[test]
+    fn validator_macro_respects_serde_and_partial_patch() {
+        let app = dog_core::DogApp::default();
+        let meta = dog_schema::HookMeta {
+            tenant: dog_core::TenantContext::new("test"),
+            method: dog_core::ServiceMethodKind::Create,
+            params: (),
+            config: app.config_snapshot(),
+            services: dog_core::ServiceCaller::new(app),
+        };
+        assert!(model::validate_create(&json!({"displayName":"Alice","age":10}), &meta).is_ok());
+        assert!(model::validate_patch(&json!({"displayName":"Bob"}), &meta).is_ok());
+        assert!(model::validate_patch(&json!({"displayName":"x"}), &meta).is_err());
+        assert!(model::validate_create(&json!({"name":"Alice","age":10}), &meta).is_err());
+        let err = model::validate_create(
+            &json!({"displayName":"Alice","age":"private-marker"}),
+            &meta,
+        )
+        .unwrap_err();
+        let dog = dog_core::errors::DogError::from_anyhow(&err).unwrap();
+        assert_eq!(dog.code(), 422);
+        assert!(!format!("{dog:?}").contains("private-marker"));
+        let mut builder = dog_core::DogApp::builder();
+        model::register::<()>(&mut builder).unwrap();
+        let mut data = json!({"displayName":"Alice","age":10});
+        model::resolve_create(&mut data, &meta).unwrap();
+        model::resolve_patch(&mut data, &meta).unwrap();
     }
 }
