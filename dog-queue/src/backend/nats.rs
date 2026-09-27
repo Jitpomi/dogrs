@@ -13,6 +13,7 @@ pub struct NatsConfig {
 pub struct NatsStore {
     pub(super) writer: Option<super::nats_batch::BatchWriter>,
     pub(super) enqueue_slots: tokio::sync::Semaphore,
+    pub(super) payload_slots: tokio::sync::Semaphore,
     pub(super) bucket: kv::Store,
     pub(super) max_state_bytes: usize,
     pub(super) index: tokio::sync::OnceCell<std::sync::Arc<super::nats_records::Index>>,
@@ -137,6 +138,7 @@ impl NatsBackend {
             store: NatsStore {
                 writer: None,
                 enqueue_slots: tokio::sync::Semaphore::new(16),
+                payload_slots: tokio::sync::Semaphore::new(128),
                 bucket,
                 max_state_bytes,
                 index: Default::default(),

@@ -14,11 +14,39 @@ use async_trait::async_trait;
 use chrono::Utc;
 use futures::{StreamExt, TryStreamExt};
 use sha2::{Digest, Sha256};
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 fn error(e: impl std::fmt::Display) -> QueueError {
     QueueError::Internal(e.to_string())
 }
+// Immutable payload reads do not grant ownership. Overlap them with the claim,
+// but expose bytes only after the exact metadata revision was durably claimed.
+// A speculative read failure gets one fresh read after ownership is established;
+// uncertain writes are never retried here.
+async fn claim_and_read<C, R, F, RF>(claim: C, read: R, retry: F) -> QueueResult<Option<Vec<u8>>>
+where
+    C: Future<Output = QueueResult<bool>>,
+    R: Future<Output = QueueResult<Vec<u8>>>,
+    F: FnOnce() -> RF,
+    RF: Future<Output = QueueResult<Vec<u8>>>,
+{
+    tokio::pin!(claim, read);
+    let bytes = tokio::select! {
+        won = &mut claim => {
+            if !won? { return Ok(None); }
+            read.await
+        }
+        bytes = &mut read => {
+            if !claim.await? { return Ok(None); }
+            bytes
+        }
+    };
+    match bytes {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(_) => retry().await.map(Some),
+    }
+}
+
 // NATS 2.11 may use code 10164; async-nats 0.50 only maps 10071 to
 // WrongLastRevision. Inspect structured causes rather than matching error text.
 pub(super) fn revision_conflict(error: &(dyn std::error::Error + 'static)) -> bool {
@@ -415,6 +443,8 @@ impl NatsStore {
         Err(QueueError::JobNotFound(id.clone()))
     }
     async fn bytes(&self, tenant: &str, id: &JobId) -> QueueResult<Vec<u8>> {
+        // Bound speculative I/O independently of the producer admission queue.
+        let _permit = self.payload_slots.acquire().await.map_err(error)?;
         crate::diagnostics::measure(
             crate::diagnostics::NATS_PAYLOAD_READ,
             self.bucket.get(payload(tenant, id)),
@@ -900,15 +930,18 @@ impl NatsStore {
                         // Observed metadata is usable only while its exact server
                         // revision remains current. No lease exists until CAS
                         // succeeds; a stale or deleted hint cannot grant ownership.
-                        if self
-                            .cas(
+                        if let Some(bytes) = claim_and_read(
+                            self.cas(
                                 &key,
                                 serde_json::to_vec(&state.jobs[&id]).map_err(error)?,
                                 revision,
-                            )
-                            .await?
+                            ),
+                            self.bytes(tenant, &id),
+                            || self.bytes(tenant, &id),
+                        )
+                        .await?
                         {
-                            job.record.message.payload_bytes = self.bytes(tenant, &id).await?;
+                            job.record.message.payload_bytes = bytes;
                             return Ok(Outcome::Lease(Some(job)));
                         }
                         skipped_hints.insert(id);
@@ -972,19 +1005,22 @@ impl NatsStore {
                 _ => {}
             }
             let row = &state.jobs[&id];
-            if self
-                .cas(
-                    &key,
-                    serde_json::to_vec(row).map_err(error)?,
-                    entry.revision,
-                )
-                .await?
-            {
+            let claim = self.cas(
+                &key,
+                serde_json::to_vec(row).map_err(error)?,
+                entry.revision,
+            );
+            if let Outcome::Lease(Some(job)) = &mut outcome {
+                if let Some(bytes) =
+                    claim_and_read(claim, self.bytes(tenant, &id), || self.bytes(tenant, &id))
+                        .await?
+                {
+                    job.record.message.payload_bytes = bytes;
+                    return Ok(outcome);
+                }
+            } else if claim.await? {
                 // The terminal CAS is already durable. Retain it in this cell;
                 // enqueue archives it before a future idempotency-key reuse.
-                if let Outcome::Lease(Some(job)) = &mut outcome {
-                    job.record.message.payload_bytes = self.bytes(tenant, &id).await?;
-                }
                 return Ok(outcome);
             }
             if matches!(op, Operation::Dequeue(..)) {
@@ -1490,5 +1526,125 @@ mod tests {
         ));
         let js = async_nats::jetstream::new(async_nats::connect(url).await.unwrap());
         js.delete_key_value(name).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod claim_read_tests {
+    use super::*;
+    use std::future::{pending, ready};
+    use tokio::{sync::oneshot, time::timeout};
+
+    #[tokio::test]
+    async fn payload_read_starts_before_claim_but_cannot_grant_ownership() {
+        let (claimed, claim) = oneshot::channel();
+        let (started, read_started) = oneshot::channel();
+        let task = tokio::spawn(claim_and_read(
+            async { claim.await.unwrap() },
+            async {
+                started.send(()).unwrap();
+                Ok(vec![42])
+            },
+            || async { panic!("successful read must not be retried") },
+        ));
+        timeout(Duration::from_secs(1), read_started)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!task.is_finished());
+        claimed.send(Ok(true)).unwrap();
+        assert_eq!(task.await.unwrap().unwrap(), Some(vec![42]));
+    }
+
+    #[tokio::test]
+    async fn lost_claim_does_not_wait_for_payload_or_retry_it() {
+        let result = timeout(
+            Duration::from_secs(1),
+            claim_and_read(ready(Ok(false)), pending(), || async {
+                panic!("lost claim must not retry payload")
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn failed_speculative_read_cannot_mask_lost_or_unknown_claim() {
+        for uncertain in [false, true] {
+            let (claimed, claim) = oneshot::channel();
+            let (read_done, done) = oneshot::channel();
+            let task = tokio::spawn(claim_and_read(
+                async { claim.await.unwrap() },
+                async {
+                    read_done.send(()).unwrap();
+                    Err(error("speculative failure"))
+                },
+                || async { panic!("no retry without ownership") },
+            ));
+            done.await.unwrap();
+            claimed
+                .send(if uncertain {
+                    Err(error("unknown commit"))
+                } else {
+                    Ok(false)
+                })
+                .unwrap();
+            let result = task.await.unwrap();
+            if uncertain {
+                assert!(result.unwrap_err().to_string().contains("unknown commit"));
+            } else {
+                assert_eq!(result.unwrap(), None);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn readable_payload_cannot_mask_unknown_claim() {
+        let result = claim_and_read(
+            ready(Err(error("unknown commit"))),
+            ready(Ok(vec![42])),
+            || async { panic!("unknown claim must not retry") },
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("unknown commit"));
+    }
+
+    #[tokio::test]
+    async fn failed_speculation_retries_only_after_winning_claim() {
+        for retry_succeeds in [false, true] {
+            let (claimed, claim) = oneshot::channel();
+            let (read_done, done) = oneshot::channel();
+            let (retry_started, mut retried) = oneshot::channel();
+            let task = tokio::spawn(claim_and_read(
+                async { claim.await.unwrap() },
+                async {
+                    read_done.send(()).unwrap();
+                    Err(error("early read failure"))
+                },
+                move || async move {
+                    retry_started.send(()).unwrap();
+                    if retry_succeeds {
+                        Ok(vec![42])
+                    } else {
+                        Err(error("final read failure"))
+                    }
+                },
+            ));
+            done.await.unwrap();
+            assert!(retried.try_recv().is_err());
+            claimed.send(Ok(true)).unwrap();
+            let result = task.await.unwrap();
+            retried.await.unwrap();
+            if retry_succeeds {
+                assert_eq!(result.unwrap(), Some(vec![42]));
+            } else {
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("final read failure"));
+            }
+        }
     }
 }
