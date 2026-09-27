@@ -1,6 +1,5 @@
 use crate::{BlobResult, ByteRange, ByteStream, UploadId};
 use async_trait::async_trait;
-use chrono::Datelike;
 
 /// Information about a stored blob
 #[derive(Debug, Clone)]
@@ -48,9 +47,15 @@ pub struct BlobMetadata {
 /// Core blob storage operations - must be implemented by all storage backends
 #[async_trait]
 pub trait BlobStore: Send + Sync {
+    /// Optional signed URL capability; the adapter never downcasts to a vendor.
+    fn signed_urls(&self) -> Option<&dyn SignedUrlBlobStore> {
+        None
+    }
     /// Enable downcasting to concrete types
     fn as_any(&self) -> &dyn std::any::Any;
-    /// Store a blob from a stream
+    /// Consume the stream completely before returning success. Errors must not
+    /// expose partial objects. Retrying a completed key must atomically replace
+    /// it with the supplied bytes; the coordinator relies on that property.
     async fn put(
         &self,
         key: &str,
@@ -218,6 +223,11 @@ impl StoreCapabilities {
 
 /// Strategy for generating blob keys
 pub trait BlobKeyStrategy: Send + Sync {
+    /// A stable, tenant-exclusive listing prefix. None disables adapter listing.
+    fn tenant_prefix(&self, _tenant_id: &str) -> Option<String> {
+        None
+    }
+
     /// Generate a key for a blob
     fn object_key(
         &self,
@@ -233,41 +243,36 @@ pub trait BlobKeyStrategy: Send + Sync {
     fn staging_key(&self, tenant_id: &str, upload_id: &str, part_number: u32) -> String;
 }
 
-/// Default key strategy: tenant/year/month/blob_id
+/// Stable v2 keys. Hex-encoded tenant components cannot collide or traverse paths.
 #[derive(Debug, Clone)]
 pub struct DefaultKeyStrategy;
-
+pub(crate) fn tenant_component(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
 impl BlobKeyStrategy for DefaultKeyStrategy {
+    fn tenant_prefix(&self, tenant: &str) -> Option<String> {
+        Some(format!("v2/{}/", tenant_component(tenant)))
+    }
     fn object_key(
         &self,
-        tenant_id: &str,
-        blob_id: &str,
+        tenant: &str,
+        id: &str,
         _hints: &std::collections::BTreeMap<String, String>,
     ) -> String {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let dt = chrono::DateTime::from_timestamp(now as i64, 0).unwrap_or_else(chrono::Utc::now);
-
-        format!(
-            "{}/{:04}/{:02}/{}",
-            tenant_id,
-            dt.year(),
-            dt.month(),
-            blob_id
-        )
+        format!("v2/{}/{}", tenant_component(tenant), id)
     }
-
-    fn derived_key(&self, original_key: &str, kind: &str) -> String {
-        format!("{}.{}", original_key, kind)
+    fn derived_key(&self, original: &str, kind: &str) -> String {
+        format!("{}.{}", original, tenant_component(kind))
     }
-
-    fn staging_key(&self, tenant_id: &str, upload_id: &str, part_number: u32) -> String {
+    fn staging_key(&self, tenant: &str, upload: &str, part: u32) -> String {
         format!(
-            "__uploads/{}/{}/part-{:06}",
-            tenant_id, upload_id, part_number
+            "__uploads/v2/{}/{}/part-{part:06}",
+            tenant_component(tenant),
+            upload
         )
     }
 }

@@ -1,8 +1,8 @@
+use crate::{bounded, SignedUrlBlobStore};
 use async_trait::async_trait;
 use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{primitives::ByteStream as AwsByteStream, Client};
-use futures::StreamExt;
 use std::env;
 
 use crate::{
@@ -11,12 +11,21 @@ use crate::{
 };
 
 /// S3-compatible configuration from environment variables
-#[derive(Debug)]
 pub struct S3Config {
     pub region: String,
     pub access_key_id: String,
     pub secret_access_key: String,
     pub endpoint_url: String,
+}
+
+impl std::fmt::Debug for S3Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3Config")
+            .field("region", &self.region)
+            .field("endpoint_url", &self.endpoint_url)
+            .field("credentials", &"[redacted]")
+            .finish()
+    }
 }
 
 impl S3Config {
@@ -40,18 +49,27 @@ impl S3Config {
 pub struct S3CompatibleStore {
     client: Client,
     bucket: String,
+    max_put_bytes: u64,
 }
 
 impl S3CompatibleStore {
     pub async fn new(bucket: String) -> BlobResult<Self> {
         let config = S3Config::from_env()?;
         let client = Self::create_client(config).await;
-        Ok(Self { client, bucket })
+        Ok(Self {
+            client,
+            bucket,
+            max_put_bytes: 5 * 1024 * 1024 * 1024,
+        })
     }
 
     pub async fn with_config(bucket: String, config: S3Config) -> Self {
         let client = Self::create_client(config).await;
-        Self { client, bucket }
+        Self {
+            client,
+            bucket,
+            max_put_bytes: 5 * 1024 * 1024 * 1024,
+        }
     }
 
     async fn create_client(config: S3Config) -> Client {
@@ -77,13 +95,10 @@ impl S3CompatibleStore {
         )
     }
 
-    async fn collect_stream(&self, stream: &mut ByteStream) -> BlobResult<Vec<u8>> {
-        let mut data = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(Self::map_aws_error)?;
-            data.extend_from_slice(&chunk);
-        }
-        Ok(data)
+    /// Bound disk staging even when the store is used without BlobAdapter.
+    pub fn with_max_put_bytes(mut self, limit: u64) -> Self {
+        self.max_put_bytes = limit.min(5 * 1024 * 1024 * 1024);
+        self
     }
 
     fn format_range(&self, range: &ByteRange) -> String {
@@ -93,12 +108,35 @@ impl S3CompatibleStore {
         }
     }
 
-    fn resolve_range(&self, range: &ByteRange, content_length: u64) -> crate::store::ResolvedRange {
-        crate::store::ResolvedRange {
-            start: range.start,
-            end: range.end.unwrap_or(content_length.saturating_sub(1)),
-            total_size: content_length,
+    fn resolve_range(
+        range: &ByteRange,
+        length: u64,
+        header: Option<&str>,
+    ) -> BlobResult<crate::store::ResolvedRange> {
+        let invalid = || BlobError::invalid("invalid S3 Content-Range response");
+        let value = header
+            .and_then(|v| v.strip_prefix("bytes "))
+            .ok_or_else(invalid)?;
+        let (bounds, total) = value.split_once('/').ok_or_else(invalid)?;
+        let (start, end) = bounds.split_once('-').ok_or_else(invalid)?;
+        let (start, end, total): (u64, u64, u64) = (
+            start.parse().map_err(|_| invalid())?,
+            end.parse().map_err(|_| invalid())?,
+            total.parse().map_err(|_| invalid())?,
+        );
+        if start != range.start
+            || start > end
+            || end >= total
+            || end - start + 1 != length
+            || end != range.end.unwrap_or(total - 1).min(total - 1)
+        {
+            return Err(invalid());
         }
+        Ok(crate::store::ResolvedRange {
+            start,
+            end,
+            total_size: total,
+        })
     }
 
     fn map_aws_error(err: impl std::error::Error + Send + Sync + 'static) -> BlobError {
@@ -217,67 +255,49 @@ impl BlobStore for S3CompatibleStore {
         self
     }
 
+    fn signed_urls(&self) -> Option<&dyn SignedUrlBlobStore> {
+        Some(self)
+    }
     async fn put(
         &self,
         key: &str,
         content_type: Option<&str>,
-        mut stream: ByteStream,
+        stream: ByteStream,
     ) -> BlobResult<PutResult> {
-        let data = self.collect_stream(&mut stream).await?;
-        let aws_stream = AwsByteStream::from(data.clone());
-
-        let mut request = self
-            .client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .body(aws_stream);
-
-        if let Some(ct) = content_type {
-            request = request.content_type(ct);
-        }
-
-        let result = request.send().await.map_err(Self::map_aws_error)?;
-
-        Ok(PutResult {
-            etag: result.e_tag,
-            size_bytes: data.len() as u64,
-            checksum: None,
-        })
+        self.put_with_metadata(key, content_type, None, stream)
+            .await
     }
-
     async fn put_with_metadata(
         &self,
         key: &str,
         content_type: Option<&str>,
         filename: Option<&str>,
-        mut stream: ByteStream,
+        stream: ByteStream,
     ) -> BlobResult<PutResult> {
-        let data = self.collect_stream(&mut stream).await?;
-        let aws_stream = AwsByteStream::from(data.clone());
-
+        let staged = bounded::spool(stream, self.max_put_bytes).await?;
+        let body = AwsByteStream::from_path(staged.path())
+            .await
+            .map_err(Self::map_aws_error)?;
+        let length =
+            i64::try_from(staged.size).map_err(|_| BlobError::invalid("object too large"))?;
         let mut request = self
             .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
-            .body(aws_stream);
-
+            .body(body)
+            .content_length(length);
         if let Some(ct) = content_type {
             request = request.content_type(ct);
         }
-
-        // Add filename as metadata if provided
         if let Some(filename) = filename {
             request = request.metadata("filename", filename);
         }
-
         let result = request.send().await.map_err(Self::map_aws_error)?;
-
         Ok(PutResult {
             etag: result.e_tag,
-            size_bytes: data.len() as u64,
-            checksum: None,
+            size_bytes: staged.size,
+            checksum: Some(staged.checksum.clone()),
         })
     }
 
@@ -285,13 +305,22 @@ impl BlobStore for S3CompatibleStore {
         let mut request = self.client.get_object().bucket(&self.bucket).key(key);
 
         if let Some(ref range) = range {
+            if range.end.is_some_and(|end| end < range.start) {
+                return Err(BlobError::invalid("invalid range"));
+            }
             request = request.range(self.format_range(range));
         }
 
         let result = request.send().await.map_err(Self::map_aws_error)?;
-        let content_length = result.content_length.unwrap_or(0) as u64;
-
-        let resolved_range = range.map(|r| self.resolve_range(&r, content_length));
+        let content_length = u64::try_from(
+            result
+                .content_length
+                .ok_or_else(|| BlobError::invalid("missing content length"))?,
+        )
+        .map_err(|_| BlobError::invalid("negative content length"))?;
+        let resolved_range = range
+            .map(|r| Self::resolve_range(&r, content_length, result.content_range.as_deref()))
+            .transpose()?;
 
         Ok(GetResult {
             stream: Box::pin(async_stream::stream! {
@@ -321,7 +350,12 @@ impl BlobStore for S3CompatibleStore {
             .map_err(Self::map_aws_error)?;
 
         Ok(ObjectHead {
-            size_bytes: result.content_length.unwrap_or(0) as u64,
+            size_bytes: u64::try_from(
+                result
+                    .content_length
+                    .ok_or_else(|| BlobError::invalid("missing content length"))?,
+            )
+            .map_err(|_| BlobError::invalid("negative content length"))?,
             content_type: result.content_type,
             etag: result.e_tag,
             last_modified: result.last_modified.map(|dt| dt.secs()),
@@ -346,9 +380,16 @@ impl BlobStore for S3CompatibleStore {
             request = request.prefix(prefix);
         }
 
-        if let Some(limit) = limit {
-            request = request.max_keys(limit as i32);
+        let limit = limit.unwrap_or(1000);
+        if limit == 0 {
+            return Ok(Vec::new());
         }
+        if limit > 1000 {
+            return Err(BlobError::invalid(
+                "list limit must not exceed 1000; narrow the prefix",
+            ));
+        }
+        request = request.max_keys(limit as i32);
 
         let result = request.send().await.map_err(Self::map_aws_error)?;
 
@@ -393,5 +434,77 @@ impl BlobStore for S3CompatibleStore {
 
     fn capabilities(&self) -> StoreCapabilities {
         StoreCapabilities::basic().with_range().with_signed_urls()
+    }
+}
+
+#[async_trait]
+impl SignedUrlBlobStore for S3CompatibleStore {
+    async fn sign_get(&self, key: &str, expires: u64) -> BlobResult<String> {
+        let config = aws_sdk_s3::presigning::PresigningConfig::expires_in(
+            std::time::Duration::from_secs(expires),
+        )
+        .map_err(Self::map_aws_error)?;
+        Ok(self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .presigned(config)
+            .await
+            .map_err(Self::map_aws_error)?
+            .uri()
+            .to_owned())
+    }
+    async fn sign_put(
+        &self,
+        key: &str,
+        content_type: Option<&str>,
+        expires: u64,
+    ) -> BlobResult<String> {
+        let config = aws_sdk_s3::presigning::PresigningConfig::expires_in(
+            std::time::Duration::from_secs(expires),
+        )
+        .map_err(Self::map_aws_error)?;
+        let mut request = self.client.put_object().bucket(&self.bucket).key(key);
+        if let Some(ct) = content_type {
+            request = request.content_type(ct);
+        }
+        Ok(request
+            .presigned(config)
+            .await
+            .map_err(Self::map_aws_error)?
+            .uri()
+            .to_owned())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn range_uses_full_object_size() {
+        let r = S3CompatibleStore::resolve_range(
+            &ByteRange::from_start(100),
+            900,
+            Some("bytes 100-999/1000"),
+        )
+        .unwrap();
+        assert_eq!((r.start, r.end, r.total_size), (100, 999, 1000));
+        assert!(S3CompatibleStore::resolve_range(
+            &ByteRange::from_start(100),
+            900,
+            Some("bytes 100-899/900")
+        )
+        .is_err());
+        assert!(S3CompatibleStore::resolve_range(&ByteRange::from_start(100), 900, None).is_err());
+    }
+    #[test]
+    fn debug_redacts_credentials() {
+        let config = S3Config {
+            region: "test".into(),
+            endpoint_url: "http://localhost".into(),
+            access_key_id: "private-access-marker".into(),
+            secret_access_key: "private-secret-marker".into(),
+        };
+        assert!(!format!("{config:?}").contains("private-"));
     }
 }

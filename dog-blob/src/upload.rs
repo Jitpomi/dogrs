@@ -4,6 +4,10 @@ use async_trait::async_trait;
 /// Coordinates multipart and resumable uploads
 #[async_trait]
 pub trait UploadCoordinator: Send + Sync {
+    /// Release terminal staging data after the application's receipt is durable.
+    async fn forget(&self, _ctx: BlobCtx, _id: &UploadId) -> BlobResult<()> {
+        Err(crate::BlobError::Unsupported)
+    }
     /// Begin a new upload session
     async fn begin(&self, ctx: BlobCtx, intent: UploadIntent) -> BlobResult<UploadSession>;
 
@@ -62,6 +66,13 @@ pub enum Chunking {
 /// Storage for upload session state
 #[async_trait]
 pub trait UploadSessionStore: Send + Sync {
+    /// Atomically replace exactly this revision, incrementing revision by one.
+    /// Must work across every coordinator/process sharing this store. Unsupported
+    /// is fail-closed; legacy get/update implementations are never used as a CAS.
+    async fn compare_and_swap(&self, _expected: u64, _session: UploadSession) -> BlobResult<bool> {
+        Err(crate::BlobError::Unsupported)
+    }
+
     /// Create a new upload session
     async fn create(&self, session: UploadSession) -> BlobResult<UploadSession>;
 
@@ -74,22 +85,20 @@ pub trait UploadSessionStore: Send + Sync {
     /// Delete an upload session
     async fn delete(&self, upload_id: &UploadId) -> BlobResult<()>;
 
-    /// Record a part upload
-    async fn record_part(&self, upload_id: &UploadId, part: PartReceipt) -> BlobResult<()>;
-
-    /// Mark session as completed
-    async fn mark_completed(&self, upload_id: &UploadId, completed_at: i64) -> BlobResult<()>;
-
-    /// Mark session as failed
-    async fn mark_failed(
-        &self,
-        upload_id: &UploadId,
-        failed_at: i64,
-        reason: String,
-    ) -> BlobResult<()>;
-
-    /// Mark session as aborted
-    async fn mark_aborted(&self, upload_id: &UploadId, aborted_at: i64) -> BlobResult<()>;
+    /// Legacy mutations are unsupported by default: use compare_and_swap to
+    /// atomically fence part writes, completion and abort across processes.
+    async fn record_part(&self, _id: &UploadId, _part: PartReceipt) -> BlobResult<()> {
+        Err(crate::BlobError::Unsupported)
+    }
+    async fn mark_completed(&self, _id: &UploadId, _at: i64) -> BlobResult<()> {
+        Err(crate::BlobError::Unsupported)
+    }
+    async fn mark_failed(&self, _id: &UploadId, _at: i64, _reason: String) -> BlobResult<()> {
+        Err(crate::BlobError::Unsupported)
+    }
+    async fn mark_aborted(&self, _id: &UploadId, _at: i64) -> BlobResult<()> {
+        Err(crate::BlobError::Unsupported)
+    }
 }
 
 impl UploadIntent {

@@ -32,6 +32,7 @@ impl RustFsState {
             },
             require_range_support: false,
             checksum_alg: None,
+            ..BlobConfig::default()
         };
 
         // Configuration applied

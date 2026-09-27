@@ -1,10 +1,14 @@
 /// Configuration for blob operations
 #[derive(Debug, Clone)]
 pub struct BlobConfig {
+    /// Maximum active and retained chunk sessions per adapter.
+    pub max_chunk_sessions: usize,
+    /// Absolute lifetime for chunk and active multipart sessions.
+    pub session_ttl_secs: u64,
     /// Absolute max size allowed for a single blob (safety guard)
     pub max_blob_bytes: u64,
 
-    /// If size_hint >= this, prefer multipart/resumable path when available
+    /// If actual bytes >= this, prefer multipart/resumable path when available
     pub multipart_threshold_bytes: u64,
 
     /// Rules for part-based uploads
@@ -22,6 +26,8 @@ pub struct BlobConfig {
 impl Default for BlobConfig {
     fn default() -> Self {
         Self {
+            max_chunk_sessions: 1024,
+            session_ttl_secs: 3600,
             max_blob_bytes: 5 * 1024 * 1024 * 1024,      // 5GB
             multipart_threshold_bytes: 16 * 1024 * 1024, // 16MB (2x part size)
             upload_rules: UploadRules::default(),
@@ -123,5 +129,28 @@ impl UploadRules {
     pub fn require_ordered_parts(mut self) -> Self {
         self.allow_out_of_order = false;
         self
+    }
+}
+
+impl BlobConfig {
+    pub fn validate(&self) -> crate::BlobResult<()> {
+        if self.max_blob_bytes == 0
+            || self.max_blob_bytes > i64::MAX as u64
+            || self.multipart_threshold_bytes == 0
+            || self.max_chunk_sessions == 0
+            || self.session_ttl_secs == 0
+            || self.session_ttl_secs > 31_536_000
+            || self.upload_rules.part_size == 0
+            || self.upload_rules.max_parts == 0
+            || self.upload_rules.max_parts > 10_000
+        {
+            return Err(crate::BlobError::invalid("invalid blob limits"));
+        }
+        if self.checksum_alg.as_deref().is_some_and(|s| s != "sha256") {
+            return Err(crate::BlobError::invalid(
+                "supported checksum algorithm: sha256",
+            ));
+        }
+        Ok(())
     }
 }

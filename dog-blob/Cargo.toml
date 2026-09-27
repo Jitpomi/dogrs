@@ -3,7 +3,7 @@ name = "dog-blob"
 version = "0.2.0"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
-description = "Production-ready blob storage infrastructure with streaming, multipart uploads, and range requests"
+description = "Tenant-scoped blob storage with bounded uploads and resumable multipart coordination"
 documentation = "https://docs.rs/dog-blob"
 repository = "https://github.com/Jitpomi/dogrs"
 license = "MIT OR Apache-2.0"
@@ -27,17 +27,21 @@ futures-util = "0.3.32"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = ["sync", "fs"] }
+tokio = { version = "1.52.3", features = ["sync", "fs", "io-util"] }
 uuid = { version = "1.23.2", features = ["v4", "serde"] }
 
 # AWS SDK dependencies for S3-compatible storage
-aws-config = "1.8"
-aws-credential-types = "1.2"
-aws-sdk-s3 = { version = "1.150", default-features = false, features = ["default-https-client", "rt-tokio", "http-1x", "sigv4a"] }
+aws-config = { version = "1.8", optional = true }
+aws-credential-types = { version = "1.2", optional = true }
+aws-sdk-s3 = { optional = true, version = "1.150", default-features = false, features = ["default-https-client", "rt-tokio", "http-1x", "sigv4a"] }
 futures = "0.3"
+tempfile = "3"
+tokio-util = { version = "0.7", features = ["io"] }
+sha2 = "0.10"
 
 [features]
 default = []
+s3 = ["dep:aws-config", "dep:aws-credential-types", "dep:aws-sdk-s3"]
 
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["full"] }

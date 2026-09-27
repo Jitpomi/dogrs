@@ -165,10 +165,6 @@ impl DogAfterHook<Value, MusicParams> for UploadCoverArtHook {
 }
 
 async fn extract_file_data(request_data: &Value) -> Result<Vec<u8>> {
-    if let Some(file) = request_data.get("file") {
-        if let Some(path) = file.get("temp_path").and_then(|p| p.as_str()) {
-            return Ok(tokio::fs::read(path).await?);
-        }
-    }
-    anyhow::bail!("No file found in request")
+    // Never interpret request JSON as authority to read a server filesystem path.
+    Ok(dog_blob::BlobAdapter::extract_file_data(request_data).await?)
 }

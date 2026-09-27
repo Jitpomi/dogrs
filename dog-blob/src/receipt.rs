@@ -59,7 +59,10 @@ pub struct ResolvedRange {
 
 impl ResolvedRange {
     pub fn from_request(range: &ByteRange, total_size: u64) -> Self {
-        let end = range.end.unwrap_or(total_size - 1).min(total_size - 1);
+        let end = range
+            .end
+            .unwrap_or(total_size.saturating_sub(1))
+            .min(total_size.saturating_sub(1));
         Self {
             start: range.start,
             end,
@@ -68,11 +71,15 @@ impl ResolvedRange {
     }
 
     pub fn content_length(&self) -> u64 {
-        self.end - self.start + 1
+        if self.start > self.end || self.end >= self.total_size {
+            0
+        } else {
+            self.end - self.start + 1
+        }
     }
 
     pub fn is_full_content(&self) -> bool {
-        self.start == 0 && self.end == self.total_size - 1
+        self.total_size > 0 && self.start == 0 && self.end == self.total_size - 1
     }
 }
 
