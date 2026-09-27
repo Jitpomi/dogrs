@@ -246,36 +246,58 @@ async fn execute(
     bucket: &kv::Store,
     groups: &[Group],
 ) -> QueueResult<Vec<QueueResult<Option<Vec<u64>>>>> {
-    let writes: Vec<_> = groups.iter().flat_map(|g| &g.writes).collect();
-    match commit(context, bucket, &writes).await? {
-        Some(revisions) => {
-            let mut offset = 0;
-            Ok(groups
-                .iter()
-                .map(|g| {
-                    let end = offset + g.writes.len();
-                    let r = revisions[offset..end].to_vec();
+    execute_groups(groups, |writes| async move {
+        commit(context, bucket, &writes).await
+    })
+    .await
+}
+async fn execute_groups<'a, F, Fut>(
+    groups: &'a [Group],
+    mut attempt: F,
+) -> QueueResult<Vec<QueueResult<Option<Vec<u64>>>>>
+where
+    F: FnMut(Vec<&'a Write>) -> Fut,
+    Fut: std::future::Future<Output = QueueResult<Option<Vec<u64>>>>,
+{
+    // A stale key must not turn all unrelated work into serial individual
+    // commits. Split only a batch the server definitively rejected. Every
+    // child still contains complete logical operations, never half an enqueue.
+    // Execute one child at a time to preserve this lane's concurrency bound.
+    let mut pending = vec![groups];
+    let mut outcomes = Vec::with_capacity(groups.len());
+    while let Some(part) = pending.pop() {
+        let writes: Vec<_> = part.iter().flat_map(|g| &g.writes).collect();
+        match attempt(writes).await {
+            Ok(Some(revisions)) => {
+                let mut offset = 0;
+                for group in part {
+                    let end = offset + group.writes.len();
+                    outcomes.push(Ok(Some(revisions[offset..end].to_vec())));
                     offset = end;
-                    Ok(Some(r))
-                })
-                .collect())
-        }
-        None if groups.len() == 1 => Ok(vec![Ok(None)]),
-        // Only a known atomic rejection can reach this branch. Each logical
-        // operation remains atomic; an enqueue pair is never split into writes.
-        None => {
-            // Keep each executing batch's one-commit bound even during conflicts. Expanding
-            // one rejected batch into many concurrent requests defeats admission
-            // backpressure precisely when writers contend for the same scopes.
-            let mut outcomes = Vec::with_capacity(groups.len());
-            for group in groups {
-                let writes: Vec<_> = group.writes.iter().collect();
-                outcomes.push(commit(context, bucket, &writes).await);
+                }
             }
-            Ok(outcomes)
+            Ok(None) => {
+                let _conflict =
+                    crate::diagnostics::Scope::new(crate::diagnostics::NATS_BATCH_REJECTED);
+                if part.len() == 1 {
+                    outcomes.push(Ok(None));
+                } else {
+                    let (left, right) = part.split_at(part.len() / 2);
+                    // Stack order preserves the input/reply ordering.
+                    pending.push(right);
+                    pending.push(left);
+                }
+            }
+            Err(e) => {
+                // An uncertain outcome is never split or replayed. Independent
+                // parts rejected earlier may still be processed safely.
+                outcomes.extend(part.iter().map(|_| Err(e.clone())));
+            }
         }
     }
+    Ok(outcomes)
 }
+
 async fn atomic(
     context: &jetstream::Context,
     bucket: &kv::Store,
@@ -388,6 +410,72 @@ mod tests {
         JobMessage, QueueCtx,
     };
     use std::sync::Arc;
+    fn groups(count: usize) -> Vec<Group> {
+        (0..count)
+            .map(|n| Group {
+                queued: None,
+                writes: vec![
+                    write(&format!("metadata-{n}"), 0, vec![n as u8 * 2]),
+                    write(&format!("payload-{n}"), 0, vec![n as u8 * 2 + 1]),
+                ],
+                reply: oneshot::channel().0,
+            })
+            .collect()
+    }
+    #[tokio::test]
+    async fn one_stale_group_does_not_serialize_every_other_job() {
+        let groups = groups(64);
+        let mut calls = Vec::new();
+        let outcomes = execute_groups(&groups, |writes| {
+            let keys: Vec<_> = writes.iter().map(|w| w.key.as_str()).collect();
+            assert_eq!(writes.len() % 2, 0, "never split an enqueue pair");
+            calls.push(keys.clone());
+            std::future::ready(Ok(if keys.contains(&"payload-29") {
+                None
+            } else {
+                Some(writes.iter().map(|w| u64::from(w.value[0])).collect())
+            }))
+        })
+        .await
+        .unwrap();
+        assert!(calls.len() <= 13, "one stale job caused linear retries");
+        for (n, outcome) in outcomes.into_iter().enumerate() {
+            assert_eq!(
+                outcome.unwrap(),
+                (n != 29).then_some(vec![n as u64 * 2, n as u64 * 2 + 1])
+            );
+        }
+    }
+    #[tokio::test]
+    async fn uncertain_child_commit_is_not_split_or_replayed() {
+        let groups = groups(16);
+        let mut uncertain_attempts = 0;
+        let outcomes = execute_groups(&groups, |writes| {
+            let stale = writes.iter().any(|w| w.key == "payload-3");
+            let uncertain = writes.iter().any(|w| w.key == "payload-8");
+            std::future::ready(if stale {
+                Ok(None) // This rejection establishes that nothing committed.
+            } else if uncertain {
+                uncertain_attempts += 1;
+                Err(error("acknowledgement lost; commit outcome may be unknown"))
+            } else {
+                Ok(Some(writes.iter().map(|w| u64::from(w.value[0])).collect()))
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(uncertain_attempts, 1);
+        for (n, outcome) in outcomes.into_iter().enumerate() {
+            if n >= 8 {
+                assert!(outcome.is_err());
+            } else {
+                assert_eq!(
+                    outcome.unwrap(),
+                    (n != 3).then_some(vec![n as u64 * 2, n as u64 * 2 + 1])
+                );
+            }
+        }
+    }
     async fn fixture() -> (jetstream::Context, kv::Store) {
         let client = async_nats::connect(std::env::var("DOGRS_NATS_URL").unwrap())
             .await

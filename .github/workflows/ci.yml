@@ -83,7 +83,7 @@ jobs:
         env:
           DOGRS_NATS_URL: nats://127.0.0.1:4222
       - run: docker run -d --name nats-atomic-ci -p 127.0.0.1:4223:4222 nats:2.15.0-alpine -js -sd /data
-      - run: cargo test -p dog-queue --features nats --lib --locked nats_batch -- --ignored
+      - run: cargo test -p dog-queue --features nats --lib --locked nats_batch -- --include-ignored
         env:
           DOGRS_NATS_URL: nats://127.0.0.1:4223
       - run: cargo test -p dog-queue --features postgres --test postgres_rows --locked -- --ignored

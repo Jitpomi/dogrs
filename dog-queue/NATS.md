@@ -48,8 +48,12 @@ the 2 MiB limit continues to bound large-payload batches. A quiet single-key upd
 atomic commit. Batch frames are pipelined after the server confirms staging has begun. Each
 caller waits for the final commit acknowledgement; staging acknowledgements never
 count as success. Per-key expected revisions are checked by the server when the
-whole batch commits. A known revision-conflict rejection is retried as independent
-conditional operations (enqueue pairs stay atomic) so unrelated operations can succeed. Transport errors,
+whole batch commits. A known revision-conflict rejection is split into smaller conditional batches
+until the conflicting logical operations are isolated; enqueue pairs stay atomic.
+Unaffected operations remain batched instead of falling back to individual writes.
+Only one child commit runs at a time within the original execution slot. A single
+conflict in 64 operations therefore requires at most 13 attempts rather than 65;
+if every operation conflicts, the bounded worst case is 127 attempts. Transport errors,
 timeouts and malformed acknowledgements are **not** automatically replayed: their
 commit outcome may be unknown. A batch execution is bounded to five seconds. Optional `queue-diagnostics`
 timings distinguish frame submission, staging acknowledgement and final durable
