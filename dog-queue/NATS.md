@@ -66,6 +66,15 @@ avoids redundant local lease races but grants no ownership. The server's exact
 revision check still fences every claim; dropping/canceling the claim releases the
 local hint. Other processes continue to coordinate through server revisions.
 
+Cloning an `async_nats::jetstream::Context` shares its underlying connection.
+When constructing multiple sharded backends, callers can supply independently
+configured contexts to avoid putting all stores' payloads and control traffic
+through one connection. `NatsBackend::new` already creates a connection per
+backend. `from_context` preserves the caller's authentication and TLS choices;
+it does not attempt to reconstruct credentials or silently create connections.
+The capacity fixture can compare `DOGRS_NATS_CONNECTIONS=shared` and `per-shard`
+on one runner, with the same workload, replica count and fsync policy.
+
 File storage, no expiry, discard-new, leader-only reads, appropriate replicas and
 server fsync policy are still required. Atomic batching shares replication work;
 it does not disable persistence or acknowledge an uncommitted job. Provision

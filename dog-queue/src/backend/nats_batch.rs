@@ -790,8 +790,13 @@ mod tests {
         }
         // Race the first submission of a scope across independent writers and
         // indexes, not just duplicate lookups of an already committed job.
+        let peer_context = jetstream::new(
+            async_nats::connect(std::env::var("DOGRS_NATS_URL").unwrap())
+                .await
+                .unwrap(),
+        );
         let peer = Arc::new(
-            NatsBackend::from_context(js.clone(), &bucket.name, 1024 * 1024)
+            NatsBackend::from_context(peer_context, &bucket.name, 1024 * 1024)
                 .await
                 .unwrap(),
         );
