@@ -802,6 +802,14 @@ impl<C: Send + Sync + 'static> Worker<C> {
             })?
         }; // read lock released here
 
+        // Payload retrieval and registry contention can outlast a short lease.
+        // Check before the first heartbeat, while this dequeue-time snapshot is
+        // still applicable. Never start user effects with an already expired
+        // lease; leave recovery to the backend's normal reclaim path.
+        if !leased_job.lease_valid(chrono::Utc::now()) {
+            return Err(QueueError::LeaseExpired);
+        }
+
         // Spawn a heartbeat task that extends the lease every `heartbeat_interval`
         // while execute() runs.  Without this, any job that takes longer than
         // `lease_duration` (default 5 min) is reclaimed by the reaper and re-executed
@@ -1088,6 +1096,109 @@ mod tests {
                 "Processed: {} with context: {}",
                 self.data, ctx.value
             ))
+        }
+    }
+
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct CountedJob;
+    #[async_trait]
+    impl Job for CountedJob {
+        type Context = Arc<std::sync::atomic::AtomicUsize>;
+        type Result = ();
+        const JOB_TYPE: &'static str = "counted_job";
+        async fn execute(&self, count: Self::Context) -> Result<(), JobError> {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn worker_does_not_start_effects_for_a_lease_expired_before_dispatch() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for expired in [true, false] {
+            let backend = MemoryBackend::new().with_lease_duration(if expired {
+                Duration::from_millis(20)
+            } else {
+                Duration::from_secs(60)
+            });
+            let adapter = QueueAdapter::new(backend);
+            adapter.register_job::<CountedJob>().await.unwrap();
+            let ctx = QueueCtx::new("dispatch-lease");
+            let id = adapter
+                .enqueue_opts(
+                    ctx.clone(),
+                    CountedJob,
+                    EnqueueOptions::default().with_queue("default"),
+                )
+                .await
+                .unwrap();
+            let count = Arc::new(AtomicUsize::new(0));
+            let worker = Worker {
+                adapter: Arc::new(adapter.to_dyn_shared()),
+                ctx: ctx.clone(),
+                context: Arc::new(count.clone()),
+                queues: vec!["default".into()],
+            };
+            // Hold handler lookup after dequeue until a real, nonzero lease
+            // expires. This models dispatch delayed by registry contention.
+            let registry_lock = if expired {
+                Some(adapter.job_registry.write().await)
+            } else {
+                None
+            };
+            let task = tokio::spawn(async move { worker.process_next_job(&["default"]).await });
+            if expired {
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        if matches!(
+                            adapter
+                                .backend
+                                .get_status(ctx.clone(), id.clone())
+                                .await
+                                .unwrap(),
+                            crate::JobStatus::Processing { .. }
+                        ) {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+            drop(registry_lock);
+            let result = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap();
+            if expired {
+                assert!(matches!(result, Err(QueueError::LeaseExpired)));
+                assert_eq!(count.load(Ordering::SeqCst), 0);
+                assert!(!adapter
+                    .backend
+                    .get_status(ctx, id)
+                    .await
+                    .unwrap()
+                    .is_terminal());
+                assert_eq!(
+                    adapter
+                        .backend
+                        .reclaim_expired_leases()
+                        .await
+                        .unwrap()
+                        .len(),
+                    1
+                );
+            } else {
+                assert!(result.unwrap());
+                assert_eq!(count.load(Ordering::SeqCst), 1);
+                assert!(adapter
+                    .backend
+                    .get_status(ctx, id)
+                    .await
+                    .unwrap()
+                    .is_terminal());
+            }
         }
     }
 
