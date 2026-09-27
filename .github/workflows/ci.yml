@@ -33,6 +33,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+      - name: Check realtime example protocols
+        run: |
+          node --check dog-examples/iot-devices/static/app.js
+          node --check dog-examples/fleet-queue/static/app.js
+          node dog-transport/tests/realtime_clients.cjs
       - uses: dtolnay/rust-toolchain@stable
       - run: |
           for features in '' http grpc cli iroh http,grpc,cli,iroh; do

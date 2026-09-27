@@ -3639,18 +3639,40 @@ class FleetCommandPro {
     
     startRealTimeUpdates() {
         console.log("Starting real-time updates via SSE...");
+        this.realTimeSource?.close();
+        clearTimeout(this.realTimeReconnectTimer);
         const eventSource = new EventSource('/events');
-        eventSource.onmessage = async (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                console.log('Real-time event received:', data);
-                await this.loadAllData();
-                await this.addVehicleMarkers();
-                this.updateUI();
-            } catch (err) {
-                console.error('Error processing real-time update:', err);
-            }
+        this.realTimeSource = eventSource;
+        const refresh = () => {
+            this.realTimeRefreshAgain = true;
+            if (this.realTimeRefresh) return;
+            this.realTimeRefresh = (async () => {
+                try {
+                    do {
+                        this.realTimeRefreshAgain = false;
+                        await this.loadAllData();
+                        await this.addVehicleMarkers();
+                        this.updateUI();
+                    } while (this.realTimeRefreshAgain);
+                } catch (err) {
+                    console.error('Error processing real-time update:', err);
+                } finally {
+                    this.realTimeRefresh = null;
+                }
+            })();
         };
+        // Every reconnect can have missed events; reload authoritative state.
+        eventSource.onopen = refresh;
+        eventSource.onmessage = refresh;
+        eventSource.addEventListener('dogrs.stream_error', async () => {
+            if (this.realTimeSource !== eventSource) return;
+            eventSource.close();
+            refresh();
+            await this.realTimeRefresh;
+            if (this.realTimeSource === eventSource) {
+                this.realTimeReconnectTimer = setTimeout(() => this.startRealTimeUpdates(), 3000);
+            }
+        });
         eventSource.onerror = (err) => {
             console.error('Real-time event source error:', err);
         };
