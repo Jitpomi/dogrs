@@ -73,11 +73,7 @@ impl TypeDBState {
     }
 
     async fn load_schema_from_file(state: &TypeDBState) -> Result<()> {
-        let paths = [
-            "src/schema.tql",
-            "dog-examples/social-typedb/src/schema.tql",
-            "./dog-examples/social-typedb/src/schema.tql",
-        ];
+        let paths = [concat!(env!("CARGO_MANIFEST_DIR"), "/src/schema.tql")];
 
         load_schema_from_file(&state.driver, &state.database, &paths).await?;
         Ok(())

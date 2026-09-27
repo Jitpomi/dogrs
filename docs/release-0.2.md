@@ -69,6 +69,12 @@ HTTP clients reject redirects and use timeouts.
 
 ## TypeDB
 
+Query operations now default to a 30-second deadline, 1 MiB query input, 10,000 answers,
+and an 8 MiB encoded response. Limit failures stop consumption and prevent commit,
+rather than returning a truncated success. Use `QueryOptions` to configure these bounds.
+Explicit schema paths are now all required (not fallback search paths), and `loadedFiles`
+reports the actual paths. See the [TypeDB migration notes](../dog-typedb/README.md).
+
 The driver and live server tests use **3.13.6**. A 3.11.5 server is not compatible
 with the resolved 3.13 driver protocol. Upgrade and test your server explicitly.
 

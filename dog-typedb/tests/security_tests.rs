@@ -1,147 +1,69 @@
-#[cfg(test)]
-mod security_tests {
-    use dog_typedb::transactions::analyze_query;
-    use serde_json::json;
+//! Classification tests only. Actual transaction permissions are tested in live_database.rs.
+use dog_typedb::{transactions::analyze_query, TransactionType};
 
-    #[test]
-    fn test_query_analysis_detects_delete_operations() {
-        let delete_query = "match $u isa user-account, has id \"user-eve\"; delete $u;";
-        let analysis = analyze_query(delete_query);
-
-        assert!(matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Write
-        ));
-        assert_eq!(analysis.primary_type.as_str(), "match");
+#[test]
+fn literal_comment_and_variable_keywords_do_not_escalate_reads() {
+    for query in [
+        r#"match $p isa person, has name "delete";"#,
+        "# define insert delete\nmatch $p isa person; # update\nlimit 2;",
+        "match $delete isa person; fetch { 'insert': iid($delete) };",
+        r#"match $p isa person, has name "escaped \" insert";"#,
+        "match $p isa person, has name 'escaped \\' delete';",
+        "match $p isa person, has name 'fetch { define';",
+    ] {
+        assert!(
+            matches!(analyze_query(query).transaction_type, TransactionType::Read),
+            "{query}"
+        );
     }
-
-    #[test]
-    fn test_query_analysis_detects_insert_operations() {
-        let insert_query = "insert $u isa user-account, has id \"new-user\";";
-        let analysis = analyze_query(insert_query);
-
-        assert!(matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Write
-        ));
-        assert_eq!(analysis.primary_type.as_str(), "insert");
+}
+#[test]
+fn actual_write_stages_after_patterns_are_detected() {
+    for query in [
+        "insert $p isa person;",
+        "match $p isa person; delete $p;",
+        "# comment\nmatch $p isa person; update $p has name 'Alice';",
+        "match { $p isa person; } or { $p isa employee; }; delete $p;",
+        "match $p isa person, has name 'delete'; insert $q isa person;",
+        "put $p isa person, has name 'Alice';",
+    ] {
+        assert!(
+            matches!(
+                analyze_query(query).transaction_type,
+                TransactionType::Write
+            ),
+            "{query}"
+        );
     }
-
-    #[test]
-    fn test_query_analysis_allows_read_operations() {
-        let read_query = "match $u isa user-account; limit 10;";
-        let analysis = analyze_query(read_query);
-
-        assert!(matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Read
-        ));
-        assert_eq!(analysis.primary_type.as_str(), "match");
+}
+#[test]
+fn schema_routing_ignores_leading_comments_and_function_bodies() {
+    for query in [
+        "# match insert\ndefine entity person;",
+        "undefine entity person;",
+        "redefine fun names() -> { string }: match $p isa person, has name $n; return { $n };",
+    ] {
+        assert!(
+            matches!(
+                analyze_query(query).transaction_type,
+                TransactionType::Schema
+            ),
+            "{query}"
+        );
     }
-
-    #[test]
-    fn test_query_analysis_detects_schema_operations() {
-        let schema_query = "define user-account sub entity, has id;";
-        let analysis = analyze_query(schema_query);
-
-        assert!(matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Schema
-        ));
-        assert_eq!(analysis.primary_type.as_str(), "define");
-    }
-
-    #[tokio::test]
-    async fn test_adapter_read_rejects_delete_operations() {
-        // This test would require a real TypeDB connection, so we'll test the logic
-        // by directly calling the query analysis that the adapter uses
-
-        let delete_query_data = json!({
-            "query": "match $u isa user-account, has id \"user-eve\"; delete $u;"
-        });
-
-        let query = delete_query_data.get("query").unwrap().as_str().unwrap();
-        let analysis = analyze_query(query);
-
-        // Verify that the security check would fail
-        assert!(!matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Read
-        ));
-        assert!(matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Write
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_adapter_read_rejects_insert_operations() {
-        let insert_query_data = json!({
-            "query": "insert $u isa user-account, has id \"malicious-user\";"
-        });
-
-        let query = insert_query_data.get("query").unwrap().as_str().unwrap();
-        let analysis = analyze_query(query);
-
-        // Verify that the security check would fail
-        assert!(!matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Read
-        ));
-        assert!(matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Write
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_adapter_read_allows_legitimate_read_operations() {
-        let read_query_data = json!({
-            "query": "match $u isa user-account; limit 10;"
-        });
-
-        let query = read_query_data.get("query").unwrap().as_str().unwrap();
-        let analysis = analyze_query(query);
-
-        // Verify that the security check would pass
-        assert!(matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Read
-        ));
-    }
-
-    #[test]
-    fn test_complex_query_with_delete_detected_as_write() {
-        let complex_query = r#"
-            match 
-                $u isa user-account, has id $id;
-                $id == "target-user";
-            delete $u;
-        "#;
-
-        let analysis = analyze_query(complex_query);
-        assert!(matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Write
-        ));
-    }
-
-    #[test]
-    fn test_fetch_query_detected_as_read() {
-        let fetch_query = r#"
-            match $u isa user-account, has id $id;
-            limit 5;
-            fetch {
-                "user": { $u.* },
-                "id": $id
-            };
-        "#;
-
-        let analysis = analyze_query(fetch_query);
-        assert!(matches!(
-            analysis.transaction_type,
-            dog_typedb::TransactionType::Read
-        ));
-        assert!(analysis.returns_document_stream);
-    }
+}
+#[test]
+fn fetch_whitespace_and_metadata_ignore_literal_values() {
+    let analysis =
+        analyze_query("match $p isa person; sort $p; offset 1; limit 2; fetch\n{ 'id': iid($p) };");
+    assert!(analysis.returns_document_stream && analysis.has_sorting && analysis.has_pagination);
+    let analysis =
+        analyze_query("match $p isa person, has name 'fetch { sort limit count( let '; ");
+    assert!(
+        !analysis.returns_document_stream
+            && !analysis.has_sorting
+            && !analysis.has_pagination
+            && !analysis.has_aggregation
+            && !analysis.has_functions
+    );
 }

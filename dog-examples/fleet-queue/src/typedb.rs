@@ -74,17 +74,9 @@ impl TypeDBState {
     }
 
     async fn load_schema_from_file(state: &TypeDBState) -> Result<()> {
-        let schema_paths = [
-            "src/",
-            "dog-examples/fleet-queue/src/",
-            "./dog-examples/fleet-queue/src/",
-        ];
+        let schema_paths = [concat!(env!("CARGO_MANIFEST_DIR"), "/src/")];
 
-        match load_schema_from_file(&state.driver, &state.database, &schema_paths).await {
-            Ok(_) => {}
-            Err(e) if e.to_string().contains("already exists") => {}
-            Err(e) => return Err(e),
-        }
+        load_schema_from_file(&state.driver, &state.database, &schema_paths).await?;
 
         // Redefine parameterised functions (TypeDB 3.0 requires explicit parameter signatures)
         let redefine_queries = [
@@ -93,11 +85,7 @@ impl TypeDBState {
         ];
 
         for redefine_query in &redefine_queries {
-            if let Err(e) =
-                execute_typedb_query(&state.driver, &state.database, redefine_query).await
-            {
-                eprintln!("TypeDB function redefine failed: {}", e);
-            }
+            execute_typedb_query(&state.driver, &state.database, redefine_query).await?;
         }
 
         Ok(())
