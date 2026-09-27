@@ -265,15 +265,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build -p hosted-system --release --features redis,nats --locked
-      - name: Compare serial fresh-server profiles
-        run: python3 dog-examples/hosted-system/compare_capacity.py --report-dir provider-attribution --seconds "$SECONDS_PER_RUN" --payloads "$PAYLOAD_BYTES" --backends "$BACKEND" --repeats "$REPEATS"
+      - run: cargo build -p hosted-system --release --features redis,nats,queue-diagnostics --locked
+      - name: Compare synchronous and buffered provider commits (diagnostic only)
+        run: python3 dog-examples/hosted-system/compare_nats_fsync.py
         env:
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
-          SECONDS_PER_RUN: ${{ inputs.seconds }}
-          PAYLOAD_BYTES: ${{ inputs.payload_bytes }}
-          BACKEND: ${{ inputs.backend }}
-          REPEATS: ${{ inputs.repeats }}
       - name: Explain comparison scope
         if: always()
         run: |
