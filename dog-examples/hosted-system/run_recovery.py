@@ -8,6 +8,9 @@ import argparse,json,os,pathlib,platform,re,resource,secrets,socket,subprocess,t
 p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis','nats']);p.add_argument('--report-dir',required=True);p.add_argument('--capacity',action='store_true');p.add_argument('--restore',action='store_true');p.add_argument('--race',action='store_true');p.add_argument('--outage-seconds',type=int,default=3);p.add_argument('--seconds',type=int,default=30);p.add_argument('--bytes',type=int,default=1024);p.add_argument('--admission-mode',choices=['native-payload','native-layout','dogrs-admission']);p.add_argument('--overload-drain-seconds',type=int,choices=[0,30,60,120],default=0);a=p.parse_args()
 if a.admission_mode and not a.capacity:p.error('--admission-mode requires --capacity')
 if a.overload_drain_seconds and (not a.capacity or a.admission_mode):p.error('overload drain requires the full queue capacity mode')
+pg_instances=int(os.environ.get('DOGRS_PG_INSTANCES','1'))
+if pg_instances not in (1,4):p.error('PostgreSQL instances must be 1 or 4')
+if pg_instances>1 and (a.backend!='postgres' or not a.capacity or a.admission_mode or os.environ.get('DOGRS_PG_FIXTURE_PARTITIONS','0')!='0'):p.error('independent PostgreSQL instances require ordinary full queue capacity')
 root=pathlib.Path(a.report_dir).resolve();root.mkdir(parents=True,exist_ok=True)
 run='dogrs-fault-'+secrets.token_hex(5);folder=root/run;folder.mkdir()
 binary=str(pathlib.Path(os.environ['DOGRS_SYSTEM_BINARY']).resolve());containers=[];network=None;process=None
@@ -38,8 +41,10 @@ try:
   'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
   'postgres_wait_sampling':os.environ.get('DOGRS_PG_PROFILE')=='1',
   'postgres_fixture_partitions':int(os.environ.get('DOGRS_PG_FIXTURE_PARTITIONS','0')),
-  'postgres_enqueue_batch_size':int(os.environ.get('DOGRS_PG_ENQUEUE_BATCH_SIZE','16')),
-  'storage_shards':int(os.environ.get('DOGRS_CAPACITY_SHARDS','1')),
+  'storage_shards':pg_instances if pg_instances>1 else int(os.environ.get('DOGRS_CAPACITY_SHARDS','1')),
+  'postgres_instances':pg_instances,
+  'postgres_shared_buffers_mb_per_instance':1024//pg_instances if a.backend=='postgres' and a.capacity else None,
+  'postgres_max_wal_mb_per_instance':4096//pg_instances if a.backend=='postgres' and a.capacity else None,
   'measurement':a.admission_mode or ('queue-capacity' if a.capacity else 'recovery'),
   'comparison_tenant':os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT') if a.capacity else None,
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),
@@ -51,17 +56,23 @@ try:
   env['DOGRS_TEST_TENANT']=os.environ['DOGRS_CAPACITY_COMPARISON_TENANT']
  monitors={}
  if a.backend=='postgres':
-  number=port();name=run+'-pg'
-  pg_tuning=['-c','shared_buffers=1GB','-c','max_wal_size=4GB','-c','checkpoint_timeout=15min'] if a.capacity else []
-  delay=int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0'));assert 0<=delay<=10000
-  pg_tuning+=['-c',f'commit_delay={delay}','-c','commit_siblings=1','-c','track_wal_io_timing=on']
-  launch(name,'-p',f'127.0.0.1:{number}:5432','-e','POSTGRES_PASSWORD=disposable-only','postgres:18-alpine','postgres','-c','shared_preload_libraries=pg_stat_statements','-c','track_io_timing=on',*pg_tuning)
-  env['DOGRS_POSTGRES_URL']=f'host=127.0.0.1 port={number} user=postgres password=disposable-only dbname=postgres'
-  wait_port(number)
-  deadline=time.monotonic()+60
-  while subprocess.run(['docker','exec',name,'pg_isready','-h','127.0.0.1','-U','postgres'],capture_output=True).returncode:
-   assert time.monotonic()<deadline;time.sleep(.2)
-  command('docker','exec',name,'psql','-U','postgres','-c','CREATE EXTENSION pg_stat_statements')
+  pg_nodes=[];urls=[]
+  for node in range(pg_instances):
+   number=port();name=run+'-pg'+(str(node) if pg_instances>1 else '')
+   node_folder=folder/f'pg-{node}' if pg_instances>1 else folder;node_folder.mkdir(exist_ok=True)
+   pg_nodes.append((name,node_folder))
+   pg_tuning=['-c',f'shared_buffers={1024//pg_instances}MB','-c',f'max_wal_size={4096//pg_instances}MB','-c','checkpoint_timeout=15min'] if a.capacity else []
+   delay=int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0'));assert 0<=delay<=10000
+   pg_tuning+=['-c',f'commit_delay={delay}','-c','commit_siblings=1','-c','track_wal_io_timing=on']
+   launch(name,'-p',f'127.0.0.1:{number}:5432','-e','POSTGRES_PASSWORD=disposable-only','postgres:18-alpine','postgres','-c','shared_preload_libraries=pg_stat_statements','-c','track_io_timing=on',*pg_tuning)
+   urls.append(f'host=127.0.0.1 port={number} user=postgres password=disposable-only dbname=postgres')
+   wait_port(number)
+   deadline=time.monotonic()+60
+   while subprocess.run(['docker','exec',name,'pg_isready','-h','127.0.0.1','-U','postgres'],capture_output=True).returncode:
+    assert time.monotonic()<deadline;time.sleep(.2)
+   command('docker','exec',name,'psql','-U','postgres','-c','CREATE EXTENSION pg_stat_statements')
+  env['DOGRS_POSTGRES_URL']=urls[0]
+  if pg_instances>1:env.update(DOGRS_PG_SHARD_URLS=json.dumps(urls),DOGRS_CAPACITY_SHARDS=str(pg_instances))
   partitions=int(os.environ.get('DOGRS_PG_FIXTURE_PARTITIONS','0'))
   assert partitions in (0,16),'unsupported diagnostic partition count'
   if partitions:
@@ -110,20 +121,22 @@ try:
   before=resource.getrusage(resource.RUSAGE_CHILDREN)
   with (folder/'container-stats.jsonl').open('w') as stats:
    monitor=subprocess.Popen(['docker','stats','--format','{{json .}}',*containers],stdout=stats,stderr=subprocess.DEVNULL)
-   sampler=None;sample_output=None
+   samplers=[]
    try:
     if a.backend=='postgres' and os.environ.get('DOGRS_PG_PROFILE')=='1':
-     sample_output=(folder/'postgres-waits.log').open('w')
-     sampler=subprocess.Popen(['docker','exec','-i',name,'psql','-XAt','-U','postgres'],stdin=subprocess.PIPE,stdout=sample_output,stderr=subprocess.STDOUT,text=True)
-     sampler.stdin.write("SELECT jsonb_build_object('at',clock_timestamp(),'waits',COALESCE(jsonb_agg(s),'[]'::jsonb)) FROM (SELECT CASE WHEN query LIKE '%INSERT INTO dogrs_queue_jobs_v2%' THEN 'enqueue' WHEN query LIKE '%WITH input%' AND query LIKE '%jsonb[]%' THEN 'claim' WHEN query LIKE '%WITH input%' THEN 'complete' ELSE left(query,80) END AS operation,wait_event_type,wait_event,CASE WHEN wait_event='extend' THEN (SELECT relation::regclass::text FROM pg_locks l WHERE l.pid=a.pid AND l.locktype='extend' AND NOT l.granted LIMIT 1) END AS relation,count(*) AS backends FROM pg_stat_activity a WHERE pid<>pg_backend_pid() AND datname=current_database() AND state='active' GROUP BY 1,2,3,4) s;\n\\watch 0.1\n")
-     sampler.stdin.close()
+     for node_name,node_folder in pg_nodes:
+      sample_output=(node_folder/'postgres-waits.log').open('w')
+      sampler=subprocess.Popen(['docker','exec','-i',node_name,'psql','-XAt','-U','postgres'],stdin=subprocess.PIPE,stdout=sample_output,stderr=subprocess.STDOUT,text=True)
+      samplers.append((sampler,sample_output))
+      sampler.stdin.write("SELECT jsonb_build_object('at',clock_timestamp(),'waits',COALESCE(jsonb_agg(s),'[]'::jsonb)) FROM (SELECT CASE WHEN query LIKE '%INSERT INTO dogrs_queue_jobs_v2%' THEN 'enqueue' WHEN query LIKE '%WITH input%' AND query LIKE '%jsonb[]%' THEN 'claim' WHEN query LIKE '%WITH input%' THEN 'complete' ELSE left(query,80) END AS operation,wait_event_type,wait_event,CASE WHEN wait_event='extend' THEN (SELECT relation::regclass::text FROM pg_locks l WHERE l.pid=a.pid AND l.locktype='extend' AND NOT l.granted LIMIT 1) END AS relation,count(*) AS backends FROM pg_stat_activity a WHERE pid<>pg_backend_pid() AND datname=current_database() AND state='active' GROUP BY 1,2,3,4) s;\n\\watch 0.1\n")
+      sampler.stdin.close()
     with (folder/'capacity.log').open('w') as output:
      role='admission-native' if a.admission_mode and a.admission_mode.startswith('native-') else 'capacity-local'
      result=subprocess.run([binary,role],env=env,stdout=output,stderr=subprocess.STDOUT,timeout=300)
     after=resource.getrusage(resource.RUSAGE_CHILDREN)
     (folder/'client-cpu.json').write_text(json.dumps({'user_seconds':after.ru_utime-before.ru_utime,'system_seconds':after.ru_stime-before.ru_stime}))
    finally:
-    if sampler is not None:
+    for sampler,sample_output in samplers:
      sampler.terminate()
      try:sampler.wait(timeout=5)
      except subprocess.TimeoutExpired:sampler.kill();sampler.wait()
@@ -136,8 +149,9 @@ try:
   samples=[json.loads(line) for line in clean.splitlines() if line.strip()]
   stats_path.write_text(''.join(json.dumps(sample)+'\n' for sample in samples))
   if a.backend=='postgres':
-   (folder/'io-profile.txt').write_text(command('docker','exec',name,'psql','-U','postgres','-c',"SELECT * FROM pg_stat_io WHERE object='wal'; SELECT * FROM pg_stat_wal;"))
-   (folder/'query-profile.txt').write_text(command('docker','exec',name,'psql','-U','postgres','-c',"SELECT left(query,180) AS query,calls,round(mean_exec_time::numeric,3) AS mean_ms,round(total_exec_time::numeric,1) AS total_ms,shared_blks_read,shared_blks_hit,wal_bytes FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 12"))
+   for node_name,node_folder in pg_nodes:
+    (node_folder/'io-profile.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT * FROM pg_stat_io WHERE object='wal'; SELECT * FROM pg_stat_wal;"))
+    (node_folder/'query-profile.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT left(query,180) AS query,calls,round(mean_exec_time::numeric,3) AS mean_ms,round(total_exec_time::numeric,1) AS total_ms,shared_blks_read,shared_blks_hit,wal_bytes FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 12"))
   print(json.dumps({'backend':a.backend,'restored_to_fresh_container':a.restore,'outage_seconds':a.outage_seconds,'replicas':3 if a.backend=='nats' else 1,'sync_policy':'always' if a.backend in ('redis','nats') else 'PostgreSQL default fsync/synchronous_commit','measurement':a.admission_mode or 'queue-capacity','passed':result.returncode==0,'capacity_log':str(folder/'capacity.log')}))
   raise SystemExit(result.returncode)
  log=folder/'client.log'

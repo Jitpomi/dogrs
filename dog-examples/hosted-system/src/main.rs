@@ -259,9 +259,6 @@ async fn main() -> Result<()> {
                     max_connections: std::env::var("DOGRS_PG_POOL_SIZE")
                         .unwrap_or_else(|_| "64".into())
                         .parse()?,
-                    enqueue_batch_size: std::env::var("DOGRS_PG_ENQUEUE_BATCH_SIZE")
-                        .unwrap_or_else(|_| "16".into())
-                        .parse()?,
                     enqueue_concurrency: std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY")
                         .ok()
                         .map(|n| n.parse())
@@ -295,14 +292,25 @@ async fn main() -> Result<()> {
                         );
                         options.enqueue_concurrency = Some(cap / shards);
                     }
+                    let shard_urls: Vec<String> = std::env::var("DOGRS_PG_SHARD_URLS")
+                        .ok()
+                        .map(|value| serde_json::from_str(&value))
+                        .transpose()?
+                        .unwrap_or_else(|| vec![uri.clone(); shards as usize]);
+                    anyhow::ensure!(
+                        shard_urls.len() == shards as usize,
+                        "one PostgreSQL URL per fixed shard is required"
+                    );
+                    for url in &shard_urls {
+                        let config: tokio_postgres::Config = url.parse()?;
+                        anyhow::ensure!(!config.get_hosts().is_empty() && config.get_hosts().iter().all(|host| matches!(host, tokio_postgres::config::Host::Tcp(host) if host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()))), "capacity shard URLs must use loopback hosts");
+                    }
                     let mut backends = Vec::new();
-                    for shard in 0..shards {
+                    for (shard, connection_string) in shard_urls.into_iter().enumerate() {
                         options.schema = Some(format!("dogrs_capacity_{shard}"));
                         backends.push(Arc::new(
                             dog_queue::backend::postgres::PostgresBackend::new_with_tls_options(
-                                dog_queue::backend::postgres::PostgresConfig {
-                                    connection_string: uri.clone(),
-                                },
+                                dog_queue::backend::postgres::PostgresConfig { connection_string },
                                 tokio_postgres::NoTls,
                                 options.clone(),
                             )

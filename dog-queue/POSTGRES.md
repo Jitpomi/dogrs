@@ -62,10 +62,10 @@ let options = PostgresOptions {
 Place their `Arc<PostgresBackend>` values in a fixed order in
 `ShardedBackend::new`. This keeps the total producer limit at 48 and executing
 claim/completion statements at four per kind across the four stores. Pool budgets
-multiply across application instances. This is an isolation option, not a throughput guarantee. In paired capacity
-tests, multiple schemas on one server were slower and increased timeouts because
-all schemas still shared the same write-ahead log. Use one store by default;
-qualify any topology change on the deployment's actual workload.
+multiply across application instances. This is an isolation option, not a throughput guarantee. Multiple schemas on
+one server were slower in paired large-payload capacity tests and increased
+operation timeouts: they still share the same write-ahead log. Keep one store
+unless measurements justify a different topology.
 
 Schema names, shard count and shard order identify persisted storage. Opening a
 different schema does not move existing jobs. Drain or perform a verified offline
@@ -116,7 +116,7 @@ latency. A small cap on a high-latency connection can reduce throughput.
 
 
 Concurrent completions are coalesced into bounded SQL batches (at most 64 requests,
-256 waiting requests, and by default at most four executing statements per backend). There
+256 waiting requests, and at most four executing statements per backend). There
 is no collection timer on a quiet queue. Each request independently checks its
 tenant, token, status and lease after row locking; responses are sent only after
 the statement commits. Duplicate requests for the same tenant/job are placed in
@@ -146,36 +146,3 @@ worker statement concurrency.
 PostgreSQL cannot store NUL characters in text or JSONB strings. Tenant, queue,
 lease, result and metadata inputs are checked before submission so an invalid
 request cannot abort valid peers in a batch. Binary payloads may contain NUL bytes.
-
-
-## Bounded enqueue commits
-
-`PostgresOptions.enqueue_batch_size` defaults to 16 and accepts 1 through 64.
-Concurrent submissions can share one durable INSERT statement, bounded by 512 KiB
-of payload. A single larger payload is submitted alone. There is no collection
-timer on a quiet queue. The existing producer semaphore bounds admitted callers;
-the dispatcher additionally bounds waiting requests and executing statements.
-`batch_concurrency` applies separately to enqueue, claim and completion dispatchers.
-Without an override, each dispatcher uses one quarter of the pool: enqueue is
-capped at sixteen executing statements and workers at four per kind. Producer
-admission remains bounded independently; this does not increase the pool limit.
-The producer cap is higher because enqueues write payload bytes as well as metadata.
-Qualify these limits on your workload; sharing the four-statement worker cap with
-producers reduced capacity in the measured mixed workload.
-
-Every caller waits for commit before receiving its job ID. A batch never contains
-two submissions for the same tenant/queue/job-type/idempotency-key scope, and
-returned IDs are mapped back to caller order. Existing active idempotency keys
-preserve their original payload and schedule. Binary payloads remain separate
-from JSON metadata.
-
-Malformed metadata is rejected before batching. If PostgreSQL explicitly aborts a
-batch for a data, constraint or index-size error, its requests are attempted
-individually so a bad value cannot reject unrelated callers. Only known-aborted
-outcomes permit replay; connection errors and timeouts keep unknown-commit
-semantics. Use idempotency keys when reconciling those outcomes.
-
-A locked conflict row can delay the other submissions sharing its statement.
-Set `enqueue_batch_size: 1` to retain independent commits when that latency tradeoff
-is unsuitable. Batching does not disable fsync or synchronous commit and does not
-establish a universal throughput guarantee.
