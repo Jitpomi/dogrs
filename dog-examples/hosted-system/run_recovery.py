@@ -5,7 +5,9 @@ Run with DOGRS_SYSTEM_BINARY pointing to a release build with redis,nats feature
 Only containers/network created by this invocation are killed or removed.
 """
 import argparse,json,os,pathlib,platform,re,resource,secrets,socket,subprocess,time,urllib.request
-p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis','nats']);p.add_argument('--report-dir',required=True);p.add_argument('--capacity',action='store_true');p.add_argument('--restore',action='store_true');p.add_argument('--race',action='store_true');p.add_argument('--outage-seconds',type=int,default=3);p.add_argument('--seconds',type=int,default=30);p.add_argument('--bytes',type=int,default=1024);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis','nats']);p.add_argument('--report-dir',required=True);p.add_argument('--capacity',action='store_true');p.add_argument('--restore',action='store_true');p.add_argument('--race',action='store_true');p.add_argument('--outage-seconds',type=int,default=3);p.add_argument('--seconds',type=int,default=30);p.add_argument('--bytes',type=int,default=1024);p.add_argument('--admission-mode',choices=['native-payload','native-layout','dogrs-admission']);p.add_argument('--overload-drain-seconds',type=int,choices=[0,30,60,120],default=0);a=p.parse_args()
+if a.admission_mode and not a.capacity:p.error('--admission-mode requires --capacity')
+if a.overload_drain_seconds and (not a.capacity or a.admission_mode):p.error('overload drain requires the full queue capacity mode')
 root=pathlib.Path(a.report_dir).resolve();root.mkdir(parents=True,exist_ok=True)
 run='dogrs-fault-'+secrets.token_hex(5);folder=root/run;folder.mkdir()
 binary=str(pathlib.Path(os.environ['DOGRS_SYSTEM_BINARY']).resolve());containers=[];network=None;process=None
@@ -34,10 +36,15 @@ try:
   'docker':json.loads(command('docker','info','--format','{"cpus":{{.NCPU}},"memory_bytes":{{.MemTotal}},"architecture":"{{.Architecture}}"}')),
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
   'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
+  'measurement':a.admission_mode or ('queue-capacity' if a.capacity else 'recovery'),
+  'comparison_tenant':os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT') if a.capacity else None,
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),
   'nats_storage':'anonymous Docker volume at /data',
  },indent=2))
  env={**os.environ,'DOGRS_BACKEND':a.backend,'DOGRS_TEST_TENANT':run.replace('dogrs-fault-','dogrs-test-fault-'),'DOGRS_RECOVERY_MANIFEST':str(folder/'manifest.json')}
+ env.pop('DOGRS_ADMISSION_MODE',None)
+ if a.capacity and os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT'):
+  env['DOGRS_TEST_TENANT']=os.environ['DOGRS_CAPACITY_COMPARISON_TENANT']
  monitors={}
  if a.backend=='postgres':
   number=port();name=run+'-pg'
@@ -86,13 +93,15 @@ try:
   print(json.dumps({'backend':a.backend,'race_passed':result.returncode==0,'log':str(folder/'race.log')}))
   raise SystemExit(result.returncode)
  if a.capacity:
-  env.update(DOGRS_CAPACITY_TENANTS='100',DOGRS_CAPACITY_SECONDS=str(a.seconds),DOGRS_CAPACITY_BYTES=str(a.bytes))
+  if a.admission_mode:env['DOGRS_ADMISSION_MODE']=a.admission_mode
+  env.update(DOGRS_CAPACITY_RECOVERY_SECONDS=str(a.overload_drain_seconds),DOGRS_CAPACITY_TENANTS='100',DOGRS_CAPACITY_SECONDS=str(a.seconds),DOGRS_CAPACITY_BYTES=str(a.bytes))
   before=resource.getrusage(resource.RUSAGE_CHILDREN)
   with (folder/'container-stats.jsonl').open('w') as stats:
    monitor=subprocess.Popen(['docker','stats','--format','{{json .}}',*containers],stdout=stats,stderr=subprocess.DEVNULL)
    try:
     with (folder/'capacity.log').open('w') as output:
-     result=subprocess.run([binary,'capacity-local'],env=env,stdout=output,stderr=subprocess.STDOUT,timeout=300)
+     role='admission-native' if a.admission_mode and a.admission_mode.startswith('native-') else 'capacity-local'
+     result=subprocess.run([binary,role],env=env,stdout=output,stderr=subprocess.STDOUT,timeout=300)
     after=resource.getrusage(resource.RUSAGE_CHILDREN)
     (folder/'client-cpu.json').write_text(json.dumps({'user_seconds':after.ru_utime-before.ru_utime,'system_seconds':after.ru_stime-before.ru_stime}))
    finally:
@@ -106,7 +115,7 @@ try:
   if a.backend=='postgres':
    (folder/'io-profile.txt').write_text(command('docker','exec',name,'psql','-U','postgres','-c',"SELECT * FROM pg_stat_io WHERE object='wal'; SELECT * FROM pg_stat_wal;"))
    (folder/'query-profile.txt').write_text(command('docker','exec',name,'psql','-U','postgres','-c',"SELECT left(query,180) AS query,calls,round(mean_exec_time::numeric,3) AS mean_ms,round(total_exec_time::numeric,1) AS total_ms,shared_blks_read,shared_blks_hit,wal_bytes FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 12"))
-  print(json.dumps({'backend':a.backend,'restored_to_fresh_container':a.restore,'outage_seconds':a.outage_seconds,'replicas':3 if a.backend=='nats' else 1,'sync_policy':'always' if a.backend in ('redis','nats') else 'PostgreSQL default fsync/synchronous_commit','passed':result.returncode==0,'capacity_log':str(folder/'capacity.log')}))
+  print(json.dumps({'backend':a.backend,'restored_to_fresh_container':a.restore,'outage_seconds':a.outage_seconds,'replicas':3 if a.backend=='nats' else 1,'sync_policy':'always' if a.backend in ('redis','nats') else 'PostgreSQL default fsync/synchronous_commit','measurement':a.admission_mode or 'queue-capacity','passed':result.returncode==0,'capacity_log':str(folder/'capacity.log')}))
   raise SystemExit(result.returncode)
  log=folder/'client.log'
  with log.open('w') as output:

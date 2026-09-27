@@ -4,6 +4,16 @@ on:
     paths: ['.github/workflows/provider-capacity.yml', 'dog-queue/**', 'dog-examples/hosted-system/**', 'Cargo.lock']
   workflow_dispatch:
     inputs:
+      mode:
+        description: Attribution profiles are diagnostics, not production acceptance
+        type: choice
+        options: [queue, attribution]
+        default: queue
+      repeats:
+        description: Attribution repetitions (odd repetitions reverse profile order)
+        type: choice
+        options: ['1', '2', '3']
+        default: '2'
       backend:
         type: choice
         options: [postgres, redis, nats]
@@ -40,6 +50,7 @@ permissions:
   contents: read
 jobs:
   capacity:
+    if: ${{ inputs.mode != 'attribution' }}
     strategy:
       fail-fast: false
       matrix:
@@ -99,3 +110,43 @@ jobs:
         with:
           name: provider-capacity-${{ matrix.backend }}
           path: provider-capacity
+
+  attribution:
+    if: ${{ inputs.mode == 'attribution' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build -p hosted-system --release --features redis,nats --locked
+      - name: Compare serial fresh-server profiles
+        run: python3 dog-examples/hosted-system/compare_capacity.py --report-dir provider-attribution --seconds "$SECONDS_PER_RUN" --payloads "$PAYLOAD_BYTES" --backends "$BACKEND" --repeats "$REPEATS"
+        env:
+          DOGRS_SYSTEM_BINARY: target/release/hosted-system
+          SECONDS_PER_RUN: ${{ inputs.seconds }}
+          PAYLOAD_BYTES: ${{ inputs.payload_bytes }}
+          BACKEND: ${{ inputs.backend }}
+          REPEATS: ${{ inputs.repeats }}
+      - name: Explain comparison scope
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, pathlib
+          report = pathlib.Path('provider-attribution/comparison.json')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Provider attribution diagnostics\n\nThese measurements do not certify production readiness or excuse failed queue acceptance.\n\n')
+              if report.exists():
+                  data = json.loads(report.read_text())
+                  summary.write('| Repeat | Mode | Accepted | Completed | Target met |\n|---|---|---:|---:|---|\n')
+                  for row in data['runs']:
+                      result = row.get('result') or {}
+                      summary.write(f"| {row['repeat']} | {row['mode']} | {result.get('accepted', 'missing')} | {result.get('completed', 'not measured')} | {result.get('passed', result.get('admission_target_met', False))} |\n")
+                  summary.write('\n' + '\n'.join('- ' + note for note in data['notes']) + '\n')
+              else:
+                  summary.write('No comparison report was produced; inspect build/setup logs.\n')
+          PYTHON
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: provider-attribution-${{ inputs.backend }}
+          path: provider-attribution

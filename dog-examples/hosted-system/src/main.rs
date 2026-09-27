@@ -1,4 +1,5 @@
 //! A synthetic billing system for hosted infrastructure validation. No real payments or email.
+mod admission;
 mod capacity;
 mod connections;
 mod recovery;
@@ -242,6 +243,9 @@ async fn main() -> Result<()> {
     let role = std::env::args()
         .nth(1)
         .context("usage: hosted-system init|inspect|serve|worker")?;
+    if role == "admission-native" {
+        return admission::native().await;
+    }
     if role == "capacity-local" || role.starts_with("recovery-") {
         let backend = env("DOGRS_BACKEND")?;
         match backend.as_str() {
