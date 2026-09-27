@@ -15,6 +15,8 @@ pub struct NatsStore {
     pub(super) enqueue_slots: tokio::sync::Semaphore,
     pub(super) payload_slots: tokio::sync::Semaphore,
     pub(super) bucket: kv::Store,
+    pub(super) payload_bucket: kv::Store,
+    pub(super) payload_writer: Option<super::nats_batch::BatchWriter>,
     pub(super) max_state_bytes: usize,
     pub(super) index: tokio::sync::OnceCell<std::sync::Arc<super::nats_records::Index>>,
     pub(super) checked_tenants: dashmap::DashMap<String, std::sync::Arc<tokio::sync::OnceCell<()>>>,
@@ -118,6 +120,53 @@ impl NatsBackend {
         Ok(backend)
     }
 
+    /// Isolated layout experiment. Both stores must be fresh and dedicated.
+    /// Not a migration API: persistent layout binding and recovery qualification
+    /// are required before this diagnostic-branch constructor can be released.
+    #[doc(hidden)]
+    pub async fn from_context_with_payload_bucket(
+        context: jetstream::Context,
+        name: &str,
+        payload_name: &str,
+        max_payload: usize,
+    ) -> QueueResult<Self> {
+        if name == payload_name {
+            return Err(QueueError::InvalidConfig(
+                "payload store must be separate".into(),
+            ));
+        }
+        let mut backend = Self::from_context(context.clone(), name, max_payload).await?;
+        let payload = context.get_key_value(payload_name).await.map_err(error)?;
+        let payload_config = &payload.stream.cached_info().config;
+        if payload_config.num_replicas
+            < backend
+                .store
+                .bucket
+                .stream
+                .cached_info()
+                .config
+                .num_replicas
+            || payload_config.mirror.is_some()
+        {
+            return Err(QueueError::InvalidConfig(
+                "payload store requires matching durability".into(),
+            ));
+        }
+        let checked = Self::from_store_with_max_payload(payload.clone(), max_payload)?;
+        backend.store.max_state_bytes = backend
+            .store
+            .max_state_bytes
+            .min(checked.store.max_state_bytes);
+        if payload_config.allow_atomic_publish {
+            backend.store.payload_writer = Some(super::nats_batch::BatchWriter::start(
+                context,
+                payload.clone(),
+            ));
+        }
+        backend.store.payload_bucket = payload;
+        Ok(backend)
+    }
+
     /// Supply the smaller of the server and account payload limits. Hosted account
     /// limits may be lower than Client::server_info().max_payload. This reserves
     /// framing space and future completion metadata before admitting a job.
@@ -139,6 +188,8 @@ impl NatsBackend {
                 writer: None,
                 enqueue_slots: tokio::sync::Semaphore::new(16),
                 payload_slots: tokio::sync::Semaphore::new(128),
+                payload_bucket: bucket.clone(),
+                payload_writer: None,
                 bucket,
                 max_state_bytes,
                 index: Default::default(),

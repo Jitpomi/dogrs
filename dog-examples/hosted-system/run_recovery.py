@@ -57,6 +57,7 @@ try:
   'payload_pattern':'unique-per-tenant-and-sequence' if a.capacity else 'recovery-fixture',
   'measurement':a.admission_mode or ('queue-capacity' if a.capacity else 'recovery'),
   'comparison_tenant':os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT') if a.capacity else None,
+  'nats_layout':os.environ.get('DOGRS_NATS_LAYOUT','combined'),
   'nats_connections':os.environ.get('DOGRS_NATS_CONNECTIONS','shared'),
   'nats_atomic':os.environ.get('DOGRS_NATS_ATOMIC')!='0',
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),

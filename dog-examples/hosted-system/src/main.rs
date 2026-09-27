@@ -425,14 +425,41 @@ async fn main() -> Result<()> {
                         config.allow_atomic_publish =
                             std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
                         js.update_stream(config).await?;
-                        backends.push(Arc::new(
+                        let backend = if std::env::var("DOGRS_NATS_LAYOUT").as_deref()
+                            == Ok("split")
+                        {
+                            let payload_name = format!("{name}_payload");
+                            let payload = create_fixture_bucket(
+                                &js,
+                                async_nats::jetstream::kv::Config {
+                                    bucket: payload_name.clone(),
+                                    num_replicas: 3,
+                                    storage: async_nats::jetstream::stream::StorageType::File,
+                                    history: 1,
+                                    ..Default::default()
+                                },
+                            )
+                            .await?;
+                            let mut config = payload.stream.cached_info().config.clone();
+                            config.allow_direct = false;
+                            config.allow_atomic_publish = true;
+                            js.update_stream(config).await?;
+                            dog_queue::backend::nats::NatsBackend::from_context_with_payload_bucket(
+                                js.clone(),
+                                &name,
+                                &payload_name,
+                                1024 * 1024,
+                            )
+                            .await?
+                        } else {
                             dog_queue::backend::nats::NatsBackend::from_context(
                                 js.clone(),
                                 &name,
                                 1024 * 1024,
                             )
-                            .await?,
-                        ));
+                            .await?
+                        };
+                        backends.push(Arc::new(backend));
                     }
                     return capacity::run(dog_queue::backend::sharded::ShardedBackend::new(
                         backends,

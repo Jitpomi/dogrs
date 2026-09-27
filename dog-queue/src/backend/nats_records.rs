@@ -465,7 +465,7 @@ impl NatsStore {
     async fn bytes(&self, tenant: &str, id: &JobId) -> QueueResult<Vec<u8>> {
         crate::diagnostics::measure(
             crate::diagnostics::NATS_PAYLOAD_READ,
-            self.bucket.get(payload(tenant, id)),
+            self.payload_bucket.get(payload(tenant, id)),
         )
         .await
         .map_err(error)?
@@ -534,10 +534,27 @@ impl NatsStore {
                 }
             }
         }
-        self.bucket
+        self.payload_bucket
             .purge(payload(tenant, id))
             .await
             .map_err(error)?;
+        Ok(())
+    }
+    fn atomic_enqueue(&self) -> bool {
+        self.writer.is_some() && self.payload_bucket.name == self.bucket.name
+    }
+    async fn create_payload(&self, tenant: &str, id: &JobId, bytes: Vec<u8>) -> QueueResult<()> {
+        if let Some(writer) = &self.payload_writer {
+            writer
+                .payload(payload(tenant, id), bytes)
+                .await?
+                .ok_or_else(|| error("immutable payload already exists"))?;
+        } else {
+            self.payload_bucket
+                .create(payload(tenant, id), bytes.into())
+                .await
+                .map_err(error)?;
+        }
         Ok(())
     }
     async fn commit_enqueue(
@@ -549,7 +566,7 @@ impl NatsStore {
         value: Vec<u8>,
         revision: u64,
     ) -> QueueResult<bool> {
-        if let Some(writer) = &self.writer {
+        if let Some(writer) = self.writer.as_ref().filter(|_| self.atomic_enqueue()) {
             let revision = crate::diagnostics::measure(
                 crate::diagnostics::NATS_ENQUEUE_COMMIT,
                 writer.enqueue(
@@ -707,11 +724,10 @@ impl NatsStore {
                 ));
             }
             // Immutable payload must be durable before a discoverable job is committed.
-            if self.writer.is_none() {
+            if !self.atomic_enqueue() {
                 crate::diagnostics::measure(
                     crate::diagnostics::NATS_PAYLOAD_CREATE,
-                    self.bucket
-                        .create(payload(tenant, &id), message.payload_bytes.clone().into()),
+                    self.create_payload(tenant, &id, message.payload_bytes.clone()),
                 )
                 .await
                 .map_err(error)?;
@@ -739,8 +755,8 @@ impl NatsStore {
                         serde_json::from_slice(&entry.value).map_err(error)?;
                     if !existing.record.status.is_terminal() {
                         index.observe(key.clone(), entry.revision, entry.value.to_vec(), false);
-                        if self.writer.is_none() {
-                            self.bucket
+                        if !self.atomic_enqueue() {
+                            self.payload_bucket
                                 .purge(payload(tenant, &id))
                                 .await
                                 .map_err(error)?;
@@ -1180,6 +1196,131 @@ mod tests {
             serde_json::from_value(serde_json::json!({"code":400,"err_code":10002})).unwrap();
         assert!(!revision_conflict(&server));
     }
+    #[tokio::test]
+    #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
+    async fn split_payload_is_durable_before_discovery_and_remains_readable() {
+        use crate::{backend::nats::NatsBackend, JobMessage, QueueBackend, QueueCtx};
+        let js = async_nats::jetstream::new(
+            async_nats::connect(std::env::var("DOGRS_NATS_URL").unwrap())
+                .await
+                .unwrap(),
+        );
+        let name = format!("split_{}", uuid::Uuid::new_v4().simple());
+        let payload_name = format!("{name}_payload");
+        for name in [&name, &payload_name] {
+            let bucket = js
+                .create_key_value(kv::Config {
+                    bucket: name.clone(),
+                    storage: async_nats::jetstream::stream::StorageType::File,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let mut config = bucket.stream.cached_info().config.clone();
+            config.allow_direct = false;
+            config.allow_atomic_publish = true;
+            js.update_stream(config).await.unwrap();
+        }
+        let backend = NatsBackend::from_context_with_payload_bucket(
+            js.clone(),
+            &name,
+            &payload_name,
+            1024 * 1024,
+        )
+        .await
+        .unwrap();
+        let ctx = QueueCtx::new("split");
+        // Force a definite payload rejection. No metadata may become discoverable.
+        let mut config = backend
+            .store
+            .payload_bucket
+            .stream
+            .cached_info()
+            .config
+            .clone();
+        config.max_bytes = 1024;
+        js.update_stream(config.clone()).await.unwrap();
+        assert!(backend
+            .enqueue(
+                ctx.clone(),
+                JobMessage::new("work", vec![7; 65536], "bytes", "q")
+            )
+            .await
+            .is_err());
+        assert!(backend
+            .dequeue(ctx.clone(), &["q"])
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            js.get_key_value(&name)
+                .await
+                .unwrap()
+                .stream
+                .cached_info()
+                .state
+                .messages,
+            0
+        );
+        config.max_bytes = -1;
+        js.update_stream(config).await.unwrap();
+        let message =
+            || JobMessage::new("work", vec![8; 65536], "bytes", "q").with_idempotency_key("same");
+        let id = backend.enqueue(ctx.clone(), message()).await.unwrap();
+        assert_eq!(backend.enqueue(ctx.clone(), message()).await.unwrap(), id);
+        // Reopen explicitly against the same pair; no same-process payload cache.
+        let reopened = NatsBackend::from_context_with_payload_bucket(
+            js.clone(),
+            &name,
+            &payload_name,
+            1024 * 1024,
+        )
+        .await
+        .unwrap();
+        let lease = reopened
+            .dequeue(ctx.clone(), &["q"])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.record.message.payload_bytes, vec![8; 65536]);
+        assert_eq!(lease.record.job_id, id);
+        reopened
+            .ack_complete(ctx.clone(), id.clone(), lease.lease_token, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .get_record(ctx.clone(), id)
+                .await
+                .unwrap()
+                .message
+                .payload_bytes,
+            vec![8; 65536]
+        );
+        assert_eq!(
+            backend
+                .purge_terminal_before(ctx, Utc::now() + chrono::Duration::seconds(1))
+                .await
+                .unwrap(),
+            1
+        );
+        let keys = backend
+            .store
+            .payload_bucket
+            .keys()
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert!(
+            keys.is_empty(),
+            "payloads must be purged after terminal retention ends"
+        );
+        js.delete_key_value(name).await.unwrap();
+        js.delete_key_value(payload_name).await.unwrap();
+    }
+
     #[tokio::test]
     #[ignore = "requires disposable JetStream"]
     async fn stale_and_not_yet_visible_watch_hints_do_not_block_other_jobs() {

@@ -141,7 +141,7 @@ impl BatchWriter {
         });
         sender
     }
-    async fn send(&self, writes: Vec<Write>) -> QueueResult<Option<Vec<u64>>> {
+    async fn send(&self, writes: Vec<Write>, enqueue: bool) -> QueueResult<Option<Vec<u64>>> {
         if writes.is_empty()
             || writes.len() > MAX_MESSAGES
             || writes.iter().map(|w| w.value.len()).sum::<usize>() > MAX_BYTES
@@ -152,10 +152,10 @@ impl BatchWriter {
         }
 
         let (reply, receiver) = oneshot::channel();
-        let lane = if writes.len() == 1 {
-            &self.updates
-        } else {
+        let lane = if enqueue {
             &self.enqueues
+        } else {
+            &self.updates
         };
         lane.send(Group {
             writes,
@@ -175,11 +175,27 @@ impl BatchWriter {
         revision: u64,
     ) -> QueueResult<Option<u64>> {
         Ok(self
-            .send(vec![Write {
-                key: key.into(),
-                value,
-                revision,
-            }])
+            .send(
+                vec![Write {
+                    key: key.into(),
+                    value,
+                    revision,
+                }],
+                false,
+            )
+            .await?
+            .map(|r| r[0]))
+    }
+    pub(super) async fn payload(&self, key: String, value: Vec<u8>) -> QueueResult<Option<u64>> {
+        Ok(self
+            .send(
+                vec![Write {
+                    key,
+                    value,
+                    revision: 0,
+                }],
+                true,
+            )
             .await?
             .map(|r| r[0]))
     }
@@ -192,20 +208,23 @@ impl BatchWriter {
         revision: u64,
     ) -> QueueResult<Option<u64>> {
         Ok(self
-            .send(vec![
-                // Atomic visibility makes this order safe: metadata is not
-                // discoverable until its payload commits in the same batch.
-                Write {
-                    key: key.into(),
-                    value: metadata,
-                    revision,
-                },
-                Write {
-                    key: payload_key,
-                    value: payload,
-                    revision: 0,
-                },
-            ])
+            .send(
+                vec![
+                    // Atomic visibility makes this order safe: metadata is not
+                    // discoverable until its payload commits in the same batch.
+                    Write {
+                        key: key.into(),
+                        value: metadata,
+                        revision,
+                    },
+                    Write {
+                        key: payload_key,
+                        value: payload,
+                        revision: 0,
+                    },
+                ],
+                true,
+            )
             .await?
             .map(|r| r[0]))
     }

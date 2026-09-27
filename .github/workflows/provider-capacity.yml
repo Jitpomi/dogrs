@@ -1,4 +1,4 @@
-name: Provider capacity
+name: NATS payload-isolation attribution
 on:
   pull_request:
     paths: ['.github/workflows/provider-capacity.yml', 'dog-queue/**', 'dog-examples/hosted-system/**', 'Cargo.lock']
@@ -124,12 +124,8 @@ jobs:
           if [ "$NATS_CONNECTIONS" = compare ]; then
             test "$BACKEND" = nats
             test "$NATS_ATOMIC" = on
-            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-connections
-            status=0
-            for connections in shared per-shard per-shard shared; do
-              DOGRS_NATS_CONNECTIONS="$connections" python3 dog-examples/hosted-system/run_recovery.py nats --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
-            done
-            exit "$status"
+            python3 dog-examples/hosted-system/compare_nats_layout.py
+            exit $?
           fi
           export DOGRS_NATS_CONNECTIONS="$NATS_CONNECTIONS"
           if [ "$NATS_ATOMIC" = compare ]; then
