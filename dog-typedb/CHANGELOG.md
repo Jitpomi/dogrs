@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Support TLS and explicit credentials in the live test harness; validate the suite on TypeDB Cloud 3.13.6's free plan.
 - Pin/test TypeDB driver and server 3.13.6; remove unsupported compatibility claims.
 - Ignore literal/comment/variable keywords during automatic transaction routing.
 - Add `QueryOptions`, explicit-mode `execute_query_with_options`, adapter options, and schema-batch options.
