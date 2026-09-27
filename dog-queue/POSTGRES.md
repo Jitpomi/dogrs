@@ -71,6 +71,36 @@ Schema names, shard count and shard order identify persisted storage. Opening a
 different schema does not move existing jobs. Drain or perform a verified offline
 tenant migration before changing a live routing topology.
 
+## Binary payload compression
+
+`PostgresOptions.payload_storage` optionally selects PostgreSQL's storage policy
+for the binary payload column. `None` (the default) preserves the database's
+existing policy. Metadata compression is unchanged.
+
+```rust
+# use dog_queue::backend::postgres::{PostgresOptions, PostgresPayloadStorage};
+let options = PostgresOptions {
+    payload_storage: Some(PostgresPayloadStorage::External),
+    ..Default::default()
+};
+```
+
+`External` skips compression attempts while retaining normal PostgreSQL
+out-of-line storage and durable commits. It is useful for encrypted, already
+compressed, or otherwise incompressible payloads. `Extended` permits compression
+and is PostgreSQL's normal BYTEA policy; compressible payloads can use much less
+disk and WAL space with it. See [PostgreSQL's storage policies](https://www.postgresql.org/docs/18/storage-toast.html).
+
+This is a shared table setting, not a per-connection preference. Configure all
+writers consistently. An explicit change needs table-owner permissions and a
+brief exclusive table lock, bounded by the initialization timeout. Matching
+reopeners do not acquire that exclusive lock, and default reopeners do not reset
+the policy. Existing values are not rewritten: compressed and uncompressed jobs
+can coexist, and changing the policy does not change their payloads or leases.
+
+The option requires no extension or new crate and does not affect other backends.
+It is workload tuning, not a guarantee of a particular job rate on every server.
+
 ## Offline upgrade from the v1 tenant ledger
 
 1. Back up the database and stop **every old API and worker**. A running old

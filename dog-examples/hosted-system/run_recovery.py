@@ -12,6 +12,7 @@ wal_init_zero=os.environ.get('DOGRS_PG_WAL_INIT_ZERO','on')
 if wal_init_zero not in ('on','off'):p.error('WAL initialization must be on or off')
 payload_storage=os.environ.get('DOGRS_PG_PAYLOAD_STORAGE','extended')
 if payload_storage not in ('extended','external'):p.error('payload storage must be extended or external')
+if payload_storage=='external' and a.admission_mode:p.error('payload storage tuning requires the full queue adapter')
 pg_instances=int(os.environ.get('DOGRS_PG_INSTANCES','1'))
 if pg_instances not in (1,4):p.error('PostgreSQL instances must be 1 or 4')
 if pg_instances>1 and (a.backend!='postgres' or not a.capacity or a.admission_mode or os.environ.get('DOGRS_PG_FIXTURE_PARTITIONS','0')!='0'):p.error('independent PostgreSQL instances require ordinary full queue capacity')
@@ -88,10 +89,6 @@ try:
    create=schema.split(';',1)[0]+' PARTITION BY HASH (tenant);'
    create+='\n'.join(f'CREATE TABLE dogrs_queue_jobs_v2_p{i} PARTITION OF dogrs_queue_jobs_v2 FOR VALUES WITH (MODULUS {partitions},REMAINDER {i});' for i in range(partitions))
    command('docker','exec',name,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-c',create)
-  if payload_storage=='external':
-   assert pg_instances==1 and not partitions and int(os.environ.get('DOGRS_CAPACITY_SHARDS','1'))==1,'payload storage diagnostic requires one unpartitioned store'
-   schema=(pathlib.Path(__file__).resolve().parents[2]/'dog-queue/src/backend/postgres_schema.sql').read_text()
-   command('docker','exec',name,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-c',schema+'\nALTER TABLE dogrs_queue_jobs_v2 ALTER COLUMN payload SET STORAGE EXTERNAL;')
  elif a.backend=='redis':
   number=port();name=run+'-redis'
   launch(name,'-p',f'127.0.0.1:{number}:6379','redis:7.4-alpine','redis-server','--appendonly','yes','--appendfsync','always','--maxmemory-policy','noeviction')

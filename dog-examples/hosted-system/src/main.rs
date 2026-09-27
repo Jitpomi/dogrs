@@ -256,6 +256,16 @@ async fn main() -> Result<()> {
                     "local capacity requires loopback"
                 );
                 let mut options = dog_queue::backend::postgres::PostgresOptions {
+                    payload_storage: match std::env::var("DOGRS_PG_PAYLOAD_STORAGE").as_deref() {
+                        Ok("external") => {
+                            Some(dog_queue::backend::postgres::PostgresPayloadStorage::External)
+                        }
+                        Ok("extended") => {
+                            Some(dog_queue::backend::postgres::PostgresPayloadStorage::Extended)
+                        }
+                        Err(std::env::VarError::NotPresent) => None,
+                        _ => bail!("PostgreSQL payload storage must be external or extended"),
+                    },
                     max_connections: std::env::var("DOGRS_PG_POOL_SIZE")
                         .unwrap_or_else(|_| "64".into())
                         .parse()?,

@@ -1,6 +1,6 @@
 #![cfg(feature = "postgres")]
 use dog_queue::{
-    backend::postgres::{PostgresBackend, PostgresConfig, PostgresOptions},
+    backend::postgres::{PostgresBackend, PostgresConfig, PostgresOptions, PostgresPayloadStorage},
     JobId, JobMessage, JobRecord, JobStatus, LeaseToken, QueueBackend, QueueCtx,
 };
 use std::{sync::Arc, time::Duration};
@@ -55,6 +55,138 @@ async fn schema_and_dispatch_bounds_are_validated_before_connecting() {
             Err(dog_queue::QueueError::InvalidConfig(_))
         ));
     }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL with CREATE SCHEMA permission"]
+async fn payload_storage_preserves_existing_jobs_and_default_reopeners() {
+    async fn open(
+        uri: &str,
+        schema: &str,
+        storage: Option<PostgresPayloadStorage>,
+    ) -> PostgresBackend {
+        PostgresBackend::new_with_tls_options(
+            PostgresConfig {
+                connection_string: uri.into(),
+            },
+            tokio_postgres::NoTls,
+            PostgresOptions {
+                schema: Some(schema.into()),
+                payload_storage: storage,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+    let uri = std::env::var("DOGRS_POSTGRES_URL").unwrap();
+    let schema = format!("dogrs_payload_{}", uuid::Uuid::new_v4().simple());
+    let original = open(&uri, &schema, Some(PostgresPayloadStorage::Extended)).await;
+    let ctx = QueueCtx::new("payload-policy");
+    let bytes = vec![42; 65536];
+    let message = || JobMessage::new("payload", bytes.clone(), "bytes", "q");
+    let old = original.enqueue(ctx.clone(), message()).await.unwrap();
+    let (admin, connection) = tokio_postgres::connect(&uri, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    let connection = tokio::spawn(connection);
+    admin
+        .query_one(
+            "SELECT set_config('search_path',quote_ident($1),false)",
+            &[&schema],
+        )
+        .await
+        .unwrap();
+    let compressed = |id: JobId| {
+        let admin = &admin;
+        async move {
+            admin.query_one("SELECT pg_column_compression(payload) IS NOT NULL FROM dogrs_queue_jobs_v2 WHERE tenant='payload-policy' AND id=$1", &[&id.as_str()]).await.unwrap().get::<_, bool>(0)
+        }
+    };
+    assert!(
+        compressed(old.clone()).await,
+        "control payload must actually be compressed"
+    );
+    let external = open(&uri, &schema, Some(PostgresPayloadStorage::External)).await;
+    let fresh = external.enqueue(ctx.clone(), message()).await.unwrap();
+    assert!(
+        compressed(old.clone()).await,
+        "policy changes must not rewrite old values"
+    );
+    assert!(
+        !compressed(fresh.clone()).await,
+        "new binary payload must skip compression"
+    );
+    let reopened = open(&uri, &schema, None).await;
+    let policy: String = admin.query_one("SELECT attstorage::text FROM pg_attribute WHERE attrelid='dogrs_queue_jobs_v2'::regclass AND attname='payload'", &[]).await.unwrap().get(0);
+    assert_eq!(
+        policy, "e",
+        "default reconnect must preserve the selected policy"
+    );
+    admin
+        .batch_execute("BEGIN; LOCK TABLE dogrs_queue_jobs_v2 IN ACCESS SHARE MODE")
+        .await
+        .unwrap();
+    let matching = tokio::time::timeout(
+        Duration::from_secs(5),
+        open(&uri, &schema, Some(PostgresPayloadStorage::External)),
+    )
+    .await
+    .expect("a matching opener must not request an exclusive table lock");
+    let blocked_change = PostgresBackend::new_with_tls_options(
+        PostgresConfig {
+            connection_string: uri.clone(),
+        },
+        tokio_postgres::NoTls,
+        PostgresOptions {
+            schema: Some(schema.clone()),
+            payload_storage: Some(PostgresPayloadStorage::Extended),
+            operation_timeout: Duration::from_millis(200),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(
+        blocked_change.is_err(),
+        "a blocked policy change must respect the initialization timeout"
+    );
+    admin.batch_execute("COMMIT").await.unwrap();
+    drop(matching);
+    for id in [old, fresh] {
+        assert_eq!(
+            reopened
+                .get_record(ctx.clone(), id)
+                .await
+                .unwrap()
+                .message
+                .payload_bytes,
+            bytes
+        );
+    }
+    for _ in 0..2 {
+        let job = reopened
+            .dequeue(ctx.clone(), &["q"])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.record.message.payload_bytes, bytes);
+        reopened
+            .ack_complete(ctx.clone(), job.record.job_id, job.lease_token, None)
+            .await
+            .unwrap();
+    }
+    let restored = open(&uri, &schema, Some(PostgresPayloadStorage::Extended)).await;
+    let id = restored.enqueue(ctx, message()).await.unwrap();
+    assert!(
+        compressed(id).await,
+        "explicitly restoring compression must affect new writes"
+    );
+    drop((original, external, reopened, restored));
+    admin
+        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .unwrap();
+    connection.abort();
 }
 
 #[tokio::test]
@@ -347,7 +479,7 @@ async fn migration_preserves_jobs_and_fences_legacy_writers() {
     let mut record = JobRecord::new(
         id.clone(),
         "migration",
-        JobMessage::new("migration", vec![42], "json", "q"),
+        JobMessage::new("migration", vec![42; 65536], "json", "q"),
     );
     record.attempt = 1;
     record.start_processing(
@@ -380,6 +512,7 @@ async fn migration_preserves_jobs_and_fences_legacy_writers() {
         tokio_postgres::NoTls,
         PostgresOptions {
             migrate_legacy: true,
+            payload_storage: Some(PostgresPayloadStorage::External),
             ..Default::default()
         },
     )
@@ -392,7 +525,12 @@ async fn migration_preserves_jobs_and_fences_legacy_writers() {
             .unwrap()
             .message
             .payload_bytes,
-        vec![42]
+        vec![42; 65536]
+    );
+    let compressed: bool = client.query_one("SELECT pg_column_compression(payload) IS NOT NULL FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND id=$2", &[&tenant.tenant_id, &id.as_str()]).await.unwrap().get(0);
+    assert!(
+        !compressed,
+        "migration must apply the payload policy before importing rows"
     );
     backend
         .ack_complete(tenant.clone(), id.clone(), token, None)

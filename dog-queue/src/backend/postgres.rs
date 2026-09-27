@@ -14,6 +14,15 @@ mod completions;
 pub struct PostgresConfig {
     pub connection_string: String,
 }
+/// PostgreSQL's policy for the binary payload column. Metadata is unaffected.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PostgresPayloadStorage {
+    /// Permit compression and out-of-line storage (PostgreSQL's BYTEA default).
+    Extended,
+    /// Permit out-of-line storage without compression. Useful for encrypted,
+    /// already compressed, or otherwise incompressible payloads.
+    External,
+}
 /// PostgreSQL-specific tuning. It is not part of the portable queue contract.
 #[derive(Clone)]
 pub struct PostgresOptions {
@@ -22,6 +31,11 @@ pub struct PostgresOptions {
     /// contention. Schema names and shard order are persistent storage topology.
     /// None preserves the connection's configured search_path.
     pub schema: Option<String>,
+    /// Optional table-wide payload policy, applied transactionally at startup.
+    /// None preserves the existing database policy. All writers sharing the
+    /// table should agree on an explicit setting. Changing it needs table-owner
+    /// permissions and a brief exclusive lock; existing values are not rewritten.
+    pub payload_storage: Option<PostgresPayloadStorage>,
     pub max_connections: u32,
     pub operation_timeout: Duration,
     /// Producer concurrency cap. None reserves a quarter of the pool (at least
@@ -45,6 +59,7 @@ impl Default for PostgresOptions {
     fn default() -> Self {
         Self {
             schema: None,
+            payload_storage: None,
             max_connections: 4,
             operation_timeout: Duration::from_secs(10),
             enqueue_concurrency: None,
@@ -235,7 +250,11 @@ impl PostgresBackend {
         };
         tokio::time::timeout(
             store.timeout,
-            store.initialize(options.migrate_legacy, options.schema.as_deref()),
+            store.initialize(
+                options.migrate_legacy,
+                options.schema.as_deref(),
+                options.payload_storage,
+            ),
         )
         .await
         .map_err(|_| error("PostgreSQL schema initialization timed out"))??;
@@ -262,9 +281,39 @@ async fn schema_ready(client: &impl tokio_postgres::GenericClient) -> QueueResul
 }
 
 impl PostgresStore {
-    async fn initialize(&self, migrate: bool, schema: Option<&str>) -> QueueResult<()> {
+    async fn configure_payload_storage(
+        tx: &Transaction<'_>,
+        storage: PostgresPayloadStorage,
+    ) -> QueueResult<()> {
+        let current: String = tx.query_one(
+            "SELECT attstorage::text FROM pg_attribute WHERE attrelid='dogrs_queue_jobs_v2'::regclass AND attname='payload' AND NOT attisdropped",
+            &[],
+        ).await.map_err(error)?.get(0);
+        let (expected, sql) = match storage {
+            PostgresPayloadStorage::Extended => (
+                "x",
+                "ALTER TABLE dogrs_queue_jobs_v2 ALTER COLUMN payload SET STORAGE EXTENDED",
+            ),
+            PostgresPayloadStorage::External => (
+                "e",
+                "ALTER TABLE dogrs_queue_jobs_v2 ALTER COLUMN payload SET STORAGE EXTERNAL",
+            ),
+        };
+        // Matching reopeners avoid the exclusive table lock entirely.
+        if current != expected {
+            tx.batch_execute(sql).await.map_err(error)?;
+        }
+        Ok(())
+    }
+
+    async fn initialize(
+        &self,
+        migrate: bool,
+        schema: Option<&str>,
+        storage: Option<PostgresPayloadStorage>,
+    ) -> QueueResult<()> {
         let mut client = self.pool.get().await.map_err(error)?;
-        if schema_ready(&*client).await? {
+        if storage.is_none() && schema_ready(&*client).await? {
             return Ok(());
         }
         let tx = client.transaction().await.map_err(error)?;
@@ -275,6 +324,9 @@ impl PostgresStore {
         .await
         .map_err(error)?;
         if schema_ready(&tx).await? {
+            if let Some(storage) = storage {
+                Self::configure_payload_storage(&tx, storage).await?;
+            }
             return tx.commit().await.map_err(error);
         }
         if let Some(schema) = schema {
@@ -290,6 +342,9 @@ impl PostgresStore {
         tx.batch_execute(include_str!("postgres_schema.sql"))
             .await
             .map_err(error)?;
+        if let Some(storage) = storage {
+            Self::configure_payload_storage(&tx, storage).await?;
+        }
         let done: bool = tx
             .query_one(
                 "SELECT EXISTS(SELECT 1 FROM dogrs_queue_metadata_v2 WHERE version=2)",

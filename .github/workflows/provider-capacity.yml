@@ -55,10 +55,10 @@ on:
         options: ['on', 'off', 'compare']
         default: 'on'
       postgres_payload_storage:
-        description: Compression experiment for binary payloads (durability unchanged)
+        description: Binary payload policy (incompressible fixture defaults to external)
         type: choice
         options: ['extended', 'external', 'compare']
-        default: 'extended'
+        default: 'external'
       postgres_instances:
         description: Independent PostgreSQL servers sharing total connection and buffer budgets
         type: choice
@@ -177,8 +177,8 @@ jobs:
           DOGRS_PG_FIXTURE_PARTITIONS: ${{ inputs.postgres_fixture_partitions || '0' }}
           PG_WAL_INIT: ${{ inputs.postgres_wal_init_zero || 'on' }}
           DOGRS_PG_WAL_INIT_ZERO: ${{ inputs.postgres_wal_init_zero != 'compare' && inputs.postgres_wal_init_zero || 'on' }}
-          PG_PAYLOAD_STORAGE: ${{ inputs.postgres_payload_storage || 'extended' }}
-          DOGRS_PG_PAYLOAD_STORAGE: ${{ inputs.postgres_payload_storage != 'compare' && inputs.postgres_payload_storage || 'extended' }}
+          PG_PAYLOAD_STORAGE: ${{ inputs.postgres_payload_storage || 'external' }}
+          DOGRS_PG_PAYLOAD_STORAGE: ${{ matrix.backend == 'postgres' && (inputs.postgres_payload_storage != 'compare' && inputs.postgres_payload_storage || 'external') || 'extended' }}
           PG_INSTANCES: ${{ inputs.postgres_instances || '1' }}
           DOGRS_PG_INSTANCES: ${{ inputs.postgres_instances != 'compare' && inputs.postgres_instances || '1' }}
           PG_SHARDS: ${{ inputs.postgres_shards || '1' }}
