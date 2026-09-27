@@ -275,18 +275,17 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import json, os, pathlib
-          report = pathlib.Path('provider-attribution/comparison.json')
+          report = pathlib.Path('provider-attribution/fsync-comparison.json')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('## Provider attribution diagnostics\n\nThese measurements do not certify production readiness or excuse failed queue acceptance.\n\n')
+              summary.write('## Fsync attribution — diagnostic only\n\nBuffered cases weaken power-loss durability and cannot certify a production release. All cases are instrumented.\n\n')
               if report.exists():
                   data = json.loads(report.read_text())
-                  summary.write('| Repeat | Mode | Accepted | Completed | Target met |\n|---|---|---:|---:|---|\n')
+                  summary.write('| Trial | Sync interval | Accepted | Completed | Overload |\n|---|---|---:|---:|---:|\n')
                   for row in data['runs']:
-                      result = row.get('result') or {}
-                      summary.write(f"| {row['repeat']} | {row['mode']} | {result.get('accepted', 'missing')} | {result.get('completed', 'not measured')} | {result.get('passed', result.get('admission_target_met', False))} |\n")
-                  summary.write('\n' + '\n'.join('- ' + note for note in data['notes']) + '\n')
+                      result = row.get('measurement') or {}
+                      summary.write(f"| {row['trial']} | {row['sync_interval']} | {result.get('accepted', 'missing')} | {result.get('completed', 'missing')} | {result.get('overload', 'missing')} |\n")
               else:
-                  summary.write('No comparison report was produced; inspect build/setup logs.\n')
+                  summary.write('No report was produced; inspect build/setup logs.\n')
           PYTHON
       - uses: actions/upload-artifact@v4
         if: always()
