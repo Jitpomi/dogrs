@@ -47,7 +47,9 @@ fn configure_http(builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>) 
 
 /// Configure all authentication parameters
 fn configure_auth(builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>) -> Result<()> {
-    let jwt_secret = env::var("AUTH_JWT_SECRET").unwrap_or_else(|_| "dev-secret".to_string());
+    let jwt_secret = env::var("AUTH_JWT_SECRET").map_err(|_| {
+        anyhow::anyhow!("Set AUTH_JWT_SECRET to a randomly generated secret of at least 32 bytes")
+    })?;
     let service = env::var("AUTH_SERVICE").unwrap_or_else(|_| "users".to_string());
     let entity = env::var("AUTH_ENTITY").unwrap_or_else(|_| "user".to_string());
 

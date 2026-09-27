@@ -75,6 +75,17 @@ where
         config: OAuth2ClientConfig,
         verifier: Arc<dyn OAuthCallbackVerifier<P>>,
     ) -> Result<Self> {
+        for value in [&config.auth_url, &config.token_url]
+            .into_iter()
+            .chain(config.userinfo_url.as_ref())
+        {
+            validate_endpoint(value, false)?;
+        }
+        validate_endpoint(&config.redirect_uri, true)?;
+        anyhow::ensure!(
+            !config.client_id.trim().is_empty() && !config.client_secret.is_empty(),
+            "OAuth credentials are required"
+        );
         // oauth2 5.x: BasicClient::new() takes only ClientId; other fields via builders.
         // Each set_* call changes the type-state, giving us ConfiguredBasicClient.
         let client = BasicClient::new(ClientId::new(config.client_id))
@@ -139,7 +150,7 @@ where
             .client
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(PkceCodeVerifier::new(verifier))
-            .request_async(&self.http)
+            .request_async(&|request| bounded_request(self.http.clone(), request))
             .await?;
 
         Ok(token.access_token().secret().to_string())
@@ -154,18 +165,75 @@ where
             return Ok(None);
         };
 
-        let profile = self
+        let response = self
             .http
             .get(url)
             .bearer_auth(access_token)
             .send()
             .await?
-            .error_for_status()?
-            .json::<Value>()
-            .await?;
-
-        Ok(Some(profile))
+            .error_for_status()?;
+        anyhow::ensure!(
+            response.status().is_success(),
+            "OAuth profile request failed"
+        );
+        let bytes = read_bounded(response).await?;
+        Ok(Some(serde_json::from_slice(&bytes)?))
     }
+}
+
+async fn bounded_request(
+    http: reqwest::Client,
+    request: oauth2::HttpRequest,
+) -> std::result::Result<oauth2::HttpResponse, std::io::Error> {
+    async {
+        let response = http.execute(reqwest::Request::try_from(request)?).await?;
+        let mut builder = oauth2::http::Response::builder().status(response.status());
+        for (name, value) in response.headers() {
+            builder = builder.header(name, value);
+        }
+        Ok::<_, anyhow::Error>(builder.body(read_bounded(response).await?)?)
+    }
+    .await
+    .map_err(|_| std::io::Error::other("OAuth HTTP request failed"))
+}
+
+const MAX_PROVIDER_RESPONSE: usize = 1024 * 1024;
+
+async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>> {
+    anyhow::ensure!(
+        response
+            .content_length()
+            .is_none_or(|n| n <= MAX_PROVIDER_RESPONSE as u64),
+        "OAuth response too large"
+    );
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        anyhow::ensure!(
+            chunk.len() <= MAX_PROVIDER_RESPONSE - bytes.len(),
+            "OAuth response too large"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+fn validate_endpoint(value: &str, redirect: bool) -> Result<()> {
+    let url = reqwest::Url::parse(value)?;
+    let loopback = url
+        .host_str()
+        .is_some_and(|h| matches!(h, "localhost" | "127.0.0.1" | "[::1]"));
+    anyhow::ensure!(
+        url.scheme() == "https" || (redirect && loopback && url.scheme() == "http"),
+        "OAuth endpoints require HTTPS (HTTP loopback redirects are allowed)"
+    );
+    anyhow::ensure!(
+        url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none(),
+        "Invalid OAuth endpoint"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -220,6 +288,120 @@ mod tests {
             .is_err());
         assert!(provider
             .exchange_code("code", Some(&first.state), &mut ctx)
+            .await
+            .is_err());
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn endpoint(response: Vec<u8>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 8192];
+            let _ = stream.read(&mut request).await;
+            let _ = stream.write_all(&response).await;
+        });
+        format!("http://{addr}/")
+    }
+    #[test]
+    fn plaintext_provider_endpoints_and_url_credentials_are_rejected() {
+        assert!(validate_endpoint("http://provider.example/token", false).is_err());
+        assert!(validate_endpoint("http://127.0.0.1/token", false).is_err());
+        assert!(validate_endpoint("https://user:secret@provider.example/token", false).is_err());
+        assert!(validate_endpoint("https://provider.example/token#fragment", false).is_err());
+        assert!(validate_endpoint("http://127.0.0.1/callback", true).is_ok());
+        assert!(validate_endpoint("https://provider.example/token", false).is_ok());
+    }
+    #[tokio::test]
+    async fn bounded_http_rejects_declared_and_streamed_oversize_and_truncated_bodies() {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let valid = endpoint(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}".to_vec()).await;
+        let req = oauth2::http::Request::builder()
+            .uri(valid)
+            .body(vec![])
+            .unwrap();
+        assert_eq!(
+            bounded_request(http.clone(), req).await.unwrap().body(),
+            b"{}"
+        );
+        let mut chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        chunked.extend_from_slice(format!("{:x}\r\n", MAX_PROVIDER_RESPONSE + 1).as_bytes());
+        chunked.extend(vec![b'x'; MAX_PROVIDER_RESPONSE + 1]);
+        chunked.extend_from_slice(b"\r\n0\r\n\r\n");
+        for response in [
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                MAX_PROVIDER_RESPONSE + 1
+            )
+            .into_bytes(),
+            chunked,
+            b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort".to_vec(),
+        ] {
+            let url = endpoint(response).await;
+            let req = oauth2::http::Request::builder()
+                .uri(url)
+                .body(vec![])
+                .unwrap();
+            assert!(bounded_request(http.clone(), req).await.is_err());
+        }
+    }
+    struct OnceVerifier(std::sync::atomic::AtomicBool);
+    #[async_trait]
+    impl OAuthCallbackVerifier<()> for OnceVerifier {
+        async fn consume(&self, state: &str, _: &mut HookContext<Value, ()>) -> Result<String> {
+            anyhow::ensure!(state == "bound-state", "wrong state");
+            anyhow::ensure!(
+                !self.0.swap(true, std::sync::atomic::Ordering::SeqCst),
+                "replayed"
+            );
+            Ok("a".repeat(43))
+        }
+    }
+    #[tokio::test]
+    async fn token_exchange_consumes_state_and_uses_bounded_http_client() {
+        let body = r#"{"access_token":"provider-token","token_type":"bearer"}"#;
+        let url = endpoint(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).into_bytes()).await;
+        let mut provider = OAuth2AuthorizationCodeProvider::new(
+            OAuth2ClientConfig {
+                name: "test".into(),
+                client_id: "test".into(),
+                client_secret: "secret".into(),
+                auth_url: "https://provider.invalid/auth".into(),
+                token_url: "https://provider.invalid/token".into(),
+                redirect_uri: "http://localhost/callback".into(),
+                scopes: vec![],
+                userinfo_url: None,
+            },
+            Arc::new(OnceVerifier(std::sync::atomic::AtomicBool::new(false))),
+        )
+        .unwrap();
+        // Test-only endpoint replacement; the public constructor requires HTTPS.
+        provider.client = provider.client.set_token_uri(TokenUrl::new(url).unwrap());
+        let app = dog_core::DogAppBuilder::<Value, ()>::new().build();
+        let mut ctx = HookContext::new(
+            dog_core::TenantContext::new("test"),
+            dog_core::ServiceMethodKind::Create,
+            (),
+            dog_core::ServiceCaller::new(app.clone()),
+            app.config_snapshot(),
+        );
+        assert_eq!(
+            provider
+                .exchange_code("code", Some("bound-state"), &mut ctx)
+                .await
+                .unwrap(),
+            "provider-token"
+        );
+        assert!(provider
+            .exchange_code("code", Some("bound-state"), &mut ctx)
             .await
             .is_err());
     }

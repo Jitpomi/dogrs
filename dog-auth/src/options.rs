@@ -203,19 +203,19 @@ impl Default for JwtOptions {
 impl JwtOptions {
     /// Validate JWT configuration
     pub fn validate(&self) -> Result<(), String> {
-        if self.issuer.is_empty() {
+        if self.issuer.trim().is_empty() {
             return Err("JWT issuer cannot be empty".to_string());
         }
 
-        if self.audience.is_empty() {
+        if self.audience.is_empty() || self.audience.iter().any(|v| v.trim().is_empty()) {
             return Err("JWT audience cannot be empty".to_string());
         }
 
         // Check that appropriate keys/secrets are provided for the algorithm
         match self.algorithm {
             JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
-                if self.secret.is_none() {
-                    return Err("HMAC algorithms require a secret".to_string());
+                if self.secret.as_ref().is_none_or(|s| s.len() < 32) {
+                    return Err("HMAC algorithms require a secret of at least 32 bytes".to_string());
                 }
             }
             JwtAlgorithm::RS256
@@ -229,6 +229,16 @@ impl JwtOptions {
             }
         }
 
+        for key in ["iss", "aud", "exp", "iat", "nbf", "jti"] {
+            if self.custom_claims.contains_key(key) {
+                return Err(format!("Reserved JWT claim cannot be overridden: {key}"));
+            }
+        }
+        if self.access_token_expires_in.as_secs() > i64::MAX as u64
+            || self.refresh_token_expires_in.as_secs() > i64::MAX as u64
+        {
+            return Err("Token lifetime is too large".into());
+        }
         if self.access_token_expires_in.as_secs() == 0 {
             return Err("Access token expiration must be greater than 0".to_string());
         }

@@ -188,7 +188,18 @@ async fn message(client: &mut Client) -> Message {
         .unwrap()
 }
 async fn text(client: &mut Client) -> Value {
-    serde_json::from_str(message(client).await.to_text().unwrap()).unwrap()
+    timeout(Duration::from_secs(4), async {
+        loop {
+            match client.next().await.unwrap().unwrap() {
+                Message::Text(value) => return serde_json::from_str(&value).unwrap(),
+                Message::Ping(value) => client.send(Message::Pong(value)).await.unwrap(),
+                Message::Pong(_) => {}
+                other => panic!("expected application text, got {other:?}"),
+            }
+        }
+    })
+    .await
+    .unwrap()
 }
 async fn wait_active(active: &AtomicUsize, expected: usize) {
     timeout(Duration::from_secs(2), async {

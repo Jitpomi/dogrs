@@ -89,7 +89,7 @@ where
         };
 
         if pw.trim().is_empty() {
-            return Ok(v);
+            return Err(DogError::bad_request("Password must not be blank").into_anyhow());
         }
 
         let hashed = self.strategy.hash_password(pw).await?;

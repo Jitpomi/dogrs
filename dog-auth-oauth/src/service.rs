@@ -102,9 +102,9 @@ where
                 auth_result,
                 location,
             }),
-            Err(e) => {
+            Err(_) => {
                 // We keep this transport-agnostic: adapters can map OAuthError.location to headers.
-                let msg = e.to_string();
+                let msg = "OAuth authentication failed".to_string();
                 Err(anyhow::anyhow!(OAuthError {
                     message: msg,
                     location

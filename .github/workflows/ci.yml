@@ -46,6 +46,7 @@ jobs:
       - run: cargo test -p dog-transport --features http,grpc,cli,iroh --all-targets --locked
       - run: cargo test -p dog-core --no-default-features --locked
       - run: cargo test -p dog-core --no-default-features --features serde --locked
+      - run: cargo test -p dog-auth -p dog-auth-local -p dog-auth-oauth --features dog-auth-oauth/oauth2-client --all-targets --locked
       - run: cargo test -p dog-auth --no-default-features --features jwt-aws-lc-rs --locked
   databases:
     runs-on: ubuntu-latest

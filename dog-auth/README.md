@@ -1,128 +1,31 @@
 # dog-auth
 
-Core authentication module for DogRS, inspired by FeathersJS authentication while staying transport-agnostic and avoiding vendor lock-in.
+Transport-independent authentication strategies, hooks, JWT signing, and token lifecycle interfaces for DogRS.
 
-## What you get
+Register strategies on `AuthenticationService::builder(...)` before calling `build()`. Install the service with `AuthenticationService::install(...)`, then initialize the returned adapter with the built application. External adapters must set a trusted provider value and must not accept client-supplied `authenticated` or `auth_result` flags. Authentication identifies a caller; your application still authorizes each resource and tenant.
 
-- **`AuthenticationService<P>`**
-  - Installed in `DogApp` state under `"authentication"`
-  - Registers and runs strategies
-  - Creates JWT access tokens (when JWT features are enabled)
-- **Strategies**
-  - JWT (`JwtStrategy`) in this crate
-  - Local and OAuth strategies live in companion crates (`dog-auth-local`, `dog-auth-oauth`)
-- **Hooks**
-  - `AuthenticateHook` for protecting service methods via before-hooks
-  - Connection + event hook stubs to mirror Feathers-like flows
-- **`AuthServiceAdapter<P>`**
-  - A `DogService<Value, P>` adapter that exposes only:
-    - `create` (login)
-    - `remove` (logout)
-  - Designed to be mounted as an external `/auth` endpoint by server adapters (HTTP/WebSocket/etc.).
+## JWT
 
-## Install
+The default features use `jsonwebtoken` with AWS-LC and PEM support. HS256/384/512 and RS256/384/512, ES256/384 are supported. HMAC secrets must contain at least 32 bytes; generate them randomly and keep them out of source control. Signing requires the private PEM and verification requires the public PEM for asymmetric algorithms. `setup_validate()` accepts asymmetric configuration without an HMAC secret.
 
-In your crate:
+Verification pins the configured algorithm, issuer, audience, and token type. Access verification rejects refresh tokens. Expiration and `nbf` are enforced with zero clock leeway; synchronize deployment clocks. Tokens require a nonempty `jti` and are limited to 16 KiB. Token lifetimes must be positive and fit the timestamp range. Reserved JWT claims cannot be replaced through `custom_claims`.
 
-```toml
-[dependencies]
-dog-auth = { path = "../dog-auth" }
-```
+Keys are cached per authentication instance. Recreate the instance when replacing keys. Overlapping-key rotation/JWKS discovery is not built in. Applications using a shared issuer/key must enforce tenant authorization; the crate does not infer tenant rights from the request's tenant identifier.
 
-The default `jwt-aws-lc-rs` feature supplies JWT cryptography. The previous
-`jwt-rust-crypto` feature is removed because its RSA dependency has an unresolved
-private-key timing advisory (RUSTSEC-2023-0071).
+## Revocation and refresh rotation
 
-## Configuration
+Configure `AuthenticationBuilder::with_token_store(Arc<dyn TokenStore>)` to enable stateful lifecycle operations without selecting a particular database:
 
-`AuthOptions` is stored in app state under `"authentication.options"`.
+- `is_revoked(issuer, jti)` checks revoked **and consumed** tokens.
+- `revoke(issuer, jti, expires_at)` idempotently records a revocation.
+- `consume_refresh(issuer, jti, expires_at)` atomically inserts a revocation only if none exists and the token has not expired, returning true for exactly one caller.
 
-Key options:
+Namespace records by issuer and token ID, retain them through expiry, and use shared durable storage across application instances. Implement backend timeouts. Do not evict live records to free capacity: return an error. Verification and rotation fail closed on storage errors. The in-memory store in tests is only a test double.
 
-- **`jwt.secret`**
-  - Required for HMAC algorithms; RSA/ECDSA use configured PEM key paths
-- **`strategies`**
-  - Enabled strategy list (e.g. `Jwt`, `OAuth`, `Custom("local")`)
-- **Entity attachment (Feathers-like)**
-  - `entity`: JSON key to attach the entity under (e.g. `"user"`)
-  - `service`: service name used for entity loading (e.g. `"users"`)
-  - `entity_id_claim`: JWT claim containing the entity id (defaults to `"sub"` if not set)
+`rotate_refresh_token(token)` returns a new `TokenPair` and consumes the previous refresh token. Concurrent replay has one winner. If signing fails the old token is not consumed. If the response is lost after consumption, require login again. The crate does not provide token-family compromise detection or undo previously issued access tokens.
 
-JWT payload default:
+`revoke_access_token` and `revoke_refresh_token` revoke individual tokens. Authentication-service `remove` now revokes the supplied access token. To log out a whole session, also revoke its refresh token; application session management must track related tokens. Without a token store, ordinary JWT authentication remains stateless, but logout/revocation and refresh rotation return an error rather than claiming success.
 
-- When `entity` is configured, `AuthenticationService::create(...)` will automatically include the
-  authenticated entity's `id` in the JWT payload under `entity_id_claim` (default `"sub"`) unless
-  the caller already provided that claim.
+Refresh endpoints must apply current account/permission policy before calling rotation; rotation preserves custom claims from the old token. Account-wide session termination and password-change session policy belong to the application.
 
-## Basic usage
-
-### 1) Create + install the service
-
-```rust
-use std::sync::Arc;
-use dog_auth::{AuthenticationService, AuthOptions};
-use dog_core::DogAppBuilder;
-use serde_json::Value;
-
-// P is your params type
-fn setup_auth<P: Send + Sync + Clone + 'static>(builder: &mut DogAppBuilder<Value, P>) -> anyhow::Result<()> {
-    let options = AuthOptions::default();
-    
-    // Create the auth builder
-    let mut auth_builder = AuthenticationService::builder(builder, Some(options))?;
-
-    // Register strategies here (JWT + any from other crates)
-    // auth_builder.register_strategy("jwt", Arc::new(JwtStrategy::new()));
-
-    // Build and install the auth service into the DogAppBuilder
-    let auth = Arc::new(AuthenticationService::new(Arc::new(auth_builder.build())));
-    AuthenticationService::install(builder, auth);
-
-    Ok(())
-}
-```
-
-### 2) Protect services with `AuthenticateHook`
-
-`AuthenticateHook` is a DogRS before-hook. It checks:
-
-- `params.provider()`
-  - If missing/empty, the call is treated as internal and allowed through
-- `params.authentication()` or `Authorization: Bearer ...`
-
-```rust
-use dog_auth::hooks::{AuthenticateHook, AuthParams};
-
-// Construct hook
-// let hook = AuthenticateHook::<AuthParams<MyParams>>::new(vec!["jwt".into()]);
-```
-
-### 3) Expose an external `/auth` endpoint with `AuthServiceAdapter`
-
-`AuthServiceAdapter<P>` is a thin wrapper around `AuthenticationService<P>` that implements
-`DogService<Value, P>` so it can be mounted by server adapters.
-
-```rust
-use std::sync::Arc;
-use dog_auth::{AuthServiceAdapter, AuthenticationService};
-use dog_core::{DogAppBuilder, DogService};
-use serde_json::Value;
-
-fn mount_auth<P: Send + Sync + Clone + 'static>(builder: &mut DogAppBuilder<Value, P>, auth: Arc<AuthenticationService<P>>) -> anyhow::Result<()> {
-    let adapter = Arc::new(AuthServiceAdapter::new(auth));
-    builder.register_service("auth", adapter);
-    Ok(())
-}
-```
-
-## Notes
-
-- `dog-auth` is **transport-agnostic**. HTTP/WebSocket concerns belong in the server adapter.
-- If you use entity attachment, ensure your `DogService` implementation supports the required operations for your strategy.
-
-## 0.2 security changes
-
-See [release notes](../docs/release-0.2.md) for token-type verification, PEM features,
-key rotation, external parameter handling and OAuth's required callback-state verifier.
-Refresh tokens cannot be used as access tokens. Applications must authorize tenant
-access after authenticating the caller; a tenant ID by itself is not authorization.
+See [authentication hardening and migration](../docs/auth-hardening.md) for changes and verification.
