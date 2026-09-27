@@ -1,4 +1,4 @@
-name: NATS bounded producer-window attribution
+name: NATS partial-batch coalescing attribution
 on:
   pull_request:
     paths: ['.github/workflows/provider-capacity.yml', 'dog-queue/**', 'dog-examples/hosted-system/**', 'Cargo.lock']

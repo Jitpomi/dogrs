@@ -1,4 +1,4 @@
-"""Diagnostic branch only: compare a source-level producer concurrency change on one host.
+"""Diagnostic branch only: compare a bounded partial-batch coalescing delay on one host.
 
 Every trial keeps the same workload, durable storage, replica count and deadline.
 The source delta and binary hash are retained; this is not a released API option.
@@ -11,7 +11,7 @@ import subprocess
 
 source = Path("dog-queue/src/backend/nats_batch.rs")
 original = source.read_text()
-needle = "let concurrency = if enqueue { 4 } else { 1 };"
+needle = "const PRODUCER_COALESCE_MS: u64 = 10;"
 assert original.count(needle) == 1
 assert os.environ["BACKEND"] == "nats"
 assert os.environ["NATS_ATOMIC"] == "on"
@@ -27,16 +27,16 @@ status = 0
 env = dict(os.environ, DOGRS_NATS_CONNECTIONS="per-shard",
            DOGRS_CAPACITY_COMPARISON_TENANT="dogrs-test-batch-attribution")
 try:
-    for trial, window in enumerate([4, 2, 2, 4], 1):
-        folder = root / f"trial-{trial}-enqueue-window-{window}"
+    for trial, window in enumerate([0, 10, 10, 0], 1):
+        folder = root / f"trial-{trial}-coalesce-ms-{window}"
         folder.mkdir()
-        changed = original.replace(needle, f"let concurrency = if enqueue {{ {window} }} else {{ 1 }};")
+        changed = original.replace(needle, f"const PRODUCER_COALESCE_MS: u64 = {window};")
         if source.read_text() != changed:
             source.write_text(changed)
         subprocess.run(["cargo", "build", "-p", "hosted-system", "--release",
                         "--features", "redis,nats", "--locked"], check=True)
-        evidence = {"trial": trial, "batch_target_kib": 256, "enqueue_window": window, "metadata_window": 1,
-                    "source_revision": revision, "experimental_source_delta": window != 4,
+        evidence = {"trial": trial, "coalesce_ms": window, "batch_target_kib": 256, "enqueue_window": 4, "metadata_window": 1,
+                    "source_revision": revision, "experimental_source_delta": window != 10,
                     "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                     "binary_sha256": hashlib.sha256(Path("target/release/hosted-system").read_bytes()).hexdigest(),
                     "workload": "100 tenants, 1000 offers/s, 65536 unique incompressible bytes, 60s plus 5s drain",
@@ -47,7 +47,7 @@ try:
                                   "--report-dir", str(folder)], env=env)
         evidence["exit_code"] = outcome.returncode
         results.append(evidence)
-        (root / "window-comparison.json").write_text(json.dumps(results, indent=2))
+        (root / "coalescing-comparison.json").write_text(json.dumps(results, indent=2))
         if outcome.returncode:
             status = 1
 finally:

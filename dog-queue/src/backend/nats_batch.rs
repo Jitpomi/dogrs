@@ -14,6 +14,8 @@ const MAX_BYTES: usize = 2 * 1024 * 1024;
 // enqueues put their small metadata first and payload last so the crossing
 // entry can also finish the atomic batch. A larger operation stays intact.
 const TARGET_BATCH_BYTES: usize = 256 * 1024;
+// Diagnostic candidate: bounded producer coalescing; metadata never waits.
+const PRODUCER_COALESCE_MS: u64 = 10;
 struct Write {
     key: String,
     value: Vec<u8>,
@@ -74,9 +76,20 @@ impl BatchWriter {
                 let mut count = first.writes.len();
                 let mut keys: HashSet<_> = first.writes.iter().map(|w| w.key.clone()).collect();
                 let mut groups = vec![first];
-                while count < MAX_MESSAGES {
-                    let Ok(group) = receiver.try_recv() else {
-                        break;
+                let deadline = tokio::time::Instant::now()
+                    + Duration::from_millis(if enqueue { PRODUCER_COALESCE_MS } else { 0 });
+                while count < MAX_MESSAGES && bytes < TARGET_BATCH_BYTES {
+                    let group = match receiver.try_recv() {
+                        Ok(group) => group,
+                        Err(mpsc::error::TryRecvError::Empty)
+                            if enqueue && tokio::time::Instant::now() < deadline =>
+                        {
+                            match tokio::time::timeout_at(deadline, receiver.recv()).await {
+                                Ok(Some(group)) => group,
+                                _ => break,
+                            }
+                        }
+                        Err(_) => break,
                     };
                     let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
                     // A logical operation (including an enqueue's payload and metadata)
