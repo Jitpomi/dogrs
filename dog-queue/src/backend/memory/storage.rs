@@ -270,8 +270,9 @@ impl QueueBackend for MemoryBackend {
         lease_token: LeaseToken,
         result_ref: Option<String>,
     ) -> QueueResult<()> {
-        let now = Utc::now();
         let mut jobs = self.jobs.write().await;
+        // Ownership is checked at mutation time, after any lock contention.
+        let now = Utc::now();
 
         let record = jobs
             .get_mut(&job_id)
@@ -301,7 +302,7 @@ impl QueueBackend for MemoryBackend {
 
         // Check lease expiry — read from the status enum (single source of truth).
         if let Some(lease_until) = record.lease_until() {
-            if now > lease_until {
+            if now >= lease_until {
                 return Err(QueueError::LeaseExpired);
             }
         }
@@ -331,8 +332,9 @@ impl QueueBackend for MemoryBackend {
         error: String,
         retry_at: Option<DateTime<Utc>>,
     ) -> QueueResult<()> {
-        let now = Utc::now();
         let mut jobs = self.jobs.write().await;
+        // Ownership is checked at mutation time, after any lock contention.
+        let now = Utc::now();
 
         let record = jobs
             .get_mut(&job_id)
@@ -363,7 +365,7 @@ impl QueueBackend for MemoryBackend {
 
         // Check lease expiry — read from the status enum (single source of truth).
         if let Some(lease_until) = record.lease_until() {
-            if now > lease_until {
+            if now >= lease_until {
                 return Err(QueueError::LeaseExpired);
             }
         }
@@ -419,8 +421,9 @@ impl QueueBackend for MemoryBackend {
         lease_token: LeaseToken,
         extra_time: std::time::Duration,
     ) -> QueueResult<()> {
-        let now = Utc::now();
         let mut jobs = self.jobs.write().await;
+        // Ownership is checked at mutation time, after any lock contention.
+        let now = Utc::now();
 
         let record = jobs
             .get_mut(&job_id)
@@ -462,6 +465,10 @@ impl QueueBackend for MemoryBackend {
             ref mut lease_until,
         } = record.status
         {
+            // An expired owner cannot revive its lease before the reaper runs.
+            if now >= *lease_until {
+                return Err(QueueError::LeaseExpired);
+            }
             let extra = chrono::Duration::from_std(extra_time)
                 .map_err(|e| QueueError::Internal(format!("Invalid heartbeat duration: {e}")))?;
             *lease_until += extra;
@@ -631,6 +638,87 @@ mod tests {
             run_at: chrono::Utc::now(),
             idempotency_key: None,
         }
+    }
+
+    #[tokio::test]
+    async fn expired_owner_cannot_mutate_after_waiting_for_the_record_lock() {
+        for operation in 0..3 {
+            let backend = MemoryBackend::new();
+            let ctx = create_test_context();
+            let id = backend
+                .enqueue(ctx.clone(), create_test_job_message())
+                .await
+                .unwrap();
+            let lease = backend
+                .dequeue(ctx.clone(), &["default"])
+                .await
+                .unwrap()
+                .unwrap();
+            let mut records = backend.jobs.write().await;
+            let mut pending = match operation {
+                0 => backend.ack_complete(ctx.clone(), id.clone(), lease.lease_token, None),
+                1 => backend.ack_fail(
+                    ctx.clone(),
+                    id.clone(),
+                    lease.lease_token,
+                    "failed".into(),
+                    None,
+                ),
+                _ => backend.heartbeat_extend(
+                    ctx.clone(),
+                    id.clone(),
+                    lease.lease_token,
+                    std::time::Duration::from_secs(60),
+                ),
+            };
+            // Poll through the lock acquisition: the old code captured its clock
+            // before this wait and would allow the mutation using stale time.
+            assert!(futures::poll!(pending.as_mut()).is_pending());
+            let deadline = Utc::now() + chrono::Duration::milliseconds(10);
+            records.get_mut(&id).unwrap().status = JobStatus::Processing {
+                lease_until: deadline,
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            drop(records);
+            assert!(matches!(pending.await, Err(QueueError::LeaseExpired)));
+            let record = backend.get_record(ctx, id).await.unwrap();
+            assert_eq!(record.lease_until(), Some(deadline));
+            assert!(matches!(record.status, JobStatus::Processing { .. }));
+            assert_eq!(backend.reclaim_expired_leases().await.unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn live_owner_can_extend_its_lease() {
+        let backend = MemoryBackend::new();
+        let ctx = create_test_context();
+        let id = backend
+            .enqueue(ctx.clone(), create_test_job_message())
+            .await
+            .unwrap();
+        let lease = backend
+            .dequeue(ctx.clone(), &["default"])
+            .await
+            .unwrap()
+            .unwrap();
+        backend
+            .heartbeat_extend(
+                ctx.clone(),
+                id.clone(),
+                lease.lease_token.clone(),
+                std::time::Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        let record = backend.get_record(ctx.clone(), id.clone()).await.unwrap();
+        assert_eq!(
+            record.lease_until(),
+            Some(lease.lease_until + chrono::Duration::seconds(60))
+        );
+        backend
+            .ack_complete(ctx, id, lease.lease_token, None)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
