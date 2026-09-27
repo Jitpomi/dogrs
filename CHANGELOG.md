@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased: dog-blob hardening
+
+- Enforce tenant and actor ownership for upload sessions; reject request-supplied file paths.
+- Check actual stream sizes using private disk staging; remove whole-object S3 buffering.
+- Fence multipart mutations with atomic session revisions and a recoverable frozen completion manifest.
+- Bound and isolate chunk sessions; verify parts and support explicit staging cleanup.
+- Use stable tenant-separated object keys; fix range totals and enable optional S3 signed reads.
+- Make AWS dependencies optional. Breaking key/session/API migration instructions are in dog-blob/README.md.
+
+
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - Performance Refactoring

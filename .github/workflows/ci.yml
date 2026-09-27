@@ -124,6 +124,32 @@ jobs:
             cargo check -p dog-queue --no-default-features --features "$features" --locked
           done
 
+  blob-storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify vendor-independent default dependencies
+        run: |
+          cargo tree -p dog-blob --no-default-features --prefix none > /tmp/blob-deps
+          if grep -E '^aws-' /tmp/blob-deps; then exit 1; fi
+      - run: cargo test -p dog-blob --no-default-features --locked
+      - name: Start disposable S3-compatible storage
+        run: |
+          docker run -d --name blob-ci -p 127.0.0.1:9000:9000 -e RUSTFS_ACCESS_KEY=dogrs-local-test -e RUSTFS_SECRET_KEY=dogrs-local-test-only rustfs/rustfs@sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff /data
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:9000/health/ready; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:9000/health/ready
+      - run: cargo test -p dog-blob --all-features --locked
+      - run: cargo test -p dog-blob --features s3 --test s3_live --locked -- --ignored
+        env:
+          DOGRS_BLOB_TEST_ENDPOINT: http://127.0.0.1:9000
+      - if: always()
+        run: docker rm -fv blob-ci
+
   brokers:
     runs-on: ubuntu-latest
     timeout-minutes: 30

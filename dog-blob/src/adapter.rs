@@ -1,17 +1,34 @@
+use crate::bounded;
 use crate::{
     BlobConfig, BlobCtx, BlobError, BlobId, BlobKeyStrategy, BlobPut, BlobReceipt, BlobResult,
-    BlobStore, ByteRange, ByteStream, ChunkResult, ChunkSession, ChunkSessionId,
-    DefaultKeyStrategy, OpenedBlob, UploadCoordinator, UploadId, UploadIntent, UploadSession,
+    BlobStore, ByteRange, ByteStream, ChunkResult, ChunkSessionId, DefaultKeyStrategy, OpenedBlob,
+    UploadCoordinator, UploadId, UploadIntent, UploadSession,
 };
-use std::collections::{BTreeSet, HashMap};
+use futures_util::StreamExt;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+
+struct ChunkSlot {
+    created: std::time::Instant,
+    state: tokio::sync::Mutex<ChunkState>,
+}
+struct ChunkState {
+    closed: bool,
+    ctx: BlobCtx,
+    total: u32,
+    put: BlobPut,
+    directory: Option<tempfile::TempDir>,
+    parts: BTreeMap<u32, (u64, String)>,
+    bytes: u64,
+    completed: Option<BlobReceipt>,
+}
 
 pub struct BlobState {
     store: Arc<dyn BlobStore>,
     keys: Arc<dyn BlobKeyStrategy>,
     uploads: Option<Arc<dyn UploadCoordinator>>,
     config: BlobConfig,
-    chunk_sessions: Arc<tokio::sync::Mutex<HashMap<ChunkSessionId, ChunkSession>>>,
+    chunk_sessions: Arc<tokio::sync::Mutex<HashMap<ChunkSessionId, Arc<ChunkSlot>>>>,
 }
 /// The main blob adapter - this is what DogService implementations embed
 pub struct BlobAdapter {
@@ -65,15 +82,25 @@ impl BlobAdapter {
         put: BlobPut,
         body: ByteStream,
     ) -> BlobResult<BlobReceipt> {
-        // Validate size if known
-        if let Some(size) = put.size_hint {
-            if size > self.state.config.max_blob_bytes {
-                return Err(BlobError::invalid(format!(
-                    "Blob size {} exceeds maximum {}",
-                    size, self.state.config.max_blob_bytes
-                )));
-            }
+        self.state.config.validate()?;
+        bounded::context(&ctx)?;
+        bounded::put_options(&put)?;
+        if put
+            .size_hint
+            .is_some_and(|size| size > self.state.config.max_blob_bytes)
+        {
+            return Err(BlobError::invalid("blob exceeds byte limit"));
         }
+        let staged = bounded::spool(body, self.state.config.max_blob_bytes).await?;
+        if put.size_hint.is_some_and(|size| size != staged.size) {
+            return Err(BlobError::invalid("declared and received sizes differ"));
+        }
+        let size = staged.size;
+        let checksum = staged.checksum.clone();
+        if size >= self.state.config.multipart_threshold_bytes && self.state.uploads.is_some() {
+            return self.put_staged_multipart(ctx, put, staged).await;
+        }
+        let body = staged.stream();
 
         let blob_id = BlobId::new();
         let key = self
@@ -99,6 +126,12 @@ impl BlobAdapter {
                 .await?
         };
 
+        if result.size_bytes != size {
+            let _ = self.state.store.delete(&key).await;
+            return Err(BlobError::upload_failed(
+                "backend returned an incorrect byte count",
+            ));
+        }
         // Create receipt
         let mut receipt =
             BlobReceipt::new(blob_id, key, result.size_bytes).with_attributes(put.attributes);
@@ -112,9 +145,11 @@ impl BlobAdapter {
         if let Some(etag) = result.etag {
             receipt = receipt.with_etag(etag);
         }
-        if let Some(checksum) = result.checksum {
-            receipt = receipt.with_checksum(checksum);
-        }
+        receipt.checksum = if self.state.config.checksum_alg.is_some() {
+            Some(checksum)
+        } else {
+            result.checksum
+        };
 
         // Check if store supports ranges
         if self.state.store.capabilities().supports_range {
@@ -131,6 +166,9 @@ impl BlobAdapter {
         id: BlobId,
         range: Option<ByteRange>,
     ) -> BlobResult<OpenedBlob> {
+        self.state.config.validate()?;
+        bounded::context(&ctx)?;
+        bounded::identifier(id.as_str())?;
         let key = self.state.keys.object_key(
             &ctx.tenant_id,
             id.as_str(),
@@ -151,7 +189,23 @@ impl BlobAdapter {
             }
         }
 
-        // Fall back to streaming
+        // Enforce explicit range policy; never silently ignore a required range.
+        let range = match range {
+            Some(range) if !self.supports_ranges() => {
+                if self.state.config.require_range_support {
+                    return Err(BlobError::Unsupported);
+                }
+                let _ = range;
+                None
+            }
+            Some(range) => {
+                if !range.is_valid(self.state.store.head(&key).await?.size_bytes) {
+                    return Err(BlobError::invalid("invalid byte range"));
+                }
+                Some(range)
+            }
+            None => None,
+        };
         let get_result = self.state.store.get(&key, range).await?;
         let receipt = self.build_receipt_from_get_result(&get_result, id, key);
 
@@ -168,6 +222,9 @@ impl BlobAdapter {
 
     /// Delete a blob
     pub async fn delete(&self, ctx: BlobCtx, id: BlobId) -> BlobResult<()> {
+        self.state.config.validate()?;
+        bounded::context(&ctx)?;
+        bounded::identifier(id.as_str())?;
         let key = self.state.keys.object_key(
             &ctx.tenant_id,
             id.as_str(),
@@ -178,6 +235,20 @@ impl BlobAdapter {
 
     /// Begin a multipart upload
     pub async fn begin_multipart(&self, ctx: BlobCtx, put: BlobPut) -> BlobResult<UploadSession> {
+        self.state.config.validate()?;
+        bounded::context(&ctx)?;
+        bounded::put_options(&put)?;
+        if put
+            .size_hint
+            .is_some_and(|size| size > self.state.config.max_blob_bytes)
+        {
+            return Err(BlobError::invalid("blob exceeds byte limit"));
+        }
+        let total_parts = put
+            .size_hint
+            .map(|size| u32::try_from(size.div_ceil(self.state.config.upload_rules.part_size)))
+            .transpose()
+            .map_err(|_| BlobError::invalid("too many parts"))?;
         let uploads = self
             .state
             .uploads
@@ -190,19 +261,16 @@ impl BlobAdapter {
             .keys
             .object_key(&ctx.tenant_id, blob_id.as_str(), &put.key_hints);
 
-        let intent = UploadIntent::new(blob_id, key)
+        let mut intent = UploadIntent::new(blob_id, key)
             .with_content_type(
                 put.content_type
                     .unwrap_or_else(|| "application/octet-stream".to_string()),
             )
             .with_filename(put.filename.unwrap_or_default())
             .with_attributes(put.attributes)
-            .with_parts(
-                self.state.config.upload_rules.part_size,
-                put.size_hint
-                    .map(|s| s.div_ceil(self.state.config.upload_rules.part_size) as u32),
-            );
+            .with_parts(self.state.config.upload_rules.part_size, total_parts);
 
+        intent.size_hint = put.size_hint;
         uploads.begin(ctx, intent).await
     }
 
@@ -266,18 +334,16 @@ impl BlobAdapter {
         uploads.get_session(ctx, &upload_id).await
     }
 
-    /// Check if store supports signed URLs
     fn can_sign_urls(&self) -> bool {
-        // For now, assume no signed URL support
-        // This can be implemented later with proper trait bounds
-        false
+        self.state.store.signed_urls().is_some()
     }
-
-    /// Generate signed URL for reading (if supported)
-    async fn sign_get_url(&self, _key: &str, _expires_in_secs: u64) -> BlobResult<String> {
-        // For now, return unsupported
-        // This can be implemented later with proper trait bounds
-        Err(BlobError::Unsupported)
+    async fn sign_get_url(&self, key: &str, expires_in_secs: u64) -> BlobResult<String> {
+        self.state
+            .store
+            .signed_urls()
+            .ok_or(BlobError::Unsupported)?
+            .sign_get(key, expires_in_secs)
+            .await
     }
 
     /// Build receipt from key (for signed URLs)
@@ -306,7 +372,14 @@ impl BlobAdapter {
         id: BlobId,
         key: String,
     ) -> BlobReceipt {
-        let mut receipt = BlobReceipt::new(id, key, get_result.size_bytes);
+        let mut receipt = BlobReceipt::new(
+            id,
+            key,
+            get_result
+                .resolved_range
+                .as_ref()
+                .map_or(get_result.size_bytes, |r| r.total_size),
+        );
 
         if let Some(ct) = &get_result.content_type {
             receipt = receipt.with_content_type(ct.clone());
@@ -343,234 +416,352 @@ impl BlobAdapter {
         prefix: Option<&str>,
         limit: Option<usize>,
     ) -> BlobResult<Vec<crate::BlobInfo>> {
-        // Use tenant-specific prefix if provided
-        let full_prefix = if let Some(prefix) = prefix {
-            Some(format!("{}/{}", ctx.tenant_id, prefix))
-        } else {
-            Some(ctx.tenant_id.clone())
-        };
-
-        self.state.store.list(full_prefix.as_deref(), limit).await
-    }
-
-    /// Extract file data from multipart request, handling BlobRef and base64 formats
-    pub async fn extract_file_data(request_data: &serde_json::Value) -> BlobResult<Vec<u8>> {
-        if let Some(blob_ref) = request_data.get("file").and_then(|v| v.as_object()) {
-            // Handle BlobRef format
-            if let Some(temp_path) = blob_ref.get("temp_path").and_then(|v| v.as_str()) {
-                let file_bytes = tokio::fs::read(temp_path).await.map_err(|e| {
-                    BlobError::invalid(format!("Failed to read temp file {}: {}", temp_path, e))
-                })?;
-
-                // Clean up temp file after reading
-                let _ = tokio::fs::remove_file(temp_path).await;
-
-                Ok(file_bytes)
-            } else {
-                Err(BlobError::invalid("BlobRef missing temp_path field"))
-            }
-        } else if let Some(base64_data) = request_data.get("file").and_then(|v| v.as_str()) {
-            // Handle legacy base64 format for compatibility
-            use base64::Engine;
-            let decoded = base64::engine::general_purpose::STANDARD
-                .decode(base64_data)
-                .map_err(|e| BlobError::invalid(format!("Invalid base64 content: {}", e)))?;
-            Ok(decoded)
-        } else {
-            Err(BlobError::invalid(
-                "Missing or invalid 'file' field - expected BlobRef object or base64 string",
-            ))
+        bounded::context(&ctx)?;
+        let tenant_prefix = self
+            .state
+            .keys
+            .tenant_prefix(&ctx.tenant_id)
+            .ok_or(BlobError::Unsupported)?;
+        if prefix.is_some_and(|s| s.contains("..") || s.starts_with('/') || s.contains('\\')) {
+            return Err(BlobError::invalid("invalid listing prefix"));
         }
+        let full_prefix = format!("{}{}", tenant_prefix, prefix.unwrap_or(""));
+        self.state.store.list(Some(&full_prefix), limit).await
     }
 
-    /// Upload a chunk for client-side chunked uploads (e.g., Dropzone)
+    /// Decode a legacy base64 upload (8 MiB cap). JSON filesystem paths are never
+    /// opened. Use put_file with a file handle opened by trusted server code.
+    pub async fn extract_file_data(data: &serde_json::Value) -> BlobResult<Vec<u8>> {
+        Self::decode_file(data, 8 * 1024 * 1024)
+    }
+    fn decode_file(data: &serde_json::Value, max: u64) -> BlobResult<Vec<u8>> {
+        use base64::Engine;
+        let encoded = data.get("file").and_then(|v| v.as_str()).ok_or_else(|| {
+            BlobError::invalid("file must be base64; JSON file paths are not accepted")
+        })?;
+        let max = max.min(8 * 1024 * 1024);
+        if encoded.len() as u64 > max.div_ceil(3) * 4 {
+            return Err(BlobError::invalid("encoded file exceeds byte limit"));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| BlobError::invalid("invalid base64"))?;
+        if bytes.len() as u64 > max {
+            return Err(BlobError::invalid("decoded file exceeds byte limit"));
+        }
+        Ok(bytes)
+    }
+    /// The caller must establish ownership/authorization before opening this file.
+    /// The library streams the handle and never deletes a caller-supplied path.
+    pub async fn put_file(
+        &self,
+        ctx: BlobCtx,
+        put: BlobPut,
+        file: tokio::fs::File,
+    ) -> BlobResult<BlobReceipt> {
+        self.put(ctx, put, Box::pin(tokio_util::io::ReaderStream::new(file)))
+            .await
+    }
+    async fn put_staged_multipart(
+        &self,
+        ctx: BlobCtx,
+        mut put: BlobPut,
+        staged: bounded::StagedFile,
+    ) -> BlobResult<BlobReceipt> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+        put.size_hint = Some(staged.size);
+        let session = self.begin_multipart(ctx.clone(), put).await?;
+        let result = async {
+            let part_size = self.state.config.upload_rules.part_size;
+            for index in 0..staged.size.div_ceil(part_size) {
+                let mut file = tokio::fs::File::open(staged.path()).await?;
+                file.seek(std::io::SeekFrom::Start(index * part_size))
+                    .await?;
+                let stream = tokio_util::io::ReaderStream::new(file.take(part_size));
+                self.upload_part(
+                    ctx.clone(),
+                    session.upload_id.clone(),
+                    index as u32 + 1,
+                    Box::pin(stream),
+                )
+                .await?;
+            }
+            self.complete_multipart(ctx.clone(), session.upload_id.clone())
+                .await
+        }
+        .await;
+        if result.is_err() {
+            let _ = self.abort_multipart(ctx, session.upload_id).await;
+        }
+        result
+    }
+    /// Remove a caller-owned chunk session and its private files. This waits for
+    /// any in-flight operation; it never deletes an already completed blob.
+    pub async fn forget_chunk(&self, ctx: BlobCtx, id: ChunkSessionId) -> BlobResult<()> {
+        bounded::context(&ctx)?;
+        bounded::identifier(id.as_str())?;
+        let slot = self
+            .state
+            .chunk_sessions
+            .lock()
+            .await
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| BlobError::invalid("chunk session unavailable"))?;
+        let mut session = slot.state.lock().await;
+        if session.ctx.tenant_id != ctx.tenant_id || session.ctx.actor_id != ctx.actor_id {
+            return Err(BlobError::invalid("chunk session unavailable"));
+        }
+        session.closed = true;
+        session.directory = None;
+        let mut sessions = self.state.chunk_sessions.lock().await;
+        if sessions
+            .get(&id)
+            .is_some_and(|current| Arc::ptr_eq(current, &slot))
+        {
+            sessions.remove(&id);
+        }
+        Ok(())
+    }
+    pub async fn forget_upload(&self, ctx: BlobCtx, id: UploadId) -> BlobResult<()> {
+        self.state
+            .uploads
+            .as_ref()
+            .ok_or(BlobError::Unsupported)?
+            .forget(ctx, &id)
+            .await
+    }
+    /// Drop expired chunk sessions and their private temporary directories.
+    /// Call periodically even when no new uploads arrive.
+    pub async fn cleanup_expired_chunks(&self) -> usize {
+        let removed = {
+            let mut sessions = self.state.chunk_sessions.lock().await;
+            let ids: Vec<_> = sessions
+                .iter()
+                .filter(|(_, slot)| {
+                    slot.created.elapsed().as_secs() >= self.state.config.session_ttl_secs
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| sessions.remove(&id))
+                .collect::<Vec<_>>()
+        };
+        let count = removed.len();
+        drop(removed);
+        count
+    }
     pub async fn put_chunk(
         &self,
         ctx: BlobCtx,
-        session_id: ChunkSessionId,
-        chunk_index: u32,
-        total_chunks: u32,
+        id: ChunkSessionId,
+        index: u32,
+        total: u32,
         put: BlobPut,
-        chunk_data: Vec<u8>,
+        bytes: Vec<u8>,
     ) -> BlobResult<ChunkResult> {
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        // Get or create chunk session
-        let mut sessions = self.state.chunk_sessions.lock().await;
-        let session = sessions.entry(session_id.clone()).or_insert_with(|| {
-            let blob_id = BlobId::new();
-            let temp_dir = format!("/tmp/dog_blob_chunks_{}", session_id.as_str());
-
-            ChunkSession {
-                session_id: session_id.clone(),
-                blob_id,
-                tenant_id: ctx.tenant_id.clone(),
-                total_chunks,
-                received_chunks: BTreeSet::new(),
-                content_type: put.content_type.clone(),
-                filename: put.filename.clone(),
-                temp_dir,
-                created_at: current_time,
+        self.state.config.validate()?;
+        bounded::context(&ctx)?;
+        bounded::identifier(id.as_str())?;
+        bounded::put_options(&put)?;
+        let rules = &self.state.config.upload_rules;
+        if put
+            .size_hint
+            .is_some_and(|size| size > self.state.config.max_blob_bytes)
+        {
+            return Err(BlobError::invalid("blob exceeds byte limit"));
+        }
+        if total == 0
+            || total > rules.max_parts
+            || index >= total
+            || bytes.is_empty()
+            || bytes.len() as u64 > rules.part_size
+            || bytes.len() as u64 > self.state.config.max_blob_bytes
+            || (rules.require_fixed_part_size
+                && index < total - 1
+                && bytes.len() as u64 != rules.part_size)
+        {
+            return Err(BlobError::invalid(
+                "invalid chunk count, index or byte length",
+            ));
+        }
+        self.cleanup_expired_chunks().await;
+        let existing = self.state.chunk_sessions.lock().await.get(&id).cloned();
+        let slot = if let Some(slot) = existing {
+            slot
+        } else {
+            let new = Arc::new(ChunkSlot {
+                created: std::time::Instant::now(),
+                state: tokio::sync::Mutex::new(ChunkState {
+                    closed: false,
+                    ctx: ctx.clone(),
+                    total,
+                    put: put.clone(),
+                    directory: Some(tempfile::tempdir()?),
+                    parts: BTreeMap::new(),
+                    bytes: 0,
+                    completed: None,
+                }),
+            });
+            let mut sessions = self.state.chunk_sessions.lock().await;
+            if !sessions.contains_key(&id) && sessions.len() >= self.state.config.max_chunk_sessions
+            {
+                return Err(BlobError::invalid("chunk session capacity reached"));
+            }
+            sessions.entry(id).or_insert(new).clone()
+        };
+        let mut session = slot.state.lock().await;
+        if session.ctx.tenant_id != ctx.tenant_id || session.ctx.actor_id != ctx.actor_id {
+            return Err(BlobError::invalid("upload session unavailable"));
+        }
+        if session.closed || slot.created.elapsed().as_secs() >= self.state.config.session_ttl_secs
+        {
+            return Err(BlobError::invalid("chunk session expired"));
+        }
+        if session.total != total
+            || session.put.content_type != put.content_type
+            || session.put.filename != put.filename
+            || session.put.attributes != put.attributes
+            || session.put.size_hint != put.size_hint
+        {
+            return Err(BlobError::invalid("chunk metadata changed"));
+        }
+        use sha2::{Digest, Sha256};
+        let hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        if let Some((size, existing)) = session.parts.get(&index) {
+            if *size != bytes.len() as u64 || *existing != hash {
+                return Err(BlobError::invalid("conflicting chunk retry"));
+            }
+        } else {
+            if !rules.allow_out_of_order && index != session.parts.len() as u32 {
+                return Err(BlobError::invalid("chunks must arrive in order"));
+            }
+            let total_bytes = session
+                .bytes
+                .checked_add(bytes.len() as u64)
+                .filter(|n| *n <= self.state.config.max_blob_bytes)
+                .ok_or_else(|| BlobError::invalid("blob exceeds byte limit"))?;
+            let size = bytes.len() as u64;
+            let staged = bounded::spool(
+                Box::pin(futures::stream::once(async {
+                    Ok(bytes::Bytes::from(bytes))
+                })),
+                rules.part_size,
+            )
+            .await?;
+            let target = session
+                .directory
+                .as_ref()
+                .unwrap()
+                .path()
+                .join(format!("chunk-{index}"));
+            tokio::fs::rename(staged.path(), target).await?;
+            session.parts.insert(index, (size, hash));
+            session.bytes = total_bytes;
+        }
+        if let Some(receipt) = &session.completed {
+            return Ok(ChunkResult::Complete {
+                receipt: Box::new(receipt.clone()),
+            });
+        }
+        if session.parts.len() != total as usize {
+            return Ok(ChunkResult::Partial {
+                chunks_received: session.parts.len() as u32,
+                total_chunks: total,
+            });
+        }
+        let paths: Vec<_> = (0..total)
+            .map(|n| {
+                session
+                    .directory
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .join(format!("chunk-{n}"))
+            })
+            .collect();
+        let body = Box::pin(async_stream::try_stream! {
+            for path in paths {
+                let file = tokio::fs::File::open(path).await?;
+                let mut stream = tokio_util::io::ReaderStream::new(file);
+                while let Some(chunk) = stream.next().await { yield chunk?; }
             }
         });
-
-        // Store this chunk to temporary file
-        let chunk_path = format!("{}/chunk_{:03}", session.temp_dir, chunk_index);
-
-        // Ensure temp directory exists
-        if let Some(parent) = std::path::Path::new(&chunk_path).parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                BlobError::invalid(format!("Failed to create chunk directory: {}", e))
-            })?;
+        let mut put = session.put.clone();
+        if put.size_hint.is_some_and(|size| size != session.bytes) {
+            return Err(BlobError::invalid("declared and received sizes differ"));
         }
-
-        // Write chunk data to file
-        tokio::fs::write(&chunk_path, &chunk_data)
-            .await
-            .map_err(|e| BlobError::invalid(format!("Failed to write chunk: {}", e)))?;
-
-        // Mark chunk as received
-        session.received_chunks.insert(chunk_index);
-        let chunks_received = session.received_chunks.len() as u32;
-
-        // Check if we have all chunks
-        if chunks_received == total_chunks {
-            // All chunks received - reassemble and upload
-            let mut reassembled_data = Vec::new();
-            for i in 0..total_chunks {
-                let chunk_path = format!("{}/chunk_{:03}", session.temp_dir, i);
-                let chunk_data = tokio::fs::read(&chunk_path).await.map_err(|e| {
-                    BlobError::invalid(format!("Failed to read chunk {}: {}", i, e))
-                })?;
-                reassembled_data.extend_from_slice(&chunk_data);
-            }
-
-            // Create blob put request
-            let blob_put = BlobPut::new()
-                .with_content_type(
-                    session
-                        .content_type
-                        .clone()
-                        .unwrap_or_else(|| "application/octet-stream".to_string()),
-                )
-                .with_filename(
-                    session
-                        .filename
-                        .clone()
-                        .unwrap_or_else(|| "upload.bin".to_string()),
-                )
-                .with_size_hint(reassembled_data.len() as u64);
-
-            // Create stream from reassembled data
-            let bytes = bytes::Bytes::from(reassembled_data);
-            let stream = async_stream::stream! {
-                yield Ok(bytes);
-            };
-            let stream = Box::pin(stream);
-
-            // Upload the complete file
-            let receipt = self.put(ctx, blob_put, stream).await?;
-
-            // Clean up chunk directory
-            let temp_dir = session.temp_dir.clone();
-            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-
-            // Remove session from tracking
-            sessions.remove(&session_id);
-            drop(sessions);
-
-            Ok(ChunkResult::Complete {
-                receipt: Box::new(receipt),
-            })
-        } else {
-            // Still waiting for more chunks
-            drop(sessions);
-            Ok(ChunkResult::Partial {
-                chunks_received,
-                total_chunks,
-            })
-        }
+        put.size_hint = Some(session.bytes);
+        let receipt = self.put(ctx, put, body).await?;
+        session.completed = Some(receipt.clone());
+        session.directory.take();
+        Ok(ChunkResult::Complete {
+            receipt: Box::new(receipt),
+        })
     }
-
-    /// High-level convenience method for multipart uploads (handles both chunked and single uploads)
     pub async fn put_from_multipart(
         &self,
         ctx: BlobCtx,
-        request_data: &serde_json::Value,
+        data: &serde_json::Value,
     ) -> BlobResult<ChunkResult> {
-        // Extract metadata - check both direct field and BlobRef
-        let filename = request_data
+        self.state.config.validate()?;
+        bounded::context(&ctx)?;
+        let fields = ["dzuuid", "dzchunkindex", "dztotalchunkcount"];
+        let count = fields
+            .iter()
+            .filter(|key| data.get(**key).is_some())
+            .count();
+        if count != 0 && count != 3 {
+            return Err(BlobError::invalid(
+                "all chunk metadata fields are required together",
+            ));
+        }
+        let bytes = Self::decode_file(
+            data,
+            self.state
+                .config
+                .max_blob_bytes
+                .min(self.state.config.upload_rules.part_size),
+        )?;
+        let mut put = BlobPut::new();
+        put.filename = data
             .get("filename")
             .and_then(|v| v.as_str())
-            .or_else(|| {
-                // Check if filename is in the BlobRef under "file" field
-                request_data
-                    .get("file")
-                    .and_then(|f| f.get("filename"))
-                    .and_then(|v| v.as_str())
-            })
-            .unwrap_or("unknown");
-
-        let content_type = request_data
+            .map(str::to_owned);
+        put.content_type = data
             .get("content_type")
             .and_then(|v| v.as_str())
-            .unwrap_or("application/octet-stream");
-
-        // Extract Dropzone chunk metadata
-        let dzuuid = request_data.get("dzuuid").and_then(|v| v.as_str());
-        let dzchunkindex = request_data.get("dzchunkindex").and_then(|v| {
-            v.as_u64()
-                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-        });
-        let dztotalchunkcount = request_data.get("dztotalchunkcount").and_then(|v| {
-            v.as_u64()
-                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-        });
-
-        // Extract file data
-        let content_bytes = Self::extract_file_data(request_data).await?;
-
-        // Handle chunked vs single upload
-        if let (Some(uuid), Some(chunk_index), Some(total_chunks)) =
-            (dzuuid, dzchunkindex, dztotalchunkcount)
-        {
-            // Chunked upload
-            let session_id = ChunkSessionId::from_string(uuid.to_string());
-            let put_request = BlobPut::new()
-                .with_content_type(content_type)
-                .with_filename(filename);
-
+            .map(str::to_owned);
+        if count == 3 {
+            let id = data["dzuuid"]
+                .as_str()
+                .ok_or_else(|| BlobError::invalid("invalid chunk session"))?;
+            let number = |key: &str| -> BlobResult<u32> {
+                let value = &data[key];
+                let n = value
+                    .as_u64()
+                    .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+                    .ok_or_else(|| BlobError::invalid("invalid chunk number"))?;
+                u32::try_from(n).map_err(|_| BlobError::invalid("chunk number overflow"))
+            };
             self.put_chunk(
                 ctx,
-                session_id,
-                chunk_index as u32,
-                total_chunks as u32,
-                put_request,
-                content_bytes,
+                ChunkSessionId::from_string(id.into()),
+                number("dzchunkindex")?,
+                number("dztotalchunkcount")?,
+                put,
+                bytes,
             )
             .await
         } else {
-            // Single file upload
-            let put_request = BlobPut::new()
-                .with_content_type(content_type)
-                .with_filename(filename)
-                .with_size_hint(content_bytes.len() as u64);
-
-            // Create stream from content bytes
-            let bytes = bytes::Bytes::from(content_bytes);
-            let stream = async_stream::stream! {
-                yield Ok(bytes);
-            };
-            let stream = Box::pin(stream);
-
-            // Upload and wrap result in ChunkResult::Complete
-            let receipt = self.put(ctx, put_request, stream).await?;
-            Ok(ChunkResult::Complete {
-                receipt: Box::new(receipt),
-            })
+            let stream = Box::pin(futures::stream::once(async {
+                Ok(bytes::Bytes::from(bytes))
+            }));
+            self.put(ctx, put, stream)
+                .await
+                .map(|receipt| ChunkResult::Complete {
+                    receipt: Box::new(receipt),
+                })
         }
     }
 }
