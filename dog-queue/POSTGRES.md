@@ -156,6 +156,12 @@ of payload. A single larger payload is submitted alone. There is no collection
 timer on a quiet queue. The existing producer semaphore bounds admitted callers;
 the dispatcher additionally bounds waiting requests and executing statements.
 `batch_concurrency` applies separately to enqueue, claim and completion dispatchers.
+Without an override, each dispatcher uses one quarter of the pool: enqueue is
+capped at sixteen executing statements and workers at four per kind. Producer
+admission remains bounded independently; this does not increase the pool limit.
+The producer cap is higher because enqueues write payload bytes as well as metadata.
+Qualify these limits on your workload; sharing the four-statement worker cap with
+producers reduced capacity in the measured mixed workload.
 
 Every caller waits for commit before receiving its job ID. A batch never contains
 two submissions for the same tenant/queue/job-type/idempotency-key scope, and

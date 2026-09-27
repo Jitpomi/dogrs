@@ -41,7 +41,8 @@ pub struct PostgresOptions {
     /// Set to 1 for independent claims. Same-tenant calls are always separated.
     pub claim_batch_size: usize,
     /// Executing statements per enqueue/claim/completion dispatcher. None uses one
-    /// quarter of the pool, capped at four. An explicit limit lets fixed shards
+    /// quarter of the pool: capped at sixteen for producers and four for workers.
+    /// An explicit limit lets fixed shards
     /// share an application-wide statement budget without multiplying it.
     pub batch_concurrency: Option<usize>,
     /// Explicit offline v1 -> v2 migration. Stop every old worker/API first.
@@ -233,7 +234,7 @@ impl PostgresBackend {
                 pool.clone(),
                 options
                     .batch_concurrency
-                    .unwrap_or_else(|| ((options.max_connections as usize) / 4).clamp(1, 4)),
+                    .unwrap_or_else(|| ((options.max_connections as usize) / 4).clamp(1, 16)),
                 options.enqueue_batch_size,
                 options.operation_timeout,
             )
