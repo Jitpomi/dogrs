@@ -39,6 +39,7 @@ pub(crate) const NATS_POINT_READ: usize = 24;
 pub(crate) const PG_CLAIM_QUEUE: usize = 25;
 pub(crate) const PG_COMPLETE_QUEUE: usize = 26;
 pub(crate) const NATS_ATOMIC_COMMIT: usize = 27;
+pub(crate) const NATS_ENQUEUE_COMMIT: usize = 28;
 const NAMES: &[&str] = &[
     "pg_enqueue_total",
     "pg_claim_total",
@@ -68,6 +69,7 @@ const NAMES: &[&str] = &[
     "pg_claim_queue",
     "pg_complete_queue",
     "nats_atomic_commit",
+    "nats_enqueue_commit",
 ];
 struct Metric {
     count: AtomicU64,

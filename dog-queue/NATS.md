@@ -17,18 +17,23 @@ let backend = dog_queue::backend::nats::NatsBackend::from_context(
 
 `from_context` reads the stream's advertised capability; it does not modify the
 stream. When atomic publishing is disabled it uses individual conditional writes.
+Mirrored buckets retain the individual-write routing path.
+`new` also uses batching when opening an existing atomic-enabled bucket.
 Existing `from_store` constructors remain supported and use individual writes.
 The async-nats store handle does not expose its authenticated context, so callers
 must supply that context to use batching. Neither mode changes the stored format;
 writers and readers using either mode can share the bucket.
 
+Each enqueue atomically commits its immutable payload and discoverable metadata
+together. A rejected idempotency-scope update leaves neither key partially written.
 The atomic writer groups only concurrent operations, with at most 32 distinct
-keys and 1 MiB of value bytes per batch, two batches in flight and 256 queued
-requests per backend. A quiet queue uses ordinary single-message writes. Each
+keys and 2 MiB of value bytes per batch, two batches in flight and 256 queued
+requests per backend. A quiet single-key update uses an ordinary write; an enqueue pair still uses one
+atomic commit. Batch frames are pipelined after the server confirms staging has begun. Each
 caller waits for the final commit acknowledgement; staging acknowledgements never
 count as success. Per-key expected revisions are checked by the server when the
-whole batch commits. A known revision-conflict rejection is retried as individual
-conditional writes so unrelated operations can succeed. Transport errors,
+whole batch commits. A known revision-conflict rejection is retried as independent
+conditional operations (enqueue pairs stay atomic) so unrelated operations can succeed. Transport errors,
 timeouts and malformed acknowledgements are **not** automatically replayed: their
 commit outcome may be unknown. A batch execution is bounded to five seconds.
 

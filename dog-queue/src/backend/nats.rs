@@ -66,10 +66,7 @@ impl NatsBackend {
             config.allow_direct = false;
             js.update_stream(config).await.map_err(error)?;
         }
-        Self::from_store_with_max_payload(
-            js.get_key_value(&bucket.name).await.map_err(error)?,
-            max_payload,
-        )
+        Self::from_context(js, &bucket.name, max_payload).await
     }
     pub async fn new_async(config: NatsConfig) -> QueueResult<Self> {
         Self::new(config).await
@@ -105,7 +102,8 @@ impl NatsBackend {
         max_payload: usize,
     ) -> QueueResult<Self> {
         let bucket = context.get_key_value(name).await.map_err(error)?;
-        let atomic = bucket.stream.cached_info().config.allow_atomic_publish;
+        let atomic = bucket.stream.cached_info().config.allow_atomic_publish
+            && bucket.stream.cached_info().config.mirror.is_none();
         let mut backend = Self::from_store_with_max_payload(bucket.clone(), max_payload)?;
         if atomic {
             backend.store.writer = Some(super::nats_batch::BatchWriter::start(context, bucket));

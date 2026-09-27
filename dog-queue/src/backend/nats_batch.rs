@@ -2,19 +2,22 @@
 //! only after the final durable acknowledgement. Unknown outcomes are never replayed.
 use crate::{QueueError, QueueResult};
 use async_nats::jetstream::{self, kv, publish::PublishAck, response::Response};
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt};
 use std::{collections::HashSet, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
 const MAX_MESSAGES: usize = 32;
-const MAX_BYTES: usize = 1024 * 1024;
+const MAX_BYTES: usize = 2 * 1024 * 1024;
 struct Write {
     key: String,
     value: Vec<u8>,
     revision: u64,
-    reply: oneshot::Sender<QueueResult<Option<u64>>>,
 }
-pub(super) struct BatchWriter(mpsc::Sender<Write>);
+struct Group {
+    writes: Vec<Write>,
+    reply: oneshot::Sender<QueueResult<Option<Vec<u64>>>>,
+}
+pub(super) struct BatchWriter(mpsc::Sender<Group>);
 fn error(e: impl std::fmt::Display) -> QueueError {
     QueueError::Internal(format!("JetStream atomic publish: {e}"))
 }
@@ -27,7 +30,7 @@ fn conflict(e: &jetstream::Error) -> bool {
 }
 impl BatchWriter {
     pub(super) fn start(context: jetstream::Context, bucket: kv::Store) -> Self {
-        let (sender, mut receiver) = mpsc::channel::<Write>(256);
+        let (sender, mut receiver) = mpsc::channel::<Group>(256);
         tokio::spawn(async move {
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
@@ -36,51 +39,58 @@ impl BatchWriter {
                     let _ = running.join_next().await;
                 }
                 let first = match deferred.take() {
-                    Some(write) => write,
+                    Some(group) => group,
                     None => match receiver.recv().await {
-                        Some(write) => write,
+                        Some(group) => group,
                         None => break,
                     },
                 };
                 tokio::task::yield_now().await;
-                let mut bytes = first.value.len();
-                let mut keys = HashSet::from([first.key.clone()]);
-                let mut writes = vec![first];
-                while writes.len() < MAX_MESSAGES {
-                    let Ok(write) = receiver.try_recv() else {
+                let mut bytes: usize = first.writes.iter().map(|w| w.value.len()).sum();
+                let mut count = first.writes.len();
+                let mut keys: HashSet<_> = first.writes.iter().map(|w| w.key.clone()).collect();
+                let mut groups = vec![first];
+                while count < MAX_MESSAGES {
+                    let Ok(group) = receiver.try_recv() else {
                         break;
                     };
-                    // Conditional checks are against the state before the batch.
-                    // Never place two writes to the same subject in one batch.
-                    if bytes + write.value.len() > MAX_BYTES || !keys.insert(write.key.clone()) {
-                        deferred = Some(write);
+                    let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
+                    // A logical operation (including an enqueue's payload and metadata)
+                    // is indivisible. Distinct expected subjects are required by ADR-50.
+                    if count + group.writes.len() > MAX_MESSAGES
+                        || bytes + size > MAX_BYTES
+                        || group.writes.iter().any(|w| keys.contains(&w.key))
+                    {
+                        deferred = Some(group);
                         break;
                     }
-                    bytes += write.value.len();
-                    writes.push(write);
+                    bytes += size;
+                    count += group.writes.len();
+                    keys.extend(group.writes.iter().map(|w| w.key.clone()));
+                    groups.push(group);
                 }
                 let context = context.clone();
                 let bucket = bucket.clone();
                 running.spawn(async move {
-                    writes.retain(|write| !write.reply.is_closed());
-                    if writes.is_empty() {
+                    groups.retain(|group| !group.reply.is_closed());
+                    if groups.is_empty() {
                         return;
                     }
-                    let result = tokio::time::timeout(
+                    let outcomes = tokio::time::timeout(
                         Duration::from_secs(5),
-                        execute(&context, &bucket, &writes),
+                        execute(&context, &bucket, &groups),
                     )
                     .await
                     .unwrap_or_else(|_| Err(error("timed out; commit outcome may be unknown")));
-                    match result {
-                        Ok(revisions) => {
-                            for (write, revision) in writes.into_iter().zip(revisions) {
-                                let _ = write.reply.send(Ok(revision));
+                    match outcomes {
+                        Ok(outcomes) => {
+                            for (group, outcome) in groups.into_iter().zip(outcomes) {
+                                let _ = group.reply.send(outcome);
                             }
                         }
                         Err(e) => {
-                            for write in writes {
-                                let _ = write.reply.send(Err(e.clone()));
+                            for group in groups {
+                                let _ = group.reply.send(Err(e.clone()));
                             }
                         }
                     }
@@ -91,25 +101,63 @@ impl BatchWriter {
         });
         Self(sender)
     }
+    async fn send(&self, writes: Vec<Write>) -> QueueResult<Option<Vec<u64>>> {
+        if writes.is_empty()
+            || writes.len() > MAX_MESSAGES
+            || writes.iter().map(|w| w.value.len()).sum::<usize>() > MAX_BYTES
+        {
+            return Err(QueueError::InvalidConfig(
+                "JetStream atomic operation exceeds batch bounds".into(),
+            ));
+        }
+
+        let (reply, receiver) = oneshot::channel();
+        self.0
+            .send(Group { writes, reply })
+            .await
+            .map_err(|_| error("writer closed"))?;
+        receiver
+            .await
+            .map_err(|_| error("writer interrupted; commit outcome may be unknown"))?
+    }
     pub(super) async fn submit(
         &self,
         key: &str,
         value: Vec<u8>,
         revision: u64,
     ) -> QueueResult<Option<u64>> {
-        let (reply, receiver) = oneshot::channel();
-        self.0
-            .send(Write {
+        Ok(self
+            .send(vec![Write {
                 key: key.into(),
                 value,
                 revision,
-                reply,
-            })
-            .await
-            .map_err(|_| error("writer closed"))?;
-        receiver
-            .await
-            .map_err(|_| error("writer interrupted; commit outcome may be unknown"))?
+            }])
+            .await?
+            .map(|r| r[0]))
+    }
+    pub(super) async fn enqueue(
+        &self,
+        payload_key: String,
+        payload: Vec<u8>,
+        key: &str,
+        metadata: Vec<u8>,
+        revision: u64,
+    ) -> QueueResult<Option<u64>> {
+        Ok(self
+            .send(vec![
+                Write {
+                    key: payload_key,
+                    value: payload,
+                    revision: 0,
+                },
+                Write {
+                    key: key.into(),
+                    value: metadata,
+                    revision,
+                },
+            ])
+            .await?
+            .map(|r| r[1]))
     }
 }
 async fn single(bucket: &kv::Store, write: &Write) -> QueueResult<Option<u64>> {
@@ -127,40 +175,63 @@ async fn single(bucket: &kv::Store, write: &Write) -> QueueResult<Option<u64>> {
         Err(e) => Err(error(e)),
     }
 }
-async fn execute(
+async fn commit(
     context: &jetstream::Context,
     bucket: &kv::Store,
-    writes: &[Write],
-) -> QueueResult<Vec<Option<u64>>> {
+    writes: &[&Write],
+) -> QueueResult<Option<Vec<u64>>> {
     if writes.len() == 1 {
-        return Ok(vec![single(bucket, &writes[0]).await?]);
+        return Ok(single(bucket, writes[0])
+            .await?
+            .map(|revision| vec![revision]));
     }
-    match crate::diagnostics::measure(
+    crate::diagnostics::measure(
         crate::diagnostics::NATS_ATOMIC_COMMIT,
         atomic(context, bucket, writes),
     )
-    .await?
-    {
-        Some(revisions) => Ok(revisions.into_iter().map(Some).collect()),
-        // The server rejected the ENTIRE batch before committing any message.
-        // Isolate conflicting keys without discarding unrelated valid updates.
-        // No transport, timeout, or malformed-ack failure reaches this branch.
-        None => {
-            let pending: Vec<_> = writes
+    .await
+}
+async fn execute(
+    context: &jetstream::Context,
+    bucket: &kv::Store,
+    groups: &[Group],
+) -> QueueResult<Vec<QueueResult<Option<Vec<u64>>>>> {
+    let writes: Vec<_> = groups.iter().flat_map(|g| &g.writes).collect();
+    match commit(context, bucket, &writes).await? {
+        Some(revisions) => {
+            let mut offset = 0;
+            Ok(groups
                 .iter()
-                .map(|write| single(bucket, write).boxed())
+                .map(|g| {
+                    let end = offset + g.writes.len();
+                    let r = revisions[offset..end].to_vec();
+                    offset = end;
+                    Ok(Some(r))
+                })
+                .collect())
+        }
+        None if groups.len() == 1 => Ok(vec![Ok(None)]),
+        // Only a known atomic rejection can reach this branch. Each logical
+        // operation remains atomic; an enqueue pair is never split into writes.
+        None => {
+            let pending: Vec<_> = groups
+                .iter()
+                .map(|group| {
+                    async move {
+                        let writes: Vec<_> = group.writes.iter().collect();
+                        commit(context, bucket, &writes).await
+                    }
+                    .boxed()
+                })
                 .collect();
-            futures::stream::iter(pending)
-                .buffered(16)
-                .try_collect()
-                .await
+            Ok(futures::stream::iter(pending).buffered(16).collect().await)
         }
     }
 }
 async fn atomic(
     context: &jetstream::Context,
     bucket: &kv::Store,
-    writes: &[Write],
+    writes: &[&Write],
 ) -> QueueResult<Option<Vec<u64>>> {
     let client = context.client();
     let inbox = client.new_inbox();
@@ -206,38 +277,46 @@ async fn atomic(
                 .await
                 .map_err(error)?;
         }
-        let response = replies
-            .next()
-            .await
-            .ok_or_else(|| error("acknowledgement stream closed; outcome may be unknown"))?;
-        if response.status.is_some_and(|status| !status.is_success()) {
-            return Err(error("server rejected batch request"));
-        }
-        if response.payload.is_empty() {
-            if i + 1 == writes.len() {
-                return Err(error(
-                    "missing final commit acknowledgement; outcome may be unknown",
-                ));
-            }
+        // Confirm batch start, then pipeline its remaining frames in order.
+        // Awaiting every staging reply adds a network round trip per message.
+        if i != 0 && i + 1 != writes.len() {
             continue;
         }
-        match serde_json::from_slice::<Response<PublishAck>>(&response.payload).map_err(error)? {
-            Response::Err { error: e } if conflict(&e) => return Ok(None),
-            Response::Err { error: e } => return Err(error(e)),
-            Response::Ok(ack) => {
-                if i + 1 != writes.len()
-                    || ack.stream != bucket.stream_name
-                    || ack.batch_id.as_deref() != Some(&id)
-                    || ack.batch_size != Some(writes.len() as u64)
-                    || ack.duplicate
-                    || ack.sequence < writes.len() as u64
-                {
-                    return Err(error(
-                        "invalid commit acknowledgement; outcome may be unknown",
-                    ));
+        loop {
+            let response = replies
+                .next()
+                .await
+                .ok_or_else(|| error("acknowledgement stream closed; outcome may be unknown"))?;
+            if response.status.is_some_and(|status| !status.is_success()) {
+                return Err(error("server rejected batch request"));
+            }
+            if response.payload.is_empty() {
+                if i == 0 {
+                    break;
                 }
-                let first = ack.sequence - writes.len() as u64 + 1;
-                return Ok(Some((first..=ack.sequence).collect()));
+                // Intermediate staging replies may precede the final durable ack.
+                continue;
+            }
+            match serde_json::from_slice::<Response<PublishAck>>(&response.payload)
+                .map_err(error)?
+            {
+                Response::Err { error: e } if conflict(&e) => return Ok(None),
+                Response::Err { error: e } => return Err(error(e)),
+                Response::Ok(ack) => {
+                    if i + 1 != writes.len()
+                        || ack.stream != bucket.stream_name
+                        || ack.batch_id.as_deref() != Some(&id)
+                        || ack.batch_size != Some(writes.len() as u64)
+                        || ack.duplicate
+                        || ack.sequence < writes.len() as u64
+                    {
+                        return Err(error(
+                            "invalid commit acknowledgement; outcome may be unknown",
+                        ));
+                    }
+                    let first = ack.sequence - writes.len() as u64 + 1;
+                    return Ok(Some((first..=ack.sequence).collect()));
+                }
             }
         }
     }
@@ -281,25 +360,30 @@ mod tests {
             key: key.into(),
             revision,
             value: payload,
-            reply: oneshot::channel().0,
         }
     }
     #[tokio::test]
     #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
     async fn atomic_revisions_and_rejected_batch_preserve_every_key() {
         let (js, bucket) = fixture().await;
-        let writes = vec![
+        let writes = [
             write("first", 0, vec![1; 65536]),
             write("second", 0, vec![2; 65536]),
         ];
-        let revisions = atomic(&js, &bucket, &writes).await.unwrap().unwrap();
+        let revisions = atomic(&js, &bucket, &writes.iter().collect::<Vec<_>>())
+            .await
+            .unwrap()
+            .unwrap();
         for (write, revision) in writes.iter().zip(revisions.iter()) {
             let entry = bucket.entry(&write.key).await.unwrap().unwrap();
             assert_eq!(entry.revision, *revision);
             assert_eq!(&entry.value[..], &write.value);
         }
         let rejected = vec![write("new", 0, vec![3]), write("first", 0, vec![4])];
-        assert!(atomic(&js, &bucket, &rejected).await.unwrap().is_none());
+        assert!(atomic(&js, &bucket, &rejected.iter().collect::<Vec<_>>())
+            .await
+            .unwrap()
+            .is_none());
         assert!(
             bucket.get("new").await.unwrap().is_none(),
             "a rejected batch must not partially commit"
@@ -308,10 +392,33 @@ mod tests {
             bucket.entry("first").await.unwrap().unwrap().revision,
             revisions[0]
         );
-        let outcomes = execute(&js, &bucket, &rejected).await.unwrap();
-        assert!(outcomes[0].is_some());
-        assert!(outcomes[1].is_none());
+        let groups: Vec<_> = rejected
+            .into_iter()
+            .map(|w| Group {
+                writes: vec![w],
+                reply: oneshot::channel().0,
+            })
+            .collect();
+        let outcomes = execute(&js, &bucket, &groups).await.unwrap();
+        assert!(outcomes[0].as_ref().unwrap().is_some());
+        assert!(outcomes[1].as_ref().unwrap().is_none());
         assert_eq!(bucket.get("new").await.unwrap().unwrap().as_ref(), &[3]);
+        // A conflicting enqueue pair must stay indivisible even when another
+        // independent operation is retried after the mixed batch is rejected.
+        let groups = vec![
+            Group {
+                writes: vec![write("orphan", 0, vec![7]), write("first", 0, vec![8])],
+                reply: oneshot::channel().0,
+            },
+            Group {
+                writes: vec![write("unrelated", 0, vec![9])],
+                reply: oneshot::channel().0,
+            },
+        ];
+        let outcomes = execute(&js, &bucket, &groups).await.unwrap();
+        assert!(outcomes[0].as_ref().unwrap().is_none());
+        assert!(outcomes[1].as_ref().unwrap().is_some());
+        assert!(bucket.get("orphan").await.unwrap().is_none());
         js.delete_key_value(&bucket.name).await.unwrap();
     }
     #[tokio::test]
@@ -358,6 +465,17 @@ mod tests {
         while let Some(id) = tasks.join_next().await {
             assert!(ids.contains(&id.unwrap()));
         }
+        let mut keys = bucket.keys().await.unwrap();
+        let mut payloads = 0;
+        while let Some(key) = keys.next().await {
+            if key.unwrap().starts_with("p.") {
+                payloads += 1;
+            }
+        }
+        assert_eq!(
+            payloads, 64,
+            "losing enqueue pairs must leave no orphan payloads"
+        );
         let mut consumers = tokio::task::JoinSet::new();
         for _ in 0..8 {
             let backend = backend.clone();

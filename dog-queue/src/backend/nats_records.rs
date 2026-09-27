@@ -492,6 +492,37 @@ impl NatsStore {
             .map_err(error)?;
         Ok(())
     }
+    async fn commit_enqueue(
+        &self,
+        tenant: &str,
+        id: &JobId,
+        key: &str,
+        message: &crate::JobMessage,
+        value: Vec<u8>,
+        revision: u64,
+    ) -> QueueResult<bool> {
+        if let Some(writer) = &self.writer {
+            let revision = crate::diagnostics::measure(
+                crate::diagnostics::NATS_ENQUEUE_COMMIT,
+                writer.enqueue(
+                    payload(tenant, id),
+                    message.payload_bytes.clone(),
+                    key,
+                    value.clone(),
+                    revision,
+                ),
+            )
+            .await?;
+            if let Some(revision) = revision {
+                self.index()
+                    .await?
+                    .observe(key.into(), revision, value, false);
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        self.cas(key, value, revision).await
+    }
     async fn cas(&self, key: &str, value: Vec<u8>, revision: u64) -> QueueResult<bool> {
         Ok(self.cas_revision(key, value, revision).await?.is_some())
     }
@@ -628,17 +659,7 @@ impl NatsStore {
                 ));
             }
             // Immutable payload must be durable before a discoverable job is committed.
-            if let Some(writer) = &self.writer {
-                if crate::diagnostics::measure(
-                    crate::diagnostics::NATS_PAYLOAD_CREATE,
-                    writer.submit(&payload(tenant, &id), message.payload_bytes.clone(), 0),
-                )
-                .await?
-                .is_none()
-                {
-                    return Err(error("immutable payload key already exists"));
-                }
-            } else {
+            if self.writer.is_none() {
                 crate::diagnostics::measure(
                     crate::diagnostics::NATS_PAYLOAD_CREATE,
                     self.bucket
@@ -651,7 +672,10 @@ impl NatsStore {
             // leader read on the common first enqueue. Existing scopes (including
             // tombstones) conflict and use the dedupe/reuse path below. Only an
             // acknowledged CAS makes the persisted payload discoverable.
-            if self.cas(&key, value.clone(), 0).await? {
+            if self
+                .commit_enqueue(tenant, &id, &key, message, value.clone(), 0)
+                .await?
+            {
                 return Ok(Outcome::Id(id));
             }
             for _ in 0..64 {
@@ -667,15 +691,20 @@ impl NatsStore {
                         serde_json::from_slice(&entry.value).map_err(error)?;
                     if !existing.record.status.is_terminal() {
                         index.observe(key.clone(), entry.revision, entry.value.to_vec(), false);
-                        self.bucket
-                            .purge(payload(tenant, &id))
-                            .await
-                            .map_err(error)?;
+                        if self.writer.is_none() {
+                            self.bucket
+                                .purge(payload(tenant, &id))
+                                .await
+                                .map_err(error)?;
+                        }
                         return Ok(Outcome::Id(existing.record.job_id));
                     }
                     self.archive(tenant, &existing).await?;
                 }
-                if self.cas(&key, value.clone(), revision).await? {
+                if self
+                    .commit_enqueue(tenant, &id, &key, message, value.clone(), revision)
+                    .await?
+                {
                     return Ok(Outcome::Id(id));
                 }
             }
