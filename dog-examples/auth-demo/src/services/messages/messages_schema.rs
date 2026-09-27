@@ -11,10 +11,10 @@ pub mod def {
         #[dog(trim, min_len(1))]
         pub text: String,
 
-        #[dog(relation = "users")]
+        // Relationship existence and authorization belong in the service.
         pub sender: String, // user ID
 
-        #[dog(optional, relation = "users")]
+        #[dog(optional)]
         pub receivers: Option<Vec<String>>, // user IDs
     }
 
@@ -23,10 +23,10 @@ pub mod def {
         #[dog(optional, trim, min_len(1))]
         pub text: Option<String>,
 
-        #[dog(optional, relation = "users")]
+        #[dog(optional)]
         pub sender: Option<String>, // user ID
 
-        #[dog(optional, relation = "users")]
+        #[dog(optional)]
         pub receivers: Option<Vec<String>>, // user IDs
     }
 }

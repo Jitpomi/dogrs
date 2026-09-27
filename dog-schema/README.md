@@ -1,257 +1,142 @@
 # dog-schema
 
-[![Crates.io](https://img.shields.io/crates/v/dog-schema.svg)](https://crates.io/crates/dog-schema)
-[![Documentation](https://docs.rs/dog-schema/badge.svg)](https://docs.rs/dog-schema)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+Validation and normalization hooks for DogRS services. This crate is independent
+of the HTTP server, transport and database. It exports the `#[schema]` module
+attribute, `SchemaHooksExt`, `Rules`, and structured `SchemaErrors`.
 
-**Schema definition and validation utilities for DogRS - JSON schema, validation, and type safety**
+It does **not** generate JSON Schema documents or provide a `Schema` derive,
+`json_schema()`, or `from_json()` API. Earlier README examples claiming those
+APIs were incorrect. For JSON Schema generation, use a separate library in your
+application. The implementation described here is the repository's 0.2.0 API;
+check the published version before selecting a registry dependency.
 
-dog-schema provides powerful schema definition and validation capabilities for the DogRS ecosystem, enabling type-safe data handling with compile-time and runtime validation.
+## A service schema
 
-## Features
-
-- **JSON Schema generation** - Automatic schema generation from Rust types
-- **Runtime validation** - Validate data against schemas at runtime
-- **Type safety** - Compile-time guarantees with procedural macros
-- **Extensible validation** - Custom validators and constraints
-- **Integration ready** - Works seamlessly with dog-core services
-
-## Quick Start
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-dog-schema = "0.1.3"
-```
-
-### Basic Usage
+The macro generates public `resolve_create`, `validate_create`, `register`, and,
+when a patch struct exists, `resolve_patch` and `validate_patch` functions.
+Consumers need `dog-schema`, `dog-core`, `serde_json`, and `anyhow` dependencies.
 
 ```rust
-use dog_schema::{Schema, Validate};
-use serde::{Deserialize, Serialize};
+use dog_schema::schema;
 
-#[derive(Schema, Serialize, Deserialize)]
-struct User {
-    #[schema(min_length = 1, max_length = 100)]
-    name: String,
-    
-    #[schema(email)]
-    email: String,
-    
-    #[schema(range(min = 0, max = 150))]
-    age: u8,
+#[schema(service = "posts")]
+mod posts {
+    #[create]
+    pub struct CreatePost {
+        #[dog(trim, min_len(3), max_len(100))]
+        pub title: String,
+        pub tags: Vec<String>,
+        #[dog(default = false)]
+        pub published: bool,
+    }
+
+    #[patch]
+    pub struct PatchPost {
+        #[dog(trim, min_len(3), max_len(100))]
+        pub title: Option<String>,
+        pub published: Option<bool>,
+    }
 }
 
-// Generate JSON schema
-let schema = User::json_schema();
+let mut builder = dog_core::DogApp::<serde_json::Value, ()>::builder();
+// Register your service implementation under "posts" as well.
+posts::register(&mut builder)?;
+let app = builder.build();
+# Ok::<(), anyhow::Error>(())
+```
 
-// Validate data
-let user_data = serde_json::json!({
-    "name": "Alice",
-    "email": "alice@example.com", 
-    "age": 30
+Registration normalizes then validates create and update against the create
+schema. PATCH uses only the patch schema, with its own normalization and checks.
+Read and remove methods are unaffected. A missing patch schema rejects PATCH;
+it never silently permits an unvalidated partial write. Call `register` once per
+service. When invoking the generated functions directly, call the resolver before
+the validator. Validation functions do not mutate data.
+
+## Built-in validation contract
+
+- Every provided field must deserialize into its declared Rust type. Numeric
+  ranges, collection elements and nested object shapes follow Serde. Custom field
+  types must implement owned deserialization; nested business rules need custom
+  hooks or the optional validator backend.
+- Missing create/update fields are rejected unless they are `Option<T>` or marked
+  `#[dog(optional)]`. Boolean defaults are inserted by the create/update resolver.
+- PATCH permits omitted fields. Explicit `null` must be accepted by the declared
+  type: for example, `Option<String>` accepts it and `String` does not. Null stays
+  in the payload; the service decides whether it means clearing a value.
+- Unknown fields are rejected. Validation is not authorization: services must
+  still enforce tenant ownership, permissions, relationship existence and other
+  business invariants.
+- Strings must contain a non-whitespace character. `trim` normalizes a string;
+  `min_len(n)` and `max_len(n)` count Unicode scalar values, not bytes or grapheme
+  clusters, in the value presented to validation.
+- Supported field rules are `trim`, `optional`, `min_len(n)`, `max_len(n)`, and
+  boolean `default = true/false`. PATCH does not insert defaults.
+- Unknown or duplicated rules, malformed values, conflicting bounds, unsupported
+  rule/type combinations, duplicate schema markers, tuple structs, conditional fields and generic
+  schema structs fail at compile time. Rules such as `relation` were previously
+  ignored and are now rejected.
+- Built-in schema structs use their Rust field names (including raw identifiers).
+  Serde rename/flatten/custom field attributes require the validator backend;
+  they are rejected here rather than silently interpreted differently.
+
+For example, a typo must fail compilation:
+
+```compile_fail
+#[dog_schema::schema(service = "posts")]
+mod posts {
+    #[create]
+    struct Create { #[dog(min_lne(3))] title: String }
+}
+```
+
+An unknown backend must also fail:
+
+```compile_fail
+#[dog_schema::schema(service = "posts", backend = "unknown")]
+mod posts { #[create] struct Create { title: String } }
+```
+
+## Custom hooks and structured errors
+
+```rust
+use dog_schema::{Rules, SchemaHooksExt};
+let mut hooks = dog_core::ServiceHooks::<String, ()>::new();
+hooks.schema(|s| {
+    s.on_create().resolve(|data, _| { *data = data.trim().to_owned(); Ok(()) });
+    s.on_create().validate(|data, _| {
+        Rules::new().non_empty("name", data).max_len("name", data, 100).check()
+    });
 });
-
-let user: User = User::from_json(&user_data)?;
 ```
 
-## Schema Attributes
+A method selector applies to the **next** resolve/validate call only. Repeat
+`on_create()`, `on_patch()`, or `on_update()` for each hook. Without a selector,
+a hook applies to create, patch and update. All-write hooks execute before
+method-specific hooks, so do not split a dependent normalization/validation pair
+between those buckets.
 
-### String Validation
-```rust
-#[derive(Schema)]
-struct TextData {
-    #[schema(min_length = 5, max_length = 50)]
-    title: String,
-    
-    #[schema(pattern = r"^[A-Z][a-z]+$")]
-    name: String,
-    
-    #[schema(email)]
-    email: String,
-    
-    #[schema(url)]
-    website: String,
-}
-```
+`Rules` trims whitespace when measuring lengths and accumulates field errors.
+Call `.check()` to propagate them. It returns a `DogError` with status 422 and
+field arrays in `errors`, as do macro validators and missing-data failures.
+Error messages from field deserializers are not echoed to clients. Resolver and
+validator closures are synchronous; implement `DogBeforeHook` directly for async
+work. Keep input-size/time limits at the application or transport boundary.
 
-### Numeric Validation
-```rust
-#[derive(Schema)]
-struct NumericData {
-    #[schema(range(min = 0, max = 100))]
-    percentage: f64,
-    
-    #[schema(minimum = 1)]
-    count: u32,
-    
-    #[schema(multiple_of = 5)]
-    step: i32,
-}
-```
+## Optional validator backend
 
-### Collection Validation
-```rust
-#[derive(Schema)]
-struct CollectionData {
-    #[schema(min_items = 1, max_items = 10)]
-    tags: Vec<String>,
-    
-    #[schema(unique_items)]
-    categories: Vec<String>,
-}
-```
+`#[schema(service = "users", backend = "validator")]` delegates to
+`dog-schema-validator`. Its create/patch structs must implement
+`serde::Deserialize` and `validator::Validate`. Use Serde and `#[validate(...)]`
+attributes, not built-in `#[dog(...)]` rules. See that crate's README for an
+executable example. It respects Serde field names and unknown-field policy;
+use `#[serde(deny_unknown_fields)]` when strict input is required.
 
-## Custom Validators
+## Migration notes
 
-Create custom validation logic:
-
-```rust
-use dog_schema::{Schema, ValidationError, Validator};
-
-struct PasswordValidator;
-
-impl Validator<String> for PasswordValidator {
-    fn validate(&self, value: &String) -> Result<(), ValidationError> {
-        if value.len() < 8 {
-            return Err(ValidationError::new("Password must be at least 8 characters"));
-        }
-        if !value.chars().any(|c| c.is_uppercase()) {
-            return Err(ValidationError::new("Password must contain uppercase letter"));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Schema)]
-struct Account {
-    username: String,
-    
-    #[schema(validator = "PasswordValidator")]
-    password: String,
-}
-```
-
-## Integration with DogRS Services
-
-Use schemas with dog-core services:
-
-```rust
-use dog_core::{DogService, TenantContext};
-use dog_schema::Schema;
-
-#[derive(Schema)]
-struct CreateUserRequest {
-    #[schema(min_length = 1)]
-    name: String,
-    
-    #[schema(email)]
-    email: String,
-}
-
-struct UserService;
-
-#[async_trait]
-impl DogService<CreateUserRequest, ()> for UserService {
-    type Output = User;
-    
-    async fn create(&self, tenant: TenantContext, data: CreateUserRequest) -> Result<User> {
-        // Data is already validated by the schema
-        // Implement your business logic here
-        Ok(User {
-            id: generate_id(),
-            name: data.name,
-            email: data.email,
-        })
-    }
-}
-```
-
-## JSON Schema Generation
-
-Generate standard JSON schemas for API documentation:
-
-```rust
-use dog_schema::Schema;
-
-#[derive(Schema)]
-struct ApiResponse {
-    success: bool,
-    data: Option<serde_json::Value>,
-    error: Option<String>,
-}
-
-// Generate JSON Schema
-let schema = ApiResponse::json_schema();
-println!("{}", serde_json::to_string_pretty(&schema)?);
-```
-
-Output:
-```json
-{
-  "type": "object",
-  "properties": {
-    "success": {"type": "boolean"},
-    "data": {"type": ["object", "null"]},
-    "error": {"type": ["string", "null"]}
-  },
-  "required": ["success"]
-}
-```
-
-## Validation Errors
-
-Comprehensive error reporting:
-
-```rust
-match User::from_json(&invalid_data) {
-    Ok(user) => println!("Valid user: {:?}", user),
-    Err(errors) => {
-        for error in errors {
-            println!("Validation error at {}: {}", error.path, error.message);
-        }
-    }
-}
-```
-
-## Architecture
-
-dog-schema integrates with the DogRS ecosystem:
-
-```
-┌─────────────────┐
-│   Your App      │  ← Business logic with validated types
-└─────────────────┘
-         │
-    ┌────┴────┐
-    │         │
-┌───▼───┐ ┌──▼──────┐
-│dog-   │ │dog-     │  ← Adapters
-│axum   │ │schema   │
-└───────┘ └─────────┘
-    │         │
-    └────┬────┘
-         ▼
-┌─────────────────┐
-│   dog-core      │  ← Core abstractions
-└─────────────────┘
-```
-
-## Examples
-
-See `dog-examples/` for complete applications using schema validation:
-
-- **blog** - REST API with request/response validation
-
-## License
-
-MIT OR Apache-2.0
-
----
-
-<div align="center">
-
-**Made by [Jitpomi](https://github.com/Jitpomi)**
-
-</div>
+This hardening rejects inputs previously accepted accidentally: wrong types,
+unknown fields, unsupported declarations, and nulls for non-nullable patch fields.
+Create/update values are now normalized before validation; patch strings marked
+`trim` are normalized too. `Rules` errors are structured 422 responses instead of
+generic internal errors. Review applications relying on the older permissive
+behavior before upgrading. No schema generation or database relationship checks
+are added by this change.
