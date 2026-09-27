@@ -303,6 +303,9 @@ async fn atomic(
     bucket: &kv::Store,
     writes: &[&Write],
 ) -> QueueResult<Option<Vec<u64>>> {
+    if writes.is_empty() {
+        return Err(error("cannot publish an empty atomic batch"));
+    }
     let client = context.client();
     let inbox = client.new_inbox();
     let mut replies = client.subscribe(inbox.clone()).await.map_err(error)?;
@@ -349,57 +352,42 @@ async fn atomic(
                 .map_err(error)?;
         }
         crate::diagnostics::elapsed(crate::diagnostics::NATS_ATOMIC_SEND, send_time);
-        // Confirm batch start, then pipeline its remaining frames in order.
-        // Awaiting every staging reply adds a network round trip per message.
-        if i != 0 && i + 1 != writes.len() {
+    }
+    // Atomic batches have fixed bounds and no negotiated flow window. Every
+    // frame requires API level 2; send them in connection order without an
+    // extra staging round trip. (ADR-50 fast-ingest has different rules.)
+    // Staging replies are still consumed, but only a final durable ack succeeds.
+    let _wait = crate::diagnostics::Scope::new(crate::diagnostics::NATS_ATOMIC_FINAL_WAIT);
+    loop {
+        let response = replies
+            .next()
+            .await
+            .ok_or_else(|| error("acknowledgement stream closed; outcome may be unknown"))?;
+        if response.status.is_some_and(|status| !status.is_success()) {
+            return Err(error("server rejected batch request"));
+        }
+        if response.payload.is_empty() {
             continue;
         }
-        let _wait = crate::diagnostics::Scope::new(if i == 0 {
-            crate::diagnostics::NATS_ATOMIC_START_WAIT
-        } else {
-            crate::diagnostics::NATS_ATOMIC_FINAL_WAIT
-        });
-        loop {
-            let response = replies
-                .next()
-                .await
-                .ok_or_else(|| error("acknowledgement stream closed; outcome may be unknown"))?;
-            if response.status.is_some_and(|status| !status.is_success()) {
-                return Err(error("server rejected batch request"));
-            }
-            if response.payload.is_empty() {
-                if i == 0 {
-                    break;
+        match serde_json::from_slice::<Response<PublishAck>>(&response.payload).map_err(error)? {
+            Response::Err { error: e } if conflict(&e) => return Ok(None),
+            Response::Err { error: e } => return Err(error(e)),
+            Response::Ok(ack) => {
+                if ack.stream != bucket.stream_name
+                    || ack.batch_id.as_deref() != Some(&id)
+                    || ack.batch_size != Some(writes.len() as u64)
+                    || ack.duplicate
+                    || ack.sequence < writes.len() as u64
+                {
+                    return Err(error(
+                        "invalid commit acknowledgement; outcome may be unknown",
+                    ));
                 }
-                // Intermediate staging replies may precede the final durable ack.
-                continue;
-            }
-            match serde_json::from_slice::<Response<PublishAck>>(&response.payload)
-                .map_err(error)?
-            {
-                Response::Err { error: e } if conflict(&e) => return Ok(None),
-                Response::Err { error: e } => return Err(error(e)),
-                Response::Ok(ack) => {
-                    if i + 1 != writes.len()
-                        || ack.stream != bucket.stream_name
-                        || ack.batch_id.as_deref() != Some(&id)
-                        || ack.batch_size != Some(writes.len() as u64)
-                        || ack.duplicate
-                        || ack.sequence < writes.len() as u64
-                    {
-                        return Err(error(
-                            "invalid commit acknowledgement; outcome may be unknown",
-                        ));
-                    }
-                    let first = ack.sequence - writes.len() as u64 + 1;
-                    return Ok(Some((first..=ack.sequence).collect()));
-                }
+                let first = ack.sequence - writes.len() as u64 + 1;
+                return Ok(Some((first..=ack.sequence).collect()));
             }
         }
     }
-    Err(error(
-        "batch ended without commit acknowledgement; outcome may be unknown",
-    ))
 }
 
 #[cfg(test)]
@@ -504,6 +492,107 @@ mod tests {
             revision,
             value: payload,
         }
+    }
+    #[tokio::test]
+    #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
+    async fn frames_pipeline_without_treating_staging_as_commit() {
+        let (js, mut bucket) = fixture().await;
+        let client = js.client();
+        // Intercept protocol frames on a private core subject. Withhold staging
+        // until every frame arrives, then withhold final commit separately.
+        bucket.prefix = format!("dogrs.protocol.{}.", uuid::Uuid::new_v4().simple());
+        bucket.put_prefix = None;
+        bucket.use_jetstream_prefix = false;
+        let mut frames = client
+            .subscribe(format!("{}>", bucket.prefix))
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        let mut task = {
+            let js = js.clone();
+            let bucket = bucket.clone();
+            tokio::spawn(async move {
+                let writes = [
+                    write("job", 0, vec![1]),
+                    write("payload", 0, vec![2; 65536]),
+                ];
+                atomic(&js, &bucket, &writes.iter().collect::<Vec<_>>()).await
+            })
+        };
+        let first = tokio::time::timeout(Duration::from_secs(2), frames.next())
+            .await
+            .unwrap()
+            .unwrap();
+        let last = tokio::time::timeout(Duration::from_secs(2), frames.next())
+            .await
+            .expect("batch waited for staging before sending its remaining frames")
+            .unwrap();
+        assert_eq!(
+            first
+                .headers
+                .as_ref()
+                .unwrap()
+                .get("Nats-Batch-Sequence")
+                .unwrap()
+                .as_str(),
+            "1"
+        );
+        assert_eq!(
+            last.headers
+                .as_ref()
+                .unwrap()
+                .get("Nats-Batch-Sequence")
+                .unwrap()
+                .as_str(),
+            "2"
+        );
+        assert_eq!(
+            last.headers
+                .as_ref()
+                .unwrap()
+                .get("Nats-Batch-Commit")
+                .unwrap()
+                .as_str(),
+            "1"
+        );
+        for frame in [&first, &last] {
+            assert_eq!(
+                frame
+                    .headers
+                    .as_ref()
+                    .unwrap()
+                    .get("Nats-Required-Api-Level")
+                    .unwrap()
+                    .as_str(),
+                "2"
+            );
+        }
+        let reply = first.reply.unwrap();
+        client
+            .publish(reply.clone(), Vec::new().into())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut task)
+                .await
+                .is_err(),
+            "staging acknowledgement must not establish a successful commit"
+        );
+        let ack = serde_json::json!({"stream":bucket.stream_name,"seq":2,"batch":last.headers.as_ref().unwrap().get("Nats-Batch-Id").unwrap().as_str(),"count":2});
+        client
+            .publish(reply, serde_json::to_vec(&ack).unwrap().into())
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            Some(vec![1, 2])
+        );
+        js.delete_key_value(&bucket.name).await.unwrap();
     }
     #[tokio::test]
     #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]

@@ -45,9 +45,11 @@ updates never share a staging batch with large payloads. Atomic mode admits up t
 retains its 16-request default. `with_enqueue_concurrency` can override either
 request limit. Request concurrency does not increase the five executing-batch limit;
 the 2 MiB limit continues to bound large-payload batches. A quiet single-key update uses an ordinary write; an enqueue pair still uses one
-atomic commit. Batch frames are pipelined after the server confirms staging has begun. Each
-caller waits for the final commit acknowledgement; staging acknowledgements never
-count as success. Per-key expected revisions are checked by the server when the
+atomic commit. Atomic frames are pipelined in connection order without waiting for staging.
+Every frame requires API level 2, and the bounded writer is enabled only when the
+stream advertises atomic publishing. This is the atomic protocol, not fast ingest
+with a negotiated flow window. Each caller waits for a validated final commit
+acknowledgement; empty staging replies never count as success. Per-key expected revisions are checked by the server when the
 whole batch commits. A known revision-conflict rejection is split into smaller conditional batches
 until the conflicting logical operations are isolated; enqueue pairs stay atomic.
 Unaffected operations remain batched instead of falling back to individual writes.
@@ -56,8 +58,8 @@ conflict in 64 operations therefore requires at most 13 attempts rather than 65;
 if every operation conflicts, the bounded worst case is 127 attempts. Transport errors,
 timeouts and malformed acknowledgements are **not** automatically replayed: their
 commit outcome may be unknown. A batch execution is bounded to five seconds. Optional `queue-diagnostics`
-timings distinguish frame submission, staging acknowledgement and final durable
-acknowledgement waits; only the final acknowledgement establishes success.
+timings distinguish frame submission and final durable acknowledgement waiting;
+only the final acknowledgement establishes success.
 
 Local workers reserve advisory candidates while their claim is in flight. This
 avoids redundant local lease races but grants no ownership. The server's exact
