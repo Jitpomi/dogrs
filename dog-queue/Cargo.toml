@@ -106,6 +106,7 @@ cron-scheduling = ["dep:cron"]
 # Observability
 tracing-basic = ["dep:tracing-subscriber"]
 tracing-opentelemetry = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
+queue-diagnostics = []
 metrics = ["dep:prometheus"]
 
 ui = ["dep:axum", "dep:tower", "dep:tower-http"]

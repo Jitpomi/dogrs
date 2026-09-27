@@ -6,6 +6,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::types::Type;
 
 struct Request {
+    queued_at: Option<std::time::Instant>,
     tenant: String,
     queues: serde_json::Value,
     token: LeaseToken,
@@ -54,6 +55,7 @@ impl Claims {
                 }
                 let pool = pool.clone();
                 running.spawn(async move {
+                    for request in &requests { crate::diagnostics::elapsed(crate::diagnostics::PG_CLAIM_QUEUE, request.queued_at); }
                     requests.retain(|r| !r.response.is_closed());
                     if requests.is_empty() {
                         return;
@@ -91,6 +93,7 @@ impl Claims {
         let (response, receiver) = oneshot::channel();
         self.0
             .send(Request {
+                queued_at: crate::diagnostics::start(),
                 tenant: tenant.into(),
                 queues: serde_json::to_value(queues).map_err(error)?,
                 token: LeaseToken::new(),
@@ -112,9 +115,12 @@ async fn execute(
     let queues: Vec<&serde_json::Value> = requests.iter().map(|r| &r.queues).collect();
     let tokens: Vec<&str> = requests.iter().map(|r| r.token.as_str()).collect();
     let durations: Vec<f64> = requests.iter().map(|r| r.seconds).collect();
-    let client = pool.get().await.map_err(error)?;
-    let rows = client
-        .query_typed(
+    let client = crate::diagnostics::measure(crate::diagnostics::PG_CLAIM_POOL, pool.get())
+        .await
+        .map_err(error)?;
+    let rows = crate::diagnostics::measure(
+        crate::diagnostics::PG_CLAIM_SQL,
+        client.query_typed(
             include_str!("postgres_claim_batch.sql"),
             &[
                 (&tenants, Type::TEXT_ARRAY),
@@ -122,14 +128,16 @@ async fn execute(
                 (&tokens, Type::TEXT_ARRAY),
                 (&durations, Type::FLOAT8_ARRAY),
             ],
-        )
-        .await
-        .map_err(error)?;
+        ),
+    )
+    .await
+    .map_err(error)?;
     if rows.len() != requests.len() {
         return Err(error(
             "PostgreSQL claim batch returned incomplete results; ownership outcome may be unknown",
         ));
     }
+    let _decode = crate::diagnostics::Scope::new(crate::diagnostics::PG_CLAIM_DECODE);
     Ok(rows
         .into_iter()
         .zip(requests)

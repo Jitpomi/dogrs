@@ -365,7 +365,13 @@ impl NatsStore {
     }
     async fn read(&self, tenant: &str, id: &JobId) -> QueueResult<(String, kv::Entry)> {
         let key = cell(tenant, slot(id)?);
-        if let Some(entry) = self.bucket.entry(&key).await.map_err(error)? {
+        if let Some(entry) = crate::diagnostics::measure(
+            crate::diagnostics::NATS_POINT_READ,
+            self.bucket.entry(&key),
+        )
+        .await
+        .map_err(error)?
+        {
             self.index().await?.observe(
                 key.clone(),
                 entry.revision,
@@ -392,12 +398,14 @@ impl NatsStore {
         Err(QueueError::JobNotFound(id.clone()))
     }
     async fn bytes(&self, tenant: &str, id: &JobId) -> QueueResult<Vec<u8>> {
-        self.bucket
-            .get(payload(tenant, id))
-            .await
-            .map_err(error)?
-            .map(|b| b.to_vec())
-            .ok_or_else(|| error("JetStream job payload missing; storage was lost"))
+        crate::diagnostics::measure(
+            crate::diagnostics::NATS_PAYLOAD_READ,
+            self.bucket.get(payload(tenant, id)),
+        )
+        .await
+        .map_err(error)?
+        .map(|b| b.to_vec())
+        .ok_or_else(|| error("JetStream job payload missing; storage was lost"))
     }
     async fn archive(&self, tenant: &str, row: &StoredRecord) -> QueueResult<()> {
         let key = history(tenant, &row.record.job_id);
@@ -406,7 +414,13 @@ impl NatsStore {
         // A delayed archiver must not resurrect intentionally purged history.
         match self.bucket.update(&key, value.clone().into(), 0).await {
             Ok(_) => Ok(()),
-            Err(err) => match self.bucket.entry(&key).await.map_err(error)? {
+            Err(err) => match crate::diagnostics::measure(
+                crate::diagnostics::NATS_POINT_READ,
+                self.bucket.entry(&key),
+            )
+            .await
+            .map_err(error)?
+            {
                 Some(old) if old.operation != kv::Operation::Put || old.value.as_ref() == value => {
                     Ok(())
                 }
@@ -470,10 +484,11 @@ impl NatsStore {
         value: Vec<u8>,
         revision: u64,
     ) -> QueueResult<Option<u64>> {
-        match self
-            .bucket
-            .update(key, value.clone().into(), revision)
-            .await
+        match crate::diagnostics::measure(
+            crate::diagnostics::NATS_CAS,
+            self.bucket.update(key, value.clone().into(), revision),
+        )
+        .await
         {
             Ok(revision) => {
                 self.index()
@@ -529,13 +544,28 @@ impl NatsStore {
 }
 impl NatsStore {
     async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        let stage = match op {
+            Operation::Enqueue(_) => Some(crate::diagnostics::NATS_ENQUEUE_TOTAL),
+            Operation::Dequeue(..) => Some(crate::diagnostics::NATS_CLAIM_TOTAL),
+            Operation::Complete(..) => Some(crate::diagnostics::NATS_COMPLETE_TOTAL),
+            _ => None,
+        };
+        let _scope = stage.map(crate::diagnostics::Scope::new);
         let _admission = if matches!(op, Operation::Enqueue(_)) {
-            Some(self.enqueue_slots.acquire().await.map_err(error)?)
+            Some(
+                crate::diagnostics::measure(
+                    crate::diagnostics::NATS_ENQUEUE_SLOT,
+                    self.enqueue_slots.acquire(),
+                )
+                .await
+                .map_err(error)?,
+            )
         } else {
             None
         };
-        self.legacy(tenant).await?;
-        let index = self.index().await?;
+        crate::diagnostics::measure(crate::diagnostics::NATS_LEGACY, self.legacy(tenant)).await?;
+        let index =
+            crate::diagnostics::measure(crate::diagnostics::NATS_INDEX, self.index()).await?;
         if let Operation::Enqueue(message) = op {
             let hash = if let Some(dedupe) = &message.idempotency_key {
                 format!(
@@ -568,10 +598,13 @@ impl NatsStore {
                 ));
             }
             // Immutable payload must be durable before a discoverable job is committed.
-            self.bucket
-                .create(payload(tenant, &id), message.payload_bytes.clone().into())
-                .await
-                .map_err(error)?;
+            crate::diagnostics::measure(
+                crate::diagnostics::NATS_PAYLOAD_CREATE,
+                self.bucket
+                    .create(payload(tenant, &id), message.payload_bytes.clone().into()),
+            )
+            .await
+            .map_err(error)?;
             // Optimistically create a new scope with revision zero, avoiding a
             // leader read on the common first enqueue. Existing scopes (including
             // tombstones) conflict and use the dedupe/reuse path below. Only an
@@ -580,7 +613,12 @@ impl NatsStore {
                 return Ok(Outcome::Id(id));
             }
             for _ in 0..64 {
-                let previous = self.bucket.entry(&key).await.map_err(error)?;
+                let previous = crate::diagnostics::measure(
+                    crate::diagnostics::NATS_POINT_READ,
+                    self.bucket.entry(&key),
+                )
+                .await
+                .map_err(error)?;
                 let revision = previous.as_ref().map(|e| e.revision).unwrap_or(0);
                 if let Some(entry) = previous.filter(|e| e.operation == kv::Operation::Put) {
                     let existing: StoredRecord =
@@ -736,10 +774,18 @@ impl NatsStore {
                     let notified = changed.notified();
                     tokio::pin!(notified);
                     notified.as_mut().enable();
-                    if let Some(id) = index.candidate(tenant, queues, &skipped_hints)? {
+                    if let Some(id) = {
+                        let _candidate =
+                            crate::diagnostics::Scope::new(crate::diagnostics::NATS_CANDIDATE);
+                        index.candidate(tenant, queues, &skipped_hints)?
+                    } {
                         id
                     } else if tokio::time::Instant::now() < discovery_deadline {
-                        let _ = tokio::time::timeout_at(discovery_deadline, notified).await;
+                        let _ = crate::diagnostics::measure(
+                            crate::diagnostics::NATS_DISCOVERY_WAIT,
+                            tokio::time::timeout_at(discovery_deadline, notified),
+                        )
+                        .await;
                         continue;
                     } else {
                         return Ok(Outcome::Lease(None));
@@ -794,7 +840,13 @@ impl NatsStore {
                 // concurrent completion/purge. Neither condition is a failed
                 // lookup of an acknowledged job: no owner exists until CAS.
                 let key = cell(tenant, slot(&id)?);
-                match self.bucket.entry(&key).await.map_err(error)? {
+                match crate::diagnostics::measure(
+                    crate::diagnostics::NATS_POINT_READ,
+                    self.bucket.entry(&key),
+                )
+                .await
+                .map_err(error)?
+                {
                     Some(entry) if entry.operation == kv::Operation::Put => {
                         let row: StoredRecord =
                             serde_json::from_slice(&entry.value).map_err(error)?;
@@ -867,7 +919,8 @@ impl NatsStore {
         Err(error("JetStream job contention: retry operation"))
     }
     async fn tenants(&self) -> QueueResult<Vec<String>> {
-        let index = self.index().await?;
+        let index =
+            crate::diagnostics::measure(crate::diagnostics::NATS_INDEX, self.index()).await?;
         let mut tenants = std::collections::HashSet::new();
         for tenant in &index.entries {
             for entry in tenant.value().iter() {

@@ -31,6 +31,7 @@ aws-sdk-sqs = { version = "1.113", optional = true, default-features = false, fe
 google-cloud-pubsub = { version = "1.5", optional = true }
 
 [features]
+queue-diagnostics = ["dog-queue/queue-diagnostics"]
 redis = ["dog-queue/redis", "dep:redis"]
 nats = ["dog-queue/nats", "dep:async-nats"]
 rabbitmq = ["dog-queue/rabbitmq", "dep:lapin"]

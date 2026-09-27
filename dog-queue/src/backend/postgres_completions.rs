@@ -6,6 +6,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::types::Type;
 
 struct Request {
+    queued_at: Option<std::time::Instant>,
     tenant: String,
     id: JobId,
     token: LeaseToken,
@@ -55,6 +56,7 @@ impl Completions {
                 }
                 let pool = pool.clone();
                 running.spawn(async move {
+                    for request in &requests { crate::diagnostics::elapsed(crate::diagnostics::PG_COMPLETE_QUEUE, request.queued_at); }
                     requests.retain(|r| !r.response.is_closed());
                     if requests.is_empty() { return; }
                     let outcomes = tokio::time::timeout(timeout, execute(&pool, &requests))
@@ -86,6 +88,7 @@ impl Completions {
         let (response, receiver) = oneshot::channel();
         self.0
             .send(Request {
+                queued_at: crate::diagnostics::start(),
                 tenant: tenant.into(),
                 id: id.clone(),
                 token: token.clone(),
@@ -107,14 +110,17 @@ async fn execute(
     let ids: Vec<&str> = requests.iter().map(|r| r.id.as_str()).collect();
     let tokens: Vec<&str> = requests.iter().map(|r| r.token.as_str()).collect();
     let results: Vec<Option<&str>> = requests.iter().map(|r| r.result.as_deref()).collect();
-    let client = pool.get().await.map_err(error)?;
+    let client = crate::diagnostics::measure(crate::diagnostics::PG_COMPLETE_POOL, pool.get())
+        .await
+        .map_err(error)?;
     // PostgreSQL explicitly rolls back an autocommit statement on deadlock or
     // serialization failure. Only those known-aborted outcomes may be retried;
     // transport errors and timeouts keep their unknown-commit semantics.
     let mut attempts = 0;
     let rows = loop {
-        match client
-            .query_typed(
+        match crate::diagnostics::measure(
+            crate::diagnostics::PG_COMPLETE_SQL,
+            client.query_typed(
                 include_str!("postgres_complete_batch.sql"),
                 &[
                     (&tenants, Type::TEXT_ARRAY),
@@ -122,8 +128,9 @@ async fn execute(
                     (&tokens, Type::TEXT_ARRAY),
                     (&results, Type::TEXT_ARRAY),
                 ],
-            )
-            .await
+            ),
+        )
+        .await
         {
             Ok(rows) => break rows,
             Err(e)

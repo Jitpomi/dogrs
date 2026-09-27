@@ -40,6 +40,10 @@ on:
         description: Sample active PostgreSQL waits during capacity measurement
         type: boolean
         default: false
+      profile_queue:
+        description: Diagnostic adapter stage timings (inclusive concurrent wall time)
+        type: boolean
+        default: false
       profile_cpu:
         description: Diagnostic Linux CPU sampling (not an uninstrumented capacity verdict)
         type: boolean
@@ -93,7 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build -p hosted-system --release --features redis,nats --locked
+      - run: cargo build -p hosted-system --release --features redis,nats${{ inputs.profile_queue && ',queue-diagnostics' || '' }} --locked
       - name: Install optional CPU profiler
         if: ${{ inputs.profile_cpu }}
         run: |
@@ -173,6 +177,7 @@ jobs:
           PRODUCER_CAP: ${{ inputs.postgres_enqueue_concurrency || 'none' }}
           DOGRS_CAPACITY_INFLIGHT: 32
           DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
+          DOGRS_QUEUE_TIMINGS: ${{ inputs.profile_queue && '1' || '0' }}
           DOGRS_PG_PROFILE: ${{ inputs.profile_postgres && '1' || '0' }}
           DOGRS_PG_FIXTURE_PARTITIONS: ${{ inputs.postgres_fixture_partitions || '0' }}
           PG_WAL_INIT: ${{ inputs.postgres_wal_init_zero || 'on' }}

@@ -45,6 +45,7 @@ try:
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
   'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
   'postgres_wait_sampling':os.environ.get('DOGRS_PG_PROFILE')=='1',
+  'queue_stage_timings':os.environ.get('DOGRS_QUEUE_TIMINGS')=='1',
   'cpu_sampling':bool(os.environ.get('DOGRS_PERF')),
   'postgres_fixture_partitions':int(os.environ.get('DOGRS_PG_FIXTURE_PARTITIONS','0')),
   'storage_shards':pg_instances if pg_instances>1 else int(os.environ.get('DOGRS_CAPACITY_SHARDS','1')),

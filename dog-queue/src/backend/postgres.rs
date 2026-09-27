@@ -312,7 +312,9 @@ impl PostgresStore {
         schema: Option<&str>,
         storage: Option<PostgresPayloadStorage>,
     ) -> QueueResult<()> {
-        let mut client = self.pool.get().await.map_err(error)?;
+        let mut client = crate::diagnostics::measure(crate::diagnostics::PG_POOL, self.pool.get())
+            .await
+            .map_err(error)?;
         if storage.is_none() && schema_ready(&*client).await? {
             return Ok(());
         }
@@ -407,7 +409,11 @@ impl PostgresStore {
                 ));
             }
             if let Some(completions) = &self.completions {
-                completions.submit(tenant, id, token, result).await?;
+                crate::diagnostics::measure(
+                    crate::diagnostics::PG_COMPLETE_DISPATCH,
+                    completions.submit(tenant, id, token, result),
+                )
+                .await?;
                 return Ok(Outcome::Done);
             }
         }
@@ -424,7 +430,11 @@ impl PostgresStore {
             }
             if let Some(claims) = &self.claims {
                 return Ok(Outcome::Lease(
-                    claims.submit(tenant, queues, *duration).await?,
+                    crate::diagnostics::measure(
+                        crate::diagnostics::PG_CLAIM_DISPATCH,
+                        claims.submit(tenant, queues, *duration),
+                    )
+                    .await?,
                 ));
             }
         }
@@ -432,10 +442,19 @@ impl PostgresStore {
         // admissions must not strand already leased jobs behind thousands of
         // waiting INSERTs; worker claims/acks retain connection capacity.
         let _admission = match op {
-            Operation::Enqueue(_) => Some(self.enqueue_slots.acquire().await.map_err(error)?),
+            Operation::Enqueue(_) => Some(
+                crate::diagnostics::measure(
+                    crate::diagnostics::PG_ENQUEUE_SLOT,
+                    self.enqueue_slots.acquire(),
+                )
+                .await
+                .map_err(error)?,
+            ),
             _ => None,
         };
-        let mut client = self.pool.get().await.map_err(error)?;
+        let mut client = crate::diagnostics::measure(crate::diagnostics::PG_POOL, self.pool.get())
+            .await
+            .map_err(error)?;
         if let Operation::Enqueue(message) = op {
             let mut state = TenantState::default();
             state.apply_at(
@@ -448,8 +467,9 @@ impl PostgresStore {
             let value = metadata(stored)?;
             // One atomic statement: database timestamps replace temporary local
             // constructor timestamps before anything becomes visible.
-            let row = client
-                .query_typed_one(
+            let row = crate::diagnostics::measure(
+                crate::diagnostics::PG_INSERT,
+                client.query_typed_one(
                     include_str!("postgres_enqueue.sql"),
                     &[
                         (&tenant, Type::TEXT),
@@ -462,9 +482,10 @@ impl PostgresStore {
                         (&message.run_at, Type::TIMESTAMPTZ),
                         (&message.payload_bytes, Type::BYTEA),
                     ],
-                )
-                .await
-                .map_err(error)?;
+                ),
+            )
+            .await
+            .map_err(error)?;
             return Ok(Outcome::Id(row.get::<_, String>(0).into()));
         }
         if let Operation::Dequeue(queues, duration) = op {
@@ -727,6 +748,13 @@ async fn persist(tx: &Transaction<'_>, stored: &StoredRecord) -> QueueResult<()>
 #[async_trait]
 impl StateStore for PostgresStore {
     async fn update(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        let stage = match op {
+            Operation::Enqueue(_) => Some(crate::diagnostics::PG_ENQUEUE_TOTAL),
+            Operation::Dequeue(..) => Some(crate::diagnostics::PG_CLAIM_TOTAL),
+            Operation::Complete(..) => Some(crate::diagnostics::PG_COMPLETE_TOTAL),
+            _ => None,
+        };
+        let _scope = stage.map(crate::diagnostics::Scope::new);
         tokio::time::timeout(self.timeout, self.update_inner(tenant,op)).await.map_err(|_| error("PostgreSQL queue operation timed out; commit outcome may be unknown; use idempotency keys"))?
     }
     async fn tenants(&self) -> QueueResult<Vec<String>> {
