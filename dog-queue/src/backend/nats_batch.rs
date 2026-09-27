@@ -137,7 +137,7 @@ impl BatchWriter {
             // One in-flight 3-job batch at 100 ms caps admission at 30 jobs/s
             // regardless of how much unused capacity the provider has. Retain
             // a separate metadata lane so producer pipelining cannot consume it.
-            let concurrency = if enqueue { 4 } else { 1 };
+            let concurrency = if enqueue { 8 } else { 1 };
             let mut running = tokio::task::JoinSet::new();
             loop {
                 while running.len() >= concurrency {

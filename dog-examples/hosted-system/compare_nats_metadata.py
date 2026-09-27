@@ -37,7 +37,7 @@ try:
             'binary_sha256': hashlib.sha256(Path('target/release/hosted-system').read_bytes()).hexdigest(),
             'workload': '100 tenants, 1000 offers/s, 65536 unique incompressible bytes, 60s plus 5s drain',
             'storage': 'three file replicas, sync_interval always',
-            'queue_bounds': 'four producer batches, one independent metadata batch, 128 messages / 2 MiB hard bound',
+            'queue_bounds': 'eight producer batches, one independent metadata batch, 128 messages / 2 MiB hard bound',
             'scope': 'same scheduling code in both variants; only borrowing ready metadata into producer batches differs',
         }
         (folder/'experiment.json').write_text(json.dumps(evidence, indent=2))
