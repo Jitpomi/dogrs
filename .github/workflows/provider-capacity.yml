@@ -1,4 +1,4 @@
-name: NATS payload-isolation attribution
+name: NATS immutable-payload packing attribution
 on:
   pull_request:
     paths: ['.github/workflows/provider-capacity.yml', 'dog-queue/**', 'dog-examples/hosted-system/**', 'Cargo.lock']
@@ -32,7 +32,7 @@ on:
         options: ['on', 'off', 'compare']
         default: 'on'
       nats_connections:
-        description: Shared connection or one per bucket; compare repeats both on the same runner
+        description: Compare repeats raw and packed payloads on the same runner
         type: choice
         options: [shared, per-shard, compare]
         default: shared

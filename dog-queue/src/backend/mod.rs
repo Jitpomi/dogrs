@@ -26,6 +26,8 @@ pub mod gcp_pubsub;
 pub mod nats;
 #[cfg(feature = "nats-async")]
 mod nats_batch;
+#[cfg(feature = "nats")]
+mod nats_payload;
 #[cfg(feature = "nats-async")]
 mod nats_records;
 

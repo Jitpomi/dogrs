@@ -14,10 +14,10 @@ const MAX_BYTES: usize = 2 * 1024 * 1024;
 // enqueues put their small metadata first and payload last so the crossing
 // entry can also finish the atomic batch. A larger operation stays intact.
 const TARGET_BATCH_BYTES: usize = 256 * 1024;
-struct Write {
-    key: String,
-    value: Vec<u8>,
-    revision: u64,
+pub(super) struct Write {
+    pub(super) key: String,
+    pub(super) value: Vec<u8>,
+    pub(super) revision: u64,
 }
 struct Group {
     queued: Option<std::time::Instant>,
@@ -44,11 +44,26 @@ impl BatchWriter {
         // producer backlog must not occupy every durable-write slot or put a
         // lease update behind payload staging in the same atomic batch.
         Self {
-            updates: Self::lane(context.clone(), bucket.clone(), false),
-            enqueues: Self::lane(context, bucket, true),
+            updates: Self::lane(context.clone(), bucket.clone(), false, None),
+            enqueues: Self::lane(context, bucket, true, None),
         }
     }
-    fn lane(context: jetstream::Context, bucket: kv::Store, enqueue: bool) -> mpsc::Sender<Group> {
+    pub(super) fn start_packed(
+        context: jetstream::Context,
+        bucket: kv::Store,
+        limit: usize,
+    ) -> Self {
+        Self {
+            updates: Self::lane(context.clone(), bucket.clone(), false, None),
+            enqueues: Self::lane(context, bucket, true, Some(limit)),
+        }
+    }
+    fn lane(
+        context: jetstream::Context,
+        bucket: kv::Store,
+        enqueue: bool,
+        packed: Option<usize>,
+    ) -> mpsc::Sender<Group> {
         let (sender, mut receiver) = mpsc::channel::<Group>(ADMISSION_CAPACITY);
         tokio::spawn(async move {
             // Small atomic batches should overlap their acknowledgement waits.
@@ -70,19 +85,29 @@ impl BatchWriter {
                     },
                 };
                 tokio::task::yield_now().await;
-                let mut bytes: usize = first.writes.iter().map(|w| w.value.len()).sum();
+                let size_of = |w: &Write| {
+                    w.value.len()
+                        + if packed.is_some() {
+                            2 * w.key.len() + 400
+                        } else {
+                            0
+                        }
+                };
+                let message_limit = MAX_MESSAGES - if packed.is_some() { 2 } else { 0 };
+                let mut bytes: usize = first.writes.iter().map(&size_of).sum();
                 let mut count = first.writes.len();
                 let mut keys: HashSet<_> = first.writes.iter().map(|w| w.key.clone()).collect();
                 let mut groups = vec![first];
-                while count < MAX_MESSAGES {
+                while count < message_limit {
                     let Ok(group) = receiver.try_recv() else {
                         break;
                     };
-                    let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
+                    let size: usize = group.writes.iter().map(&size_of).sum();
                     // A logical operation (including an enqueue's payload and metadata)
                     // is indivisible. Distinct expected subjects are required by ADR-50.
-                    if count + group.writes.len() > MAX_MESSAGES
-                        || bytes >= TARGET_BATCH_BYTES
+                    if count + group.writes.len() > message_limit
+                        || packed.is_some_and(|limit| bytes + size > limit)
+                        || bytes >= packed.unwrap_or(TARGET_BATCH_BYTES)
                         || bytes + size > MAX_BYTES
                         || group.writes.iter().any(|w| keys.contains(&w.key))
                     {
@@ -118,7 +143,7 @@ impl BatchWriter {
                     });
                     let outcomes = tokio::time::timeout(
                         Duration::from_secs(5),
-                        execute(&context, &bucket, &groups),
+                        execute_mode(&context, &bucket, &groups, packed),
                     )
                     .await
                     .unwrap_or_else(|_| Err(error("timed out; commit outcome may be unknown")));
@@ -260,13 +285,26 @@ async fn commit(
     )
     .await
 }
-async fn execute(
+async fn execute_mode(
     context: &jetstream::Context,
     bucket: &kv::Store,
     groups: &[Group],
+    packed: Option<usize>,
 ) -> QueueResult<Vec<QueueResult<Option<Vec<u64>>>>> {
     execute_groups(groups, |writes| async move {
-        commit(context, bucket, &writes).await
+        if let Some(limit) = packed {
+            let count = writes.len();
+            let bundled = super::nats_payload::pack(&writes, limit)?;
+            let references: Vec<_> = bundled.iter().collect();
+            Ok(commit(context, bucket, &references)
+                .await?
+                .map(|mut revisions| {
+                    revisions.truncate(count);
+                    revisions
+                }))
+        } else {
+            commit(context, bucket, &writes).await
+        }
     })
     .await
 }
@@ -651,7 +689,7 @@ mod tests {
                 reply: oneshot::channel().0,
             })
             .collect();
-        let outcomes = execute(&js, &bucket, &groups).await.unwrap();
+        let outcomes = execute_mode(&js, &bucket, &groups, None).await.unwrap();
         assert!(outcomes[0].as_ref().unwrap().is_some());
         assert!(outcomes[1].as_ref().unwrap().is_none());
         assert_eq!(bucket.get("new").await.unwrap().unwrap().as_ref(), &[3]);
@@ -669,7 +707,7 @@ mod tests {
                 reply: oneshot::channel().0,
             },
         ];
-        let outcomes = execute(&js, &bucket, &groups).await.unwrap();
+        let outcomes = execute_mode(&js, &bucket, &groups, None).await.unwrap();
         assert!(outcomes[0].as_ref().unwrap().is_none());
         assert!(outcomes[1].as_ref().unwrap().is_some());
         assert!(bucket.get("orphan").await.unwrap().is_none());

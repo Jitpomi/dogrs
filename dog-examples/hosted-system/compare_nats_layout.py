@@ -1,4 +1,4 @@
-"""Diagnostic prototype only: compare combined and separate immutable-payload streams."""
+"""Diagnostic prototype only: compare raw and packed immutable payloads in the same atomic stream."""
 import hashlib
 import json
 import os
@@ -15,7 +15,7 @@ root.mkdir(exist_ok=True)
 results = []
 status = 0
 binary_hash = hashlib.sha256(Path("target/release/hosted-system").read_bytes()).hexdigest()
-for trial, layout in enumerate(["combined", "split", "split", "combined"], 1):
+for trial, layout in enumerate(["combined", "packed-combined", "packed-combined", "combined"], 1):
     folder = root / f"trial-{trial}-{layout}"
     folder.mkdir()
     env = dict(os.environ, DOGRS_NATS_CONNECTIONS="per-shard", DOGRS_NATS_LAYOUT=layout,

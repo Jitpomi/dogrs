@@ -444,13 +444,21 @@ async fn main() -> Result<()> {
                             config.allow_direct = false;
                             config.allow_atomic_publish = true;
                             js.update_stream(config).await?;
-                            dog_queue::backend::nats::NatsBackend::from_context_with_payload_bucket(
+                            if std::env::var("DOGRS_NATS_LAYOUT").as_deref() == Ok("packed") {
+                                dog_queue::backend::nats::NatsBackend::from_context_with_packed_payload_bucket(js.clone(), &name, &payload_name, 1024*1024).await?
+                            } else {
+                                dog_queue::backend::nats::NatsBackend::from_context_with_payload_bucket(
                                 js.clone(),
                                 &name,
                                 &payload_name,
                                 1024 * 1024,
                             )
                             .await?
+                            }
+                        } else if std::env::var("DOGRS_NATS_LAYOUT").as_deref()
+                            == Ok("packed-combined")
+                        {
+                            dog_queue::backend::nats::NatsBackend::from_context_with_payload_packing(js.clone(), &name, 1024*1024).await?
                         } else {
                             dog_queue::backend::nats::NatsBackend::from_context(
                                 js.clone(),

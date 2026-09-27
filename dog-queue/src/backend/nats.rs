@@ -17,6 +17,8 @@ pub struct NatsStore {
     pub(super) bucket: kv::Store,
     pub(super) payload_bucket: kv::Store,
     pub(super) payload_writer: Option<super::nats_batch::BatchWriter>,
+    pub(super) packed_payloads: bool,
+    pub(super) payload_cache: std::sync::Mutex<super::nats_payload::PayloadCache>,
     pub(super) max_state_bytes: usize,
     pub(super) index: tokio::sync::OnceCell<std::sync::Arc<super::nats_records::Index>>,
     pub(super) checked_tenants: dashmap::DashMap<String, std::sync::Arc<tokio::sync::OnceCell<()>>>,
@@ -167,6 +169,71 @@ impl NatsBackend {
         Ok(backend)
     }
 
+    /// Diagnostic packed layout; fresh dedicated stores only. Not yet a release API.
+    #[doc(hidden)]
+    pub async fn from_context_with_packed_payload_bucket(
+        context: jetstream::Context,
+        name: &str,
+        payload_name: &str,
+        max_payload: usize,
+    ) -> QueueResult<Self> {
+        let mut backend = Self::from_context_with_payload_bucket(
+            context.clone(),
+            name,
+            payload_name,
+            max_payload,
+        )
+        .await?;
+        if !backend
+            .store
+            .payload_bucket
+            .stream
+            .cached_info()
+            .config
+            .allow_atomic_publish
+        {
+            return Err(QueueError::InvalidConfig(
+                "packed payloads require atomic publishing".into(),
+            ));
+        }
+        backend.store.payload_writer = Some(super::nats_batch::BatchWriter::start_packed(
+            context,
+            backend.store.payload_bucket.clone(),
+            backend.store.max_state_bytes,
+        ));
+        backend.store.packed_payloads = true;
+        Ok(backend)
+    }
+
+    /// Diagnostic combined packed layout; fresh dedicated atomic bucket only.
+    #[doc(hidden)]
+    pub async fn from_context_with_payload_packing(
+        context: jetstream::Context,
+        name: &str,
+        max_payload: usize,
+    ) -> QueueResult<Self> {
+        let mut backend = Self::from_context(context.clone(), name, max_payload).await?;
+        if !backend
+            .store
+            .bucket
+            .stream
+            .cached_info()
+            .config
+            .allow_atomic_publish
+        {
+            return Err(QueueError::InvalidConfig(
+                "packed payloads require atomic publishing".into(),
+            ));
+        }
+        backend.store.writer = Some(super::nats_batch::BatchWriter::start_packed(
+            context,
+            backend.store.bucket.clone(),
+            backend.store.max_state_bytes,
+        ));
+        backend.store.packed_payloads = true;
+        Ok(backend)
+    }
+
     /// Supply the smaller of the server and account payload limits. Hosted account
     /// limits may be lower than Client::server_info().max_payload. This reserves
     /// framing space and future completion metadata before admitting a job.
@@ -190,6 +257,8 @@ impl NatsBackend {
                 payload_slots: tokio::sync::Semaphore::new(128),
                 payload_bucket: bucket.clone(),
                 payload_writer: None,
+                packed_payloads: false,
+                payload_cache: Default::default(),
                 bucket,
                 max_state_bytes,
                 index: Default::default(),

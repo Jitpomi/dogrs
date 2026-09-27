@@ -463,6 +463,9 @@ impl NatsStore {
         claim_and_read(claim, self.bytes(tenant, id), || self.bytes(tenant, id)).await
     }
     async fn bytes(&self, tenant: &str, id: &JobId) -> QueueResult<Vec<u8>> {
+        if self.packed_payloads {
+            return self.read_packed(&payload(tenant, id)).await;
+        }
         crate::diagnostics::measure(
             crate::diagnostics::NATS_PAYLOAD_READ,
             self.payload_bucket.get(payload(tenant, id)),
@@ -534,11 +537,15 @@ impl NatsStore {
                 }
             }
         }
-        self.payload_bucket
-            .purge(payload(tenant, id))
-            .await
-            .map_err(error)?;
+        self.purge_payload(&payload(tenant, id)).await?;
         Ok(())
+    }
+    async fn purge_payload(&self, key: &str) -> QueueResult<()> {
+        if self.packed_payloads {
+            self.purge_packed(key).await
+        } else {
+            self.payload_bucket.purge(key).await.map_err(error)
+        }
     }
     fn atomic_enqueue(&self) -> bool {
         self.writer.is_some() && self.payload_bucket.name == self.bucket.name
@@ -756,10 +763,7 @@ impl NatsStore {
                     if !existing.record.status.is_terminal() {
                         index.observe(key.clone(), entry.revision, entry.value.to_vec(), false);
                         if !self.atomic_enqueue() {
-                            self.payload_bucket
-                                .purge(payload(tenant, &id))
-                                .await
-                                .map_err(error)?;
+                            self.purge_payload(&payload(tenant, &id)).await?;
                         }
                         return Ok(Outcome::Id(existing.record.job_id));
                     }
@@ -1199,126 +1203,139 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
     async fn split_payload_is_durable_before_discovery_and_remains_readable() {
-        use crate::{backend::nats::NatsBackend, JobMessage, QueueBackend, QueueCtx};
-        let js = async_nats::jetstream::new(
-            async_nats::connect(std::env::var("DOGRS_NATS_URL").unwrap())
+        async fn open_layout(
+            js: async_nats::jetstream::Context,
+            name: &str,
+            payload: &str,
+            limit: usize,
+            packed: bool,
+        ) -> QueueResult<crate::backend::nats::NatsBackend> {
+            if packed {
+                crate::backend::nats::NatsBackend::from_context_with_packed_payload_bucket(
+                    js, name, payload, limit,
+                )
                 .await
-                .unwrap(),
-        );
-        let name = format!("split_{}", uuid::Uuid::new_v4().simple());
-        let payload_name = format!("{name}_payload");
-        for name in [&name, &payload_name] {
-            let bucket = js
-                .create_key_value(kv::Config {
-                    bucket: name.clone(),
-                    storage: async_nats::jetstream::stream::StorageType::File,
-                    ..Default::default()
-                })
+            } else {
+                crate::backend::nats::NatsBackend::from_context_with_payload_bucket(
+                    js, name, payload, limit,
+                )
+                .await
+            }
+        }
+
+        for packed in [false, true] {
+            use crate::{JobMessage, QueueBackend, QueueCtx};
+            let js = async_nats::jetstream::new(
+                async_nats::connect(std::env::var("DOGRS_NATS_URL").unwrap())
+                    .await
+                    .unwrap(),
+            );
+            let name = format!("split_{}", uuid::Uuid::new_v4().simple());
+            let payload_name = format!("{name}_payload");
+            for name in [&name, &payload_name] {
+                let bucket = js
+                    .create_key_value(kv::Config {
+                        bucket: name.clone(),
+                        storage: async_nats::jetstream::stream::StorageType::File,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+                let mut config = bucket.stream.cached_info().config.clone();
+                config.allow_direct = false;
+                config.allow_atomic_publish = true;
+                js.update_stream(config).await.unwrap();
+            }
+            let backend = open_layout(js.clone(), &name, &payload_name, 1024 * 1024, packed)
                 .await
                 .unwrap();
-            let mut config = bucket.stream.cached_info().config.clone();
-            config.allow_direct = false;
-            config.allow_atomic_publish = true;
-            js.update_stream(config).await.unwrap();
-        }
-        let backend = NatsBackend::from_context_with_payload_bucket(
-            js.clone(),
-            &name,
-            &payload_name,
-            1024 * 1024,
-        )
-        .await
-        .unwrap();
-        let ctx = QueueCtx::new("split");
-        // Force a definite payload rejection. No metadata may become discoverable.
-        let mut config = backend
-            .store
-            .payload_bucket
-            .stream
-            .cached_info()
-            .config
-            .clone();
-        config.max_bytes = 1024;
-        js.update_stream(config.clone()).await.unwrap();
-        assert!(backend
-            .enqueue(
-                ctx.clone(),
-                JobMessage::new("work", vec![7; 65536], "bytes", "q")
-            )
-            .await
-            .is_err());
-        assert!(backend
-            .dequeue(ctx.clone(), &["q"])
-            .await
-            .unwrap()
-            .is_none());
-        assert_eq!(
-            js.get_key_value(&name)
-                .await
-                .unwrap()
+            let ctx = QueueCtx::new("split");
+            // Force a definite payload rejection. No metadata may become discoverable.
+            let mut config = backend
+                .store
+                .payload_bucket
                 .stream
                 .cached_info()
-                .state
-                .messages,
-            0
-        );
-        config.max_bytes = -1;
-        js.update_stream(config).await.unwrap();
-        let message =
-            || JobMessage::new("work", vec![8; 65536], "bytes", "q").with_idempotency_key("same");
-        let id = backend.enqueue(ctx.clone(), message()).await.unwrap();
-        assert_eq!(backend.enqueue(ctx.clone(), message()).await.unwrap(), id);
-        // Reopen explicitly against the same pair; no same-process payload cache.
-        let reopened = NatsBackend::from_context_with_payload_bucket(
-            js.clone(),
-            &name,
-            &payload_name,
-            1024 * 1024,
-        )
-        .await
-        .unwrap();
-        let lease = reopened
-            .dequeue(ctx.clone(), &["q"])
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(lease.record.message.payload_bytes, vec![8; 65536]);
-        assert_eq!(lease.record.job_id, id);
-        reopened
-            .ack_complete(ctx.clone(), id.clone(), lease.lease_token, None)
-            .await
-            .unwrap();
-        assert_eq!(
-            backend
-                .get_record(ctx.clone(), id)
+                .config
+                .clone();
+            config.max_bytes = 1024;
+            js.update_stream(config.clone()).await.unwrap();
+            assert!(backend
+                .enqueue(
+                    ctx.clone(),
+                    JobMessage::new("work", vec![7; 65536], "bytes", "q")
+                )
+                .await
+                .is_err());
+            assert!(backend
+                .dequeue(ctx.clone(), &["q"])
                 .await
                 .unwrap()
-                .message
-                .payload_bytes,
-            vec![8; 65536]
-        );
-        assert_eq!(
-            backend
-                .purge_terminal_before(ctx, Utc::now() + chrono::Duration::seconds(1))
+                .is_none());
+            assert_eq!(
+                js.get_key_value(&name)
+                    .await
+                    .unwrap()
+                    .stream
+                    .cached_info()
+                    .state
+                    .messages,
+                0
+            );
+            config.max_bytes = -1;
+            js.update_stream(config).await.unwrap();
+            let message = || {
+                JobMessage::new("work", vec![8; 65536], "bytes", "q").with_idempotency_key("same")
+            };
+            let id = backend.enqueue(ctx.clone(), message()).await.unwrap();
+            assert_eq!(backend.enqueue(ctx.clone(), message()).await.unwrap(), id);
+            // Reopen explicitly against the same pair; no same-process payload cache.
+            let reopened = open_layout(js.clone(), &name, &payload_name, 1024 * 1024, packed)
                 .await
-                .unwrap(),
-            1
-        );
-        let keys = backend
-            .store
-            .payload_bucket
-            .keys()
-            .await
-            .unwrap()
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-        assert!(
-            keys.is_empty(),
-            "payloads must be purged after terminal retention ends"
-        );
-        js.delete_key_value(name).await.unwrap();
-        js.delete_key_value(payload_name).await.unwrap();
+                .unwrap();
+            let lease = reopened
+                .dequeue(ctx.clone(), &["q"])
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(lease.record.message.payload_bytes, vec![8; 65536]);
+            assert_eq!(lease.record.job_id, id);
+            reopened
+                .ack_complete(ctx.clone(), id.clone(), lease.lease_token, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                backend
+                    .get_record(ctx.clone(), id)
+                    .await
+                    .unwrap()
+                    .message
+                    .payload_bytes,
+                vec![8; 65536]
+            );
+            assert_eq!(
+                backend
+                    .purge_terminal_before(ctx, Utc::now() + chrono::Duration::seconds(1))
+                    .await
+                    .unwrap(),
+                1
+            );
+            let keys = backend
+                .store
+                .payload_bucket
+                .keys()
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap();
+            assert!(
+                keys.is_empty(),
+                "payloads must be purged after terminal retention ends"
+            );
+            js.delete_key_value(name).await.unwrap();
+            js.delete_key_value(payload_name).await.unwrap();
+        }
     }
 
     #[tokio::test]
