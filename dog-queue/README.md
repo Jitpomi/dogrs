@@ -59,7 +59,9 @@ Workers run the lease reaper; callers using `QueueBackend` directly must periodi
 call `reclaim_expired_leases`. Configure a sensible lease duration and heartbeat
 long-running work. Workers drop the handler future when renewal fails or the last
 confirmed lease expires, including a stalled renewal request. Only acknowledged
-renewals extend this local deadline. Cancellation is cooperative: it cannot stop
+renewals extend this local deadline. Backends without lease extension remain
+supported: workers use their original deadline without attempting heartbeats.
+Cancellation is cooperative: it cannot stop
 blocking code or undo an external effect a handler has already performed. At-least-once processing requires
 idempotent handlers; an idempotency key deduplicates active jobs, not all future
 requests after a terminal job has been removed or completed.
