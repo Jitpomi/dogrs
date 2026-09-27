@@ -62,12 +62,8 @@ impl NatsBackend {
                 Err(_) => js.get_key_value(&config.subject).await.map_err(error)?,
             },
         };
-        let mut config = bucket.stream.cached_info().config.clone();
-        // Leader reads avoid observing stale follower state. CAS protects every write.
-        if config.allow_direct {
-            config.allow_direct = false;
-            js.update_stream(config).await.map_err(error)?;
-        }
+        // Mutable records use explicit leader reads. Immutable payloads can
+        // use a provisioned direct-read path without weakening ownership.
         Self::from_context(js, &bucket.name, max_payload).await
     }
     pub async fn new_async(config: NatsConfig) -> QueueResult<Self> {
@@ -125,12 +121,10 @@ impl NatsBackend {
         let config = &bucket.stream.cached_info().config;
         if config.storage != stream::StorageType::File
             || !config.max_age.is_zero()
-            || config.allow_direct
             || config.discard != stream::DiscardPolicy::New
         {
             return Err(QueueError::InvalidConfig(
-                "NATS queue requires file storage, max_age=0, allow_direct=false and discard=new"
-                    .into(),
+                "NATS queue requires file storage, max_age=0 and discard=new".into(),
             ));
         }
         let max_state_bytes = state_budget(max_payload, config.max_message_size)?;

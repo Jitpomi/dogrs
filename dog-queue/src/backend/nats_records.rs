@@ -398,8 +398,7 @@ impl NatsStore {
     }
     async fn check_legacy(&self, tenant: &str) -> QueueResult<()> {
         if self
-            .bucket
-            .entry(format!("tenant_{}", hex(tenant)))
+            .leader_entry(format!("tenant_{}", hex(tenant)))
             .await
             .map_err(error)?
             .is_some_and(|e| e.operation == kv::Operation::Put)
@@ -412,7 +411,7 @@ impl NatsStore {
         let key = cell(tenant, slot(id)?);
         if let Some(entry) = crate::diagnostics::measure(
             crate::diagnostics::NATS_POINT_READ,
-            self.bucket.entry(&key),
+            self.leader_entry(&key),
         )
         .await
         .map_err(error)?
@@ -432,8 +431,7 @@ impl NatsStore {
         }
         let key = history(tenant, id);
         let entry = self
-            .bucket
-            .entry(&key)
+            .leader_entry(&key)
             .await
             .map_err(error)?
             .filter(|e| e.operation == kv::Operation::Put);
@@ -465,12 +463,9 @@ impl NatsStore {
     async fn bytes(&self, tenant: &str, id: &JobId) -> QueueResult<Vec<u8>> {
         crate::diagnostics::measure(
             crate::diagnostics::NATS_PAYLOAD_READ,
-            self.bucket.get(payload(tenant, id)),
+            self.immutable_payload(&payload(tenant, id)),
         )
         .await
-        .map_err(error)?
-        .map(|b| b.to_vec())
-        .ok_or_else(|| error("JetStream job payload missing; storage was lost"))
     }
     async fn archive(&self, tenant: &str, row: &StoredRecord) -> QueueResult<()> {
         let key = history(tenant, &row.record.job_id);
@@ -481,7 +476,7 @@ impl NatsStore {
             Ok(_) => Ok(()),
             Err(err) => match crate::diagnostics::measure(
                 crate::diagnostics::NATS_POINT_READ,
-                self.bucket.entry(&key),
+                self.leader_entry(&key),
             )
             .await
             .map_err(error)?
@@ -502,8 +497,7 @@ impl NatsStore {
             .map_err(error)?;
         let key = cell(tenant, slot(id)?);
         if let Some(entry) = self
-            .bucket
-            .entry(&key)
+            .leader_entry(&key)
             .await
             .map_err(error)?
             .filter(|e| e.operation == kv::Operation::Put)
@@ -519,8 +513,7 @@ impl NatsStore {
                     .await
                 {
                     if let Some(latest) = self
-                        .bucket
-                        .entry(&key)
+                        .leader_entry(&key)
                         .await
                         .map_err(error)?
                         .filter(|e| e.operation == kv::Operation::Put)
@@ -615,7 +608,7 @@ impl NatsStore {
         }
     }
     async fn retire(&self, tenant: &str, key: &str) -> QueueResult<()> {
-        if let Some(entry) = self.bucket.entry(key).await.map_err(error)? {
+        if let Some(entry) = self.leader_entry(key).await.map_err(error)? {
             if entry.operation != kv::Operation::Put {
                 return Ok(());
             }
@@ -638,8 +631,7 @@ impl NatsStore {
             // A concurrent replacement is protected by the expected revision.
             if let Err(err) = self.bucket.purge_expect_revision(key, Some(revision)).await {
                 if self
-                    .bucket
-                    .entry(key)
+                    .leader_entry(key)
                     .await
                     .map_err(error)?
                     .is_some_and(|e| e.revision == revision)
@@ -729,7 +721,7 @@ impl NatsStore {
             for _ in 0..64 {
                 let previous = crate::diagnostics::measure(
                     crate::diagnostics::NATS_POINT_READ,
-                    self.bucket.entry(&key),
+                    self.leader_entry(&key),
                 )
                 .await
                 .map_err(error)?;
@@ -780,8 +772,7 @@ impl NatsStore {
                     continue;
                 }
                 if let Some(entry) = self
-                    .bucket
-                    .entry(&key)
+                    .leader_entry(&key)
                     .await
                     .map_err(error)?
                     .filter(|e| e.operation == kv::Operation::Put)
@@ -810,8 +801,7 @@ impl NatsStore {
             for key in keys {
                 for _ in 0..16 {
                     let Some(entry) = self
-                        .bucket
-                        .entry(&key)
+                        .leader_entry(&key)
                         .await
                         .map_err(error)?
                         .filter(|e| e.operation == kv::Operation::Put)
@@ -973,7 +963,7 @@ impl NatsStore {
                 let key = cell(tenant, slot(&id)?);
                 match crate::diagnostics::measure(
                     crate::diagnostics::NATS_POINT_READ,
-                    self.bucket.entry(&key),
+                    self.leader_entry(&key),
                 )
                 .await
                 .map_err(error)?

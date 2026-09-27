@@ -421,7 +421,8 @@ async fn main() -> Result<()> {
                         )
                         .await?;
                         let mut config = bucket.stream.cached_info().config.clone();
-                        config.allow_direct = false;
+                        config.allow_direct =
+                            std::env::var("DOGRS_NATS_DIRECT_READS").as_deref() == Ok("1");
                         config.allow_atomic_publish =
                             std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
                         js.update_stream(config).await?;
@@ -458,7 +459,8 @@ async fn main() -> Result<()> {
                     }
                 };
                 let mut config = bucket.stream.cached_info().config.clone();
-                config.allow_direct = false;
+                config.allow_direct =
+                    std::env::var("DOGRS_NATS_DIRECT_READS").as_deref() == Ok("1");
                 config.allow_atomic_publish =
                     std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
                 js.update_stream(config).await?;
