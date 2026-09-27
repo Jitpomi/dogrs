@@ -4,7 +4,7 @@
 Run with DOGRS_SYSTEM_BINARY pointing to a release build with redis,nats features.
 Only containers/network created by this invocation are killed or removed.
 """
-import argparse,json,os,pathlib,platform,re,resource,secrets,socket,subprocess,time,urllib.request
+import argparse,json,os,pathlib,platform,re,resource,secrets,socket,subprocess,time,threading,urllib.request
 p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis','nats']);p.add_argument('--report-dir',required=True);p.add_argument('--capacity',action='store_true');p.add_argument('--restore',action='store_true');p.add_argument('--race',action='store_true');p.add_argument('--outage-seconds',type=int,default=3);p.add_argument('--seconds',type=int,default=30);p.add_argument('--bytes',type=int,default=1024);p.add_argument('--admission-mode',choices=['native-payload','native-layout','dogrs-admission']);p.add_argument('--overload-drain-seconds',type=int,choices=[0,30,60,120],default=0);a=p.parse_args()
 if a.admission_mode and not a.capacity:p.error('--admission-mode requires --capacity')
 if a.overload_drain_seconds and (not a.capacity or a.admission_mode):p.error('overload drain requires the full queue capacity mode')
@@ -63,7 +63,7 @@ try:
  env.pop('DOGRS_ADMISSION_MODE',None)
  if a.capacity and os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT'):
   env['DOGRS_TEST_TENANT']=os.environ['DOGRS_CAPACITY_COMPARISON_TENANT']
- monitors={}
+ monitors={};profile_ports={}
  if a.backend=='postgres':
   pg_nodes=[];urls=[]
   for node in range(pg_instances):
@@ -100,7 +100,11 @@ try:
   for name,number,monitor in zip(names,numbers,monitor_ports):
    config=folder/(name+'.conf');routes=','.join('"nats://'+n+':6222"' for n in names if n!=name)
    config.write_text(f'server_name: {name}\nport: 4222\nhttp: 8222\nclient_advertise: "127.0.0.1:{number}"\njetstream {{store_dir:"/data",sync_interval:always}}\ncluster {{name:"{run}",listen:"0.0.0.0:6222",routes:[{routes}]}}\n')
-   launch(name,'--network',network,'-v','/data','-p',f'127.0.0.1:{number}:4222','-p',f'127.0.0.1:{monitor}:8222','-v',f'{config}:/etc/nats.conf:ro',os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),'-c','/etc/nats.conf')
+   profile_args=[];profile_command=[]
+   if a.capacity and os.environ.get('DOGRS_QUEUE_TIMINGS')=='1':
+    profile_port=port();profile_ports[name]=profile_port
+    profile_args=['-p',f'127.0.0.1:{profile_port}:6543'];profile_command=['--profile','6543']
+   launch(name,*profile_args,'--network',network,'-v','/data','-p',f'127.0.0.1:{number}:4222','-p',f'127.0.0.1:{monitor}:8222','-v',f'{config}:/etc/nats.conf:ro',os.environ.get('DOGRS_NATS_IMAGE','nats:2.11-alpine'),'-c','/etc/nats.conf',*profile_command)
    monitors[name]=monitor
   for number in numbers:wait_port(number)
   deadline=time.monotonic()+60
@@ -130,8 +134,21 @@ try:
   before=resource.getrusage(resource.RUSAGE_CHILDREN)
   with (folder/'container-stats.jsonl').open('w') as stats:
    monitor=subprocess.Popen(['docker','stats','--format','{{json .}}',*containers],stdout=stats,stderr=subprocess.DEVNULL)
-   samplers=[]
+   samplers=[];profile_stop=threading.Event();profile_thread=None
+   def sample_nats_stacks():
+    sample=0
+    while not profile_stop.is_set():
+     for name,number in profile_ports.items():
+      try:
+       with urllib.request.urlopen(f'http://127.0.0.1:{number}/debug/pprof/goroutine?debug=2',timeout=2) as response:data=response.read()
+       (folder/f'{name}-goroutines-{sample:03d}.txt').write_bytes(data)
+      except OSError as error:
+       (folder/f'{name}-goroutines-{sample:03d}.error').write_text(str(error))
+     sample+=1
+     profile_stop.wait(5)
    try:
+    if profile_ports:
+     profile_thread=threading.Thread(target=sample_nats_stacks,daemon=True);profile_thread.start()
     if a.backend=='postgres' and os.environ.get('DOGRS_PG_PROFILE')=='1':
      for node_name,node_folder in pg_nodes:
       sample_output=(node_folder/'postgres-waits.log').open('w')
@@ -153,6 +170,8 @@ try:
     after=resource.getrusage(resource.RUSAGE_CHILDREN)
     (folder/'client-cpu.json').write_text(json.dumps({'user_seconds':after.ru_utime-before.ru_utime,'system_seconds':after.ru_stime-before.ru_stime}))
    finally:
+    profile_stop.set()
+    if profile_thread:profile_thread.join(timeout=10)
     for sampler,sample_output in samplers:
      sampler.terminate()
      try:sampler.wait(timeout=5)
