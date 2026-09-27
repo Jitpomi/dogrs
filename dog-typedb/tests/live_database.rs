@@ -1,4 +1,4 @@
-//! Run with TYPEDB_ADDRESS set against a disposable test server.
+//! Creates and deletes only a uniquely named test database on the configured server.
 use dog_typedb::{adapter::TypeDBState, load_schema_from_file, TypeDBAdapter, TypeDBDriverFactory};
 use futures::FutureExt;
 use serde_json::json;
@@ -19,10 +19,36 @@ impl TypeDBState for State {
 }
 
 #[tokio::test]
-#[ignore = "requires disposable TypeDB server; run with --ignored"]
+#[ignore = "requires TypeDB credentials and permission to create a test database; run with --ignored"]
 async fn transaction_boundaries_and_atomic_schema_loading() -> anyhow::Result<()> {
     let address = std::env::var("TYPEDB_ADDRESS")?;
-    let driver = Arc::new(TypeDBDriverFactory::connect_default(&address).await?);
+    let local = ["127.0.0.1:", "localhost:", "[::1]:"]
+        .iter()
+        .any(|prefix| address.starts_with(prefix));
+    let username = std::env::var("TYPEDB_USERNAME").or_else(|error| {
+        if local {
+            Ok("admin".into())
+        } else {
+            Err(error)
+        }
+    })?;
+    let password = std::env::var("TYPEDB_PASSWORD").or_else(|error| {
+        if local {
+            Ok("password".into())
+        } else {
+            Err(error)
+        }
+    })?;
+    // Remote credentials must never be transmitted over plaintext. Loopback keeps
+    // the existing Docker/CI defaults; TLS can also be enabled there explicitly.
+    let tls = match std::env::var("TYPEDB_TLS") {
+        Ok(value) if value == "true" => true,
+        Ok(value) if value == "false" && local => false,
+        Ok(_) => anyhow::bail!("TYPEDB_TLS must be true (false is allowed only for loopback)"),
+        Err(std::env::VarError::NotPresent) => !local,
+        Err(error) => return Err(error.into()),
+    };
+    let driver = Arc::new(TypeDBDriverFactory::connect(&address, &username, &password, tls).await?);
     let database = format!("dogrs-test-{}", uuid::Uuid::new_v4().simple());
     driver.databases().create(&database).await?;
     let adapter = TypeDBAdapter::new(Arc::new(State {
