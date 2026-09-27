@@ -245,8 +245,21 @@ pub async fn native() -> Result<()> {
             let js = async_nats::jetstream::new(
                 async_nats::connect(uri.split(',').collect::<Vec<_>>()).await?,
             );
+            let connections =
+                std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_| "shared".into());
+            anyhow::ensure!(
+                matches!(connections.as_str(), "shared" | "per-shard"),
+                "NATS connections must be shared or per-shard"
+            );
             let mut stores = Vec::new();
             for shard in 0..16 {
+                let js = if connections == "per-shard" && shard > 0 {
+                    async_nats::jetstream::new(
+                        async_nats::connect(uri.split(',').collect::<Vec<_>>()).await?,
+                    )
+                } else {
+                    js.clone()
+                };
                 let bucket = super::create_fixture_bucket(
                     &js,
                     async_nats::jetstream::kv::Config {

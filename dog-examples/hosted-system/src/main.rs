@@ -386,6 +386,12 @@ async fn main() -> Result<()> {
                     .unwrap_or_else(|_| "1".into())
                     .parse()?;
                 anyhow::ensure!((1..=32).contains(&shards), "shards must be 1–32");
+                let connections =
+                    std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_| "shared".into());
+                anyhow::ensure!(
+                    matches!(connections.as_str(), "shared" | "per-shard"),
+                    "NATS connections must be shared or per-shard"
+                );
                 if shards > 1 {
                     anyhow::ensure!(
                         role == "capacity-local",
@@ -393,6 +399,13 @@ async fn main() -> Result<()> {
                     );
                     let mut backends = Vec::new();
                     for shard in 0..shards {
+                        let js = if connections == "per-shard" && shard > 0 {
+                            async_nats::jetstream::new(
+                                async_nats::connect(uri.split(',').collect::<Vec<_>>()).await?,
+                            )
+                        } else {
+                            js.clone()
+                        };
                         let name = format!("{name}_{shard}");
                         let bucket = create_fixture_bucket(
                             &js,

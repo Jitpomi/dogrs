@@ -31,6 +31,11 @@ on:
         type: choice
         options: ['on', 'off', 'compare']
         default: 'on'
+      nats_connections:
+        description: Shared connection or one per bucket; compare repeats both on the same runner
+        type: choice
+        options: [shared, per-shard, compare]
+        default: shared
       nats_shards:
         description: Fixed JetStream bucket count
         type: choice
@@ -116,6 +121,17 @@ jobs:
           if [ "$PRODUCER_CAP" != none ]; then
             export DOGRS_PG_ENQUEUE_CONCURRENCY="$PRODUCER_CAP"
           fi
+          if [ "$NATS_CONNECTIONS" = compare ]; then
+            test "$BACKEND" = nats
+            test "$NATS_ATOMIC" = on
+            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-connections
+            status=0
+            for connections in shared per-shard per-shard shared; do
+              DOGRS_NATS_CONNECTIONS="$connections" python3 dog-examples/hosted-system/run_recovery.py nats --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
+          fi
+          export DOGRS_NATS_CONNECTIONS="$NATS_CONNECTIONS"
           if [ "$NATS_ATOMIC" = compare ]; then
             test "$BACKEND" = nats
             export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-atomic
@@ -203,6 +219,7 @@ jobs:
           DOGRS_PG_INSTANCES: ${{ inputs.postgres_instances != 'compare' && inputs.postgres_instances || '1' }}
           PG_SHARDS: ${{ inputs.postgres_shards || '1' }}
           NATS_ATOMIC: ${{ inputs.nats_atomic || 'on' }}
+          NATS_CONNECTIONS: ${{ inputs.nats_connections || 'shared' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
           DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '16') || (matrix.backend == 'postgres' && inputs.postgres_shards != 'compare' && inputs.postgres_shards) || '1' }}
       - name: Explain capacity result
