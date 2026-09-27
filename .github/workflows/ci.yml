@@ -197,6 +197,7 @@ jobs:
           for backend in postgres redis nats; do
             python3 dog-examples/hosted-system/run_recovery.py "$backend" --report-dir provider-recovery
           done
+          python3 dog-examples/hosted-system/verify_capacity_deadline.py --report-dir provider-recovery
           python3 dog-examples/hosted-system/run_recovery.py redis --restore --outage-seconds 300 --report-dir provider-recovery
         env:
           DOGRS_SYSTEM_BINARY: target/release/hosted-system

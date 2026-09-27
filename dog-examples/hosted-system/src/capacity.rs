@@ -194,9 +194,32 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
             }
         });
     }
-    while let Some(result) = producers.join_next().await {
-        result?;
+    eprintln!("CAPACITY_PROGRESS phase=offering");
+    let submissions = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+        while let Some(result) = producers.join_next().await {
+            result?;
+        }
+        Ok::<(), tokio::task::JoinError>(())
+    })
+    .await;
+    match submissions {
+        Ok(result) => result?,
+        Err(_) => {
+            // Cancellation cannot establish whether a dispatched write committed.
+            // Keep that uncertainty visible, and fail rather than hanging before
+            // the workload can emit its measurements.
+            errors.lock().unwrap().push(
+                "submission deadline expired; unfinished commit outcomes may be unknown".into(),
+            );
+            producers.abort_all();
+            while producers.join_next().await.is_some() {}
+        }
     }
+    eprintln!(
+        "CAPACITY_PROGRESS phase=offering_finished accepted={} completed={}",
+        accepted.load(Ordering::SeqCst),
+        completed.load(Ordering::SeqCst)
+    );
     let offered = tenants * seconds * 10;
     while completed.load(Ordering::SeqCst) < offered && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -217,8 +240,12 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     while consumers.join_next().await.is_some() {}
     let stage_timings = dog_queue::diagnostics::snapshot();
     let mut verified = 0;
-    let ids = Arc::try_unwrap(ids).unwrap().into_inner().unwrap();
-    for t in 0..tenants {
+    // Canceled producer tasks may still be dropping nested requests. Take a
+    // stable snapshot without assuming their Arc references have disappeared.
+    let ids = ids.lock().unwrap().clone();
+    eprintln!("CAPACITY_PROGRESS phase=verification");
+    let verification_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    'verification: for t in 0..tenants {
         let tenant = format!("{prefix}-{t}");
         let keys: Vec<_> = ids
             .iter()
@@ -226,8 +253,13 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
             .map(|(_, id)| id.clone())
             .collect();
         for chunk in keys.chunks(1000) {
-            match backend.get_snapshots(QueueCtx::new(&tenant), chunk).await {
-                Ok(rows) => {
+            match tokio::time::timeout_at(
+                verification_deadline,
+                backend.get_snapshots(QueueCtx::new(&tenant), chunk),
+            )
+            .await
+            {
+                Ok(Ok(rows)) => {
                     verified += rows
                         .iter()
                         .filter(|r| {
@@ -237,10 +269,17 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
                         })
                         .count()
                 }
-                Err(e) => errors
+                Ok(Err(e)) => errors
                     .lock()
                     .unwrap()
                     .push(format!("snapshot {tenant}: {e}")),
+                Err(_) => {
+                    errors
+                        .lock()
+                        .unwrap()
+                        .push("snapshot verification timed out".into());
+                    break 'verification;
+                }
             }
         }
     }
