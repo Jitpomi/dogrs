@@ -45,6 +45,11 @@ on:
         type: choice
         options: ['0', '16', 'compare']
         default: '0'
+      postgres_wal_init_zero:
+        description: PostgreSQL WAL allocation experiment (durable commits stay enabled)
+        type: choice
+        options: ['on', 'off', 'compare']
+        default: 'on'
       postgres_instances:
         description: Independent PostgreSQL servers sharing total connection and buffer budgets
         type: choice
@@ -83,6 +88,18 @@ jobs:
       - run: |
           if [ "$PRODUCER_CAP" != none ]; then
             export DOGRS_PG_ENQUEUE_CONCURRENCY="$PRODUCER_CAP"
+          fi
+          if [ "$PG_WAL_INIT" = compare ]; then
+            test "$BACKEND" = postgres
+            test "$PG_INSTANCES" = 1
+            test "$PG_SHARDS" = 1
+            test "$DOGRS_PG_FIXTURE_PARTITIONS" = 0
+            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-wal-allocation
+            status=0
+            for allocation in on off off on; do
+              DOGRS_PG_WAL_INIT_ZERO="$allocation" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
           fi
           if [ "$PG_INSTANCES" != 1 ]; then
             test "$PG_SHARDS" = 1
@@ -127,6 +144,8 @@ jobs:
           DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
           DOGRS_PG_PROFILE: ${{ inputs.profile_postgres && '1' || '0' }}
           DOGRS_PG_FIXTURE_PARTITIONS: ${{ inputs.postgres_fixture_partitions || '0' }}
+          PG_WAL_INIT: ${{ inputs.postgres_wal_init_zero || 'on' }}
+          DOGRS_PG_WAL_INIT_ZERO: ${{ inputs.postgres_wal_init_zero != 'compare' && inputs.postgres_wal_init_zero || 'on' }}
           PG_INSTANCES: ${{ inputs.postgres_instances || '1' }}
           DOGRS_PG_INSTANCES: ${{ inputs.postgres_instances != 'compare' && inputs.postgres_instances || '1' }}
           PG_SHARDS: ${{ inputs.postgres_shards || '1' }}
