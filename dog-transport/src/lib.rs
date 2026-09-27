@@ -6,6 +6,7 @@ pub trait IntoDogService<T> {
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct HttpOptions {
+    pub request_timeout_secs: Option<u64>,
     pub request_id_header: Option<String>,
     pub tenant_header: Option<String>,
     pub body_limit: Option<usize>,
@@ -49,6 +50,7 @@ impl HttpOptions {
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GrpcOptions {
+    pub request_timeout_secs: Option<u64>,
     pub enable_reflection: Option<bool>,
 }
 
@@ -66,6 +68,8 @@ impl GrpcOptions {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SseOptions {
     pub keep_alive_interval_secs: Option<u64>,
+    pub max_event_bytes: Option<usize>,
+    pub max_session_secs: Option<u64>,
 }
 
 impl SseOptions {
@@ -82,6 +86,11 @@ impl SseOptions {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct WebSocketOptions {
     pub heartbeat_interval_secs: Option<u64>,
+    pub heartbeat_timeout_secs: Option<u64>,
+    pub request_timeout_secs: Option<u64>,
+    pub send_timeout_secs: Option<u64>,
+    pub max_message_bytes: Option<usize>,
+    pub max_session_secs: Option<u64>,
 }
 
 impl WebSocketOptions {
@@ -97,6 +106,7 @@ impl WebSocketOptions {
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CliOptions {
+    pub request_timeout_secs: Option<u64>,
     pub interactive: Option<bool>,
 }
 
@@ -114,6 +124,7 @@ impl CliOptions {
 #[cfg(feature = "iroh")]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IrohOptions {
+    pub request_timeout_secs: Option<u64>,
     pub alpn: Vec<u8>,
     pub secret_key: Option<String>,
     pub relay_url: Option<String>,
@@ -126,6 +137,7 @@ impl IrohOptions {
     pub fn new(alpn: impl Into<Vec<u8>>) -> Self {
         Self {
             alpn: alpn.into(),
+            request_timeout_secs: None,
             secret_key: None,
             relay_url: None,
             endpoint: None,
@@ -150,6 +162,11 @@ impl IrohOptions {
 
 #[cfg(feature = "http")]
 pub mod http;
+#[cfg(feature = "http")]
+pub mod realtime;
+#[cfg(feature = "http")]
+#[doc(hidden)]
+pub use tokio;
 
 #[cfg(feature = "iroh")]
 pub mod iroh_transport;
@@ -260,109 +277,71 @@ macro_rules! declare_adapter {
 #[macro_export]
 macro_rules! declare_ws_adapter {
     (axum, $fn_name:ident, $params:ty) => {
-        pub async fn $fn_name(
-            ws: axum::extract::ws::WebSocketUpgrade,
-            axum::extract::State(app): axum::extract::State<
-                $crate::dog_core::DogApp<$crate::serde_json::Value, $params>
-            >,
-        ) -> impl axum::response::IntoResponse {
-            ws.on_upgrade(move |socket| async move {
-                use axum::extract::ws::Message as WsMessage;
-                use $crate::WsPayload;
-                use $crate::dog_core::DogTransportKind;
-                use $crate::tracing_lib;
-                use $crate::futures_util::{StreamExt, SinkExt};
-                use std::sync::Arc;
-                use tokio::sync::broadcast;
-
-                let (mut ws_sender, mut ws_receiver) = socket.split();
-                tracing_lib::info!("New WebSocket client connected");
-
-                // Global broadcasts are public data and require an explicit opt-in.
-                // Private streams must use application-authorized, tenant-scoped channels.
-                let mut broadcast_rx = if app.get::<String>("ws.public_broadcasts").as_deref() == Some("true") {
-                    app.get::<Arc<broadcast::Sender<$crate::serde_json::Value>>>("event_channel").map(|tx| tx.subscribe())
-                } else { None };
-
-                loop {
-                    let rx_fut = async {
-                        if let Some(ref mut rx) = broadcast_rx {
-                            rx.recv().await.ok()
-                        } else {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(3600 * 24)).await;
-                            None
-                        }
-                    };
-                    let mut rx_fut = std::pin::pin!(rx_fut);
-
-                    tokio::select! {
-                        msg_opt = ws_receiver.next() => {
-                            let msg = match msg_opt {
-                                Some(Ok(m)) => m,
-                                _ => break,
-                            };
-                            match msg {
-                                WsMessage::Text(text) => {
-                                    if let Ok(payload) = $crate::serde_json::from_str::<WsPayload>(&text) {
-                                        match payload {
-                                            WsPayload::Request { mut req } => {
-                                                req.transport = DogTransportKind::WebSocket;
-                                                let request_id = req.request_id.clone();
-                                                tracing_lib::info!("WS Request - Service: {}, Method: {:?}", req.service, req.method);
-
-                                                match app.handle(req).await {
-                                                    Ok(res) => {
-                                                        let resp = WsPayload::Response {
-                                                            request_id,
-                                                            payload: res.payload,
-                                                            error: None,
-                                                        };
-                                                        if let Ok(json) = $crate::serde_json::to_string(&resp) {
-                                                            let _ = ws_sender.send(WsMessage::Text(json.into())).await;
-                                                        }
-                                                    }
-                                                    Err(err) => {
-                                                        let resp = WsPayload::Response {
-                                                            request_id,
-                                                            payload: None,
-                                                            error: Some(err.sanitize_for_client().message),
-                                                        };
-                                                        if let Ok(json) = $crate::serde_json::to_string(&resp) {
-                                                            let _ = ws_sender.send(WsMessage::Text(json.into())).await;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            WsPayload::Ping => {
-                                                let resp = WsPayload::Pong;
-                                                if let Ok(json) = $crate::serde_json::to_string(&resp) {
-                                                    let _ = ws_sender.send(WsMessage::Text(json.into())).await;
-                                                }
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                                WsMessage::Close(_) => break,
-                                _ => {}
-                            }
-                        }
-                        event_opt = &mut rx_fut => {
-                            if let Some(val) = event_opt {
-                                let event_name = val.get("event").and_then(|v| v.as_str()).unwrap_or("updated").to_string();
-                                let data_val = val.get("data").cloned().unwrap_or(serde_json::Value::Null);
-                                let resp = WsPayload::Broadcast {
-                                    event: event_name,
-                                    payload: data_val,
-                                };
-                                if let Ok(json) = $crate::serde_json::to_string(&resp) {
-                                    let _ = ws_sender.send(WsMessage::Text(json.into())).await;
-                                }
-                            }
-                        }
+        $crate::declare_ws_adapter!(@impl $fn_name, $params,
+            |app: $crate::dog_core::DogApp<$crate::serde_json::Value, $params>, headers: axum::http::HeaderMap| async move {
+                if let Some(origin) = headers.get("origin") {
+                    let origin = origin.to_str().map_err(|_| axum::http::StatusCode::FORBIDDEN)?;
+                    let allowed = app.get::<std::sync::Arc<Vec<String>>>("ws.allowed_origins");
+                    if origin == "null" || !allowed.is_some_and(|values| values.iter().any(|value| value == origin)) {
+                        return Err(axum::http::StatusCode::FORBIDDEN);
                     }
                 }
-            })
+                let events = if app.get::<String>("ws.public_broadcasts").as_deref() == Some("true") {
+                    app.get::<std::sync::Arc<$crate::tokio::sync::broadcast::Sender<$crate::serde_json::Value>>>("event_channel").map(|tx| tx.subscribe())
+                } else { None };
+                Ok::<_, axum::http::StatusCode>($crate::realtime::WebSocketSession {
+                    events,
+                    headers: Some(headers.iter().filter_map(|(k,v)| v.to_str().ok().map(|v| (k.as_str().to_string(), $crate::serde_json::Value::String(v.to_string())))).collect()),
+                    ..Default::default()
+                })
+            }
+        );
+    };
+    (axum, $fn_name:ident, $params:ty, authorize = $authorize:path) => {
+        $crate::declare_ws_adapter!(@impl $fn_name, $params, $authorize);
+    };
+    (@impl $fn_name:ident, $params:ty, $authorize:expr) => {
+        pub async fn $fn_name(
+            ws: axum::extract::ws::WebSocketUpgrade,
+            axum::extract::State(app): axum::extract::State<$crate::dog_core::DogApp<$crate::serde_json::Value, $params>>,
+            headers: axum::http::HeaderMap,
+        ) -> Result<impl axum::response::IntoResponse, axum::http::StatusCode> {
+            static CONNECTIONS: std::sync::OnceLock<std::sync::Arc<$crate::tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+            let limiter = app.get::<std::sync::Arc<$crate::tokio::sync::Semaphore>>("ws.connections")
+                .unwrap_or_else(|| CONNECTIONS.get_or_init(|| std::sync::Arc::new($crate::tokio::sync::Semaphore::new(128))).clone());
+            let permit = limiter.try_acquire_owned().map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
+            let options = app.get::<std::sync::Arc<$crate::WebSocketOptions>>("ws.options").map(|o| (*o).clone()).unwrap_or_default();
+            options.validate().map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+            let session = $crate::tokio::time::timeout(
+                std::time::Duration::from_secs(options.request_timeout_secs.unwrap_or(30)),
+                ($authorize)(app.clone(), headers),
+            ).await.map_err(|_| axum::http::StatusCode::REQUEST_TIMEOUT)??;
+            let limit = options.message_limit();
+            Ok(ws.max_message_size(limit).max_frame_size(limit)
+                .write_buffer_size(0).max_write_buffer_size(limit + 1024)
+                .on_upgrade(move |socket| async move {
+                    let _permit = permit;
+                    use $crate::futures_util::{StreamExt, SinkExt};
+                    use $crate::realtime::Frame;
+                    use axum::extract::ws::{Message, CloseFrame};
+                    let (sink, input) = socket.split();
+                    let input = input.map(|frame| frame.map(|frame| match frame {
+                        Message::Text(t) => Frame::Text(t.to_string()),
+                        Message::Binary(b) => Frame::Binary(b.to_vec()),
+                        Message::Ping(b) => Frame::Ping(b.to_vec()),
+                        Message::Pong(b) => Frame::Pong(b.to_vec()),
+                        Message::Close(_) => Frame::Close(1000, "closed"),
+                    }));
+                    let sink = sink.with(|frame| std::future::ready(Ok::<_, axum::Error>(match frame {
+                        Frame::Text(t) => Message::Text(t.into()),
+                        Frame::Binary(b) => Message::Binary(b.into()),
+                        Frame::Ping(b) => Message::Ping(b.into()),
+                        Frame::Pong(b) => Message::Pong(b.into()),
+                        Frame::Close(code, reason) => Message::Close(Some(CloseFrame { code, reason: reason.into() })),
+                    })));
+                    let end = $crate::realtime::run_websocket(app, sink, input, options, session).await;
+                    $crate::tracing_lib::debug!(?end, "WebSocket session ended");
+                }))
         }
     };
 }
@@ -370,25 +349,38 @@ macro_rules! declare_ws_adapter {
 #[cfg(feature = "http")]
 #[macro_export]
 macro_rules! declare_sse_adapter {
+    (axum, $fn_name:ident, authorize = $authorize:path, options = $options:expr) => {
+        $crate::declare_sse_adapter!(@impl $fn_name, $options, $authorize);
+    };
     (axum, $fn_name:ident, $channel_expr:expr) => {
-        pub async fn $fn_name() -> axum::response::sse::Sse<
-            impl tokio_stream::Stream<
-                    Item = Result<axum::response::sse::Event, std::convert::Infallible>,
-                > + Send
-                + 'static,
-        > {
-            use tokio_stream::StreamExt;
-            let rx = $channel_expr.subscribe();
-            let stream = tokio_stream::wrappers::BroadcastStream::new(rx)
-                .map(|msg| match msg {
-                    Ok(val) => Ok(axum::response::sse::Event::default()
-                        .json_data(val)
-                        .unwrap()),
-                    Err(e) => Err(e),
-                })
-                .filter_map(|r| r.ok().map(Ok::<_, std::convert::Infallible>));
-            axum::response::sse::Sse::new(stream)
-                .keep_alive(axum::response::sse::KeepAlive::default())
+        $crate::declare_sse_adapter!(axum, $fn_name, $channel_expr, $crate::SseOptions::default());
+    };
+    (axum, $fn_name:ident, $channel_expr:expr, $options:expr) => {
+        $crate::declare_sse_adapter!(@impl $fn_name, $options, |_: axum::http::HeaderMap| async {
+            Ok::<_, axum::http::StatusCode>($crate::realtime::SseSubscription::new($channel_expr.subscribe()))
+        });
+    };
+    (@impl $fn_name:ident, $options:expr, $authorize:expr) => {
+        pub async fn $fn_name(headers: axum::http::HeaderMap)
+            -> Result<impl axum::response::IntoResponse, axum::http::StatusCode> {
+            static CONNECTIONS: $crate::tokio::sync::Semaphore = $crate::tokio::sync::Semaphore::const_new(128);
+            let permit = CONNECTIONS.try_acquire().map_err(|_| axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
+            use $crate::futures_util::StreamExt;
+            let options = $options;
+            options.validate().map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+            let subscription = $crate::tokio::time::timeout(std::time::Duration::from_secs(30), ($authorize)(headers))
+                .await.map_err(|_| axum::http::StatusCode::REQUEST_TIMEOUT)??;
+            let keep_alive = std::time::Duration::from_secs(options.keep_alive_interval_secs.unwrap_or(15));
+            let stream = $crate::realtime::sse_stream(subscription, options)
+                .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+                .map(move |event| {
+                    let _permit = &permit;
+                    let mut output = axum::response::sse::Event::default().data(event.data);
+                    if let Some(name) = event.event { output = output.event(name); }
+                    Ok::<_, std::convert::Infallible>(output)
+                });
+            Ok(axum::response::sse::Sse::new(stream)
+                .keep_alive(axum::response::sse::KeepAlive::new().interval(keep_alive)))
         }
     };
 }
@@ -397,3 +389,31 @@ macro_rules! declare_sse_adapter {
 pub mod cli;
 #[cfg(feature = "grpc")]
 pub mod grpc;
+
+/// Bound application dispatch as well as transport framing. Dropping the future
+/// cancels cooperative work; callers must reconcile uncertain external effects.
+#[cfg(any(feature = "http", feature = "grpc", feature = "cli", feature = "iroh"))]
+async fn dispatch<R, P>(
+    app: &dog_core::DogApp<R, P>,
+    request: dog_core::DogRequest,
+    seconds: Option<u64>,
+) -> Result<dog_core::DogResponse, dog_core::DogError>
+where
+    R: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+    P: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + Clone + 'static,
+{
+    let seconds = seconds.unwrap_or(30);
+    if !(1..=86400).contains(&seconds) {
+        return Err(dog_core::DogError::new(
+            dog_core::errors::ErrorKind::GeneralError,
+            "Invalid transport timeout",
+        ));
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(seconds), app.handle(request))
+        .await
+        .unwrap_or_else(|_| {
+            Err(dog_core::DogError::timeout(
+                "Request timed out; outcome may be unknown",
+            ))
+        })
+}

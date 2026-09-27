@@ -8,6 +8,13 @@ pub async fn build_builder() -> Result<DogAppBuilder<Value, DemoParams>> {
 
     builder.set("http.host", "127.0.0.1");
     builder.set("http.port", "3000");
+    builder.set(
+        "ws.allowed_origins",
+        std::sync::Arc::new(vec![
+            "http://127.0.0.1:3000".to_string(),
+            "http://localhost:3000".to_string(),
+        ]),
+    );
 
     crate::hooks::register_global_hooks(&mut builder)?;
     crate::channels::configure(&mut builder)?;

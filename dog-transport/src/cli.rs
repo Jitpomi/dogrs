@@ -80,7 +80,7 @@ where
             let result = match serde_json::from_slice::<DogRequest>(&line) {
                 Ok(mut req) => {
                     req.transport = DogTransportKind::Cli;
-                    self.app.handle(req).await
+                    crate::dispatch(&self.app, req, self.options.request_timeout_secs).await
                 }
                 Err(_) => Err(DogError::bad_request("Invalid DogRequest JSON")),
             };

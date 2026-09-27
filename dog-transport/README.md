@@ -137,8 +137,16 @@ other transports. Automatic global WebSocket broadcasts are disabled by default;
 set `ws.public_broadcasts` to the string `"true"` only for intentionally public
 channels. Private streams require application-authorized, tenant-scoped channels.
 Mount SSE handlers behind the application's authorization middleware.
-`WebSocketOptions` and `SseOptions` remain reserved configuration types; their
-fields are not automatically applied by the adapter macros.
+`WebSocketOptions` and `SseOptions` now apply to the adapters. See
+[realtime operation and migration](REALTIME.md) for authorization, limits,
+disconnect behavior and executable test coverage.
+
+HTTP, gRPC, CLI and Iroh application dispatch now has a default 30-second
+deadline. Set `request_timeout_secs` on the corresponding options to change it
+(1–86,400 seconds). HTTP body collection has a separate deadline of the same
+duration. CLI still waits for interactive input, and Iroh retains its separate
+frame read/write deadlines. Timeout cancels cooperative handlers; it does not
+undo external effects, so reconcile uncertain outcomes before retrying mutations.
 
 See the runnable `transport-demo` example and `docs/quickstart.md`.
 

@@ -45,6 +45,7 @@ where
 {
     app: DogApp<R, P>,
     streams: std::sync::Arc<tokio::sync::Semaphore>,
+    request_timeout_secs: Option<u64>,
 }
 
 impl<R, P> DogIrohService<R, P>
@@ -56,6 +57,7 @@ where
         Self {
             app,
             streams: std::sync::Arc::new(tokio::sync::Semaphore::new(128)),
+            request_timeout_secs: None,
         }
     }
 }
@@ -96,6 +98,7 @@ where
                 continue;
             };
             let app = app.clone();
+            let request_timeout_secs = self.request_timeout_secs;
 
             tasks.spawn(async move {
                 let _permit = permit;
@@ -130,20 +133,21 @@ where
                 );
 
                 // Handle the request via DogApp
-                let dog_response = match app.handle(dog_request).await {
-                    Ok(res) => res,
-                    Err(err) => DogResponse {
-                        payload: None,
-                        metadata: {
-                            let mut map = HashMap::new();
-                            map.insert(
-                                "error".to_string(),
-                                serde_json::Value::String(err.sanitize_for_client().message),
-                            );
-                            map
+                let dog_response =
+                    match crate::dispatch(&app, dog_request, request_timeout_secs).await {
+                        Ok(res) => res,
+                        Err(err) => DogResponse {
+                            payload: None,
+                            metadata: {
+                                let mut map = HashMap::new();
+                                map.insert(
+                                    "error".to_string(),
+                                    serde_json::Value::String(err.sanitize_for_client().message),
+                                );
+                                map
+                            },
                         },
-                    },
-                };
+                    };
 
                 // Serialize and respond
                 let res_bytes = match serde_json::to_vec(&dog_response) {
@@ -201,8 +205,10 @@ where
                     builder.bind().await?
                 }
             };
+            let mut service = DogIrohService::new(self);
+            service.request_timeout_secs = options.request_timeout_secs;
             Ok(Router::builder(endpoint)
-                .accept(options.alpn, DogIrohService::new(self))
+                .accept(options.alpn, service)
                 .spawn())
         })
     }

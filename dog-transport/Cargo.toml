@@ -51,7 +51,8 @@ http = [
     "dep:async-trait",
     "dep:bytes",
     "dep:uuid",
-    "dep:futures-util"
+    "dep:futures-util",
+    "dep:tokio"
 ]
 iroh = [
     "dep:iroh",
@@ -63,10 +64,11 @@ iroh = [
 ]
 
 [dev-dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio-tungstenite = "0.29"
+reqwest = { version = "0.12", default-features = false }
 dog-auth = { path = "../dog-auth" }
 async-trait = "0.1"
 anyhow = "1"
 tokio-stream = { version = "0.1", features = ["net"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-
-
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }

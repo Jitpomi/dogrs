@@ -26,9 +26,12 @@ input sizes. Internal errors are sanitized before returning to remote clients.
   connection; read/write framing has size and time limits.
 
 Global WebSocket broadcasts are disabled by default. Set `ws.public_broadcasts`
-to the string `"true"` only for intentionally public events. Private event routing
-must authorize subscribers and filter tenants. SSE/WebSocket option structs do
-not automatically apply every hosting-server setting; configure the server itself.
+to the string `"true"` only for intentionally public events. WebSocket/SSE adapters
+now enforce configured connection behavior, support private authorization hooks,
+and report event gaps. Browser WebSockets require an explicit Origin allowlist or
+custom authorizer. HTTP/gRPC/CLI/Iroh dispatch has a configurable 30-second default
+deadline. See [realtime operation and migration](../dog-transport/REALTIME.md) for
+the API changes, delivery contract and hosting-server responsibilities.
 
 ## Authentication
 
