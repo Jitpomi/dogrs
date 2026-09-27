@@ -442,9 +442,27 @@ impl NatsStore {
         }
         Err(QueueError::JobNotFound(id.clone()))
     }
+    async fn claim_bytes(
+        &self,
+        key: &str,
+        value: Vec<u8>,
+        revision: u64,
+        tenant: &str,
+        id: &JobId,
+    ) -> QueueResult<Option<Vec<u8>>> {
+        let claim = self.cas(key, value, revision);
+        // Retain the permit until ownership is resolved, including when the
+        // payload arrives first. Excess callers use the original serial path.
+        let Ok(_permit) = self.payload_slots.try_acquire() else {
+            return if claim.await? {
+                self.bytes(tenant, id).await.map(Some)
+            } else {
+                Ok(None)
+            };
+        };
+        claim_and_read(claim, self.bytes(tenant, id), || self.bytes(tenant, id)).await
+    }
     async fn bytes(&self, tenant: &str, id: &JobId) -> QueueResult<Vec<u8>> {
-        // Bound speculative I/O independently of the producer admission queue.
-        let _permit = self.payload_slots.acquire().await.map_err(error)?;
         crate::diagnostics::measure(
             crate::diagnostics::NATS_PAYLOAD_READ,
             self.bucket.get(payload(tenant, id)),
@@ -930,16 +948,15 @@ impl NatsStore {
                         // Observed metadata is usable only while its exact server
                         // revision remains current. No lease exists until CAS
                         // succeeds; a stale or deleted hint cannot grant ownership.
-                        if let Some(bytes) = claim_and_read(
-                            self.cas(
+                        if let Some(bytes) = self
+                            .claim_bytes(
                                 &key,
                                 serde_json::to_vec(&state.jobs[&id]).map_err(error)?,
                                 revision,
-                            ),
-                            self.bytes(tenant, &id),
-                            || self.bytes(tenant, &id),
-                        )
-                        .await?
+                                tenant,
+                                &id,
+                            )
+                            .await?
                         {
                             job.record.message.payload_bytes = bytes;
                             return Ok(Outcome::Lease(Some(job)));
@@ -1005,20 +1022,16 @@ impl NatsStore {
                 _ => {}
             }
             let row = &state.jobs[&id];
-            let claim = self.cas(
-                &key,
-                serde_json::to_vec(row).map_err(error)?,
-                entry.revision,
-            );
+            let value = serde_json::to_vec(row).map_err(error)?;
             if let Outcome::Lease(Some(job)) = &mut outcome {
-                if let Some(bytes) =
-                    claim_and_read(claim, self.bytes(tenant, &id), || self.bytes(tenant, &id))
-                        .await?
+                if let Some(bytes) = self
+                    .claim_bytes(&key, value, entry.revision, tenant, &id)
+                    .await?
                 {
                     job.record.message.payload_bytes = bytes;
                     return Ok(outcome);
                 }
-            } else if claim.await? {
+            } else if self.cas(&key, value, entry.revision).await? {
                 // The terminal CAS is already durable. Retain it in this cell;
                 // enqueue archives it before a future idempotency-key reuse.
                 return Ok(outcome);
@@ -1466,66 +1479,93 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires disposable JetStream"]
     async fn cached_claim_cannot_override_remote_owner_or_create_unobserved_job() {
-        use crate::{
-            backend::nats::{NatsBackend, NatsConfig},
-            JobMessage, QueueBackend, QueueCtx,
-        };
-        let url = std::env::var("DOGRS_NATS_URL").unwrap();
-        let name = format!("cached_claim_{}", uuid::Uuid::new_v4().simple());
-        let config = NatsConfig {
-            url: url.clone(),
-            subject: name.clone(),
-        };
-        let backend = NatsBackend::new(config.clone()).await.unwrap();
-        let remote = NatsBackend::new(config).await.unwrap();
-        let ctx = QueueCtx::new("cached-claim");
-        let id = backend
-            .enqueue(
-                ctx.clone(),
-                JobMessage::new("claim", vec![7; 65536], "bytes", "q"),
-            )
-            .await
-            .unwrap();
-        let index = backend.store.index().await.unwrap();
-        if let Some(task) = index.task.lock().unwrap().take() {
-            task.abort();
+        for saturated in [false, true] {
+            use crate::{
+                backend::nats::{NatsBackend, NatsConfig},
+                JobMessage, QueueBackend, QueueCtx,
+            };
+            let url = std::env::var("DOGRS_NATS_URL").unwrap();
+            let name = format!("cached_claim_{}", uuid::Uuid::new_v4().simple());
+            let config = NatsConfig {
+                url: url.clone(),
+                subject: name.clone(),
+            };
+            let backend = NatsBackend::new(config.clone()).await.unwrap();
+            let remote = NatsBackend::new(config).await.unwrap();
+            let ctx = QueueCtx::new("cached-claim");
+            // A full prefetch budget must neither grant a stale claim nor stall workers.
+            let _prefetch = if saturated {
+                Some(backend.store.payload_slots.acquire_many(128).await.unwrap())
+            } else {
+                None
+            };
+            let id = backend
+                .enqueue(
+                    ctx.clone(),
+                    JobMessage::new("claim", vec![7; 65536], "bytes", "q"),
+                )
+                .await
+                .unwrap();
+            let index = backend.store.index().await.unwrap();
+            if let Some(task) = index.task.lock().unwrap().take() {
+                task.abort();
+            }
+            let key = cell("cached-claim", slot(&id).unwrap());
+            let entries = index.tenant("cached-claim").unwrap();
+            let snapshot = entries.get(&key).unwrap().value().clone();
+            let owner = remote.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
+            assert!(backend
+                .dequeue(ctx.clone(), &["q"])
+                .await
+                .unwrap()
+                .is_none());
+            let fake = JobId::from(format!("{}_{}", "f".repeat(64), uuid::Uuid::new_v4()));
+            let fake_key = cell("cached-claim", slot(&fake).unwrap());
+            let mut unobserved = snapshot.1.unwrap();
+            unobserved.record.job_id = fake;
+            entries.insert(fake_key.clone(), (0, Ok(unobserved)));
+            assert!(backend
+                .dequeue(ctx.clone(), &["q"])
+                .await
+                .unwrap()
+                .is_none());
+            assert!(backend
+                .store
+                .bucket
+                .entry(&fake_key)
+                .await
+                .unwrap()
+                .is_none());
+            remote
+                .ack_complete(ctx.clone(), id.clone(), owner.lease_token, None)
+                .await
+                .unwrap();
+            assert!(matches!(
+                remote.get_record(ctx.clone(), id).await.unwrap().status,
+                crate::JobStatus::Completed { .. }
+            ));
+            let next = backend
+                .enqueue(
+                    ctx.clone(),
+                    JobMessage::new("serial-fallback", vec![9; 65536], "bytes", "q"),
+                )
+                .await
+                .unwrap();
+            let lease =
+                tokio::time::timeout(Duration::from_secs(2), backend.dequeue(ctx.clone(), &["q"]))
+                    .await
+                    .expect("prefetch saturation must not block the serial path")
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(lease.record.job_id, next);
+            assert_eq!(lease.record.message.payload_bytes, vec![9; 65536]);
+            backend
+                .ack_complete(ctx, next, lease.lease_token, None)
+                .await
+                .unwrap();
+            let js = async_nats::jetstream::new(async_nats::connect(url).await.unwrap());
+            js.delete_key_value(name).await.unwrap();
         }
-        let key = cell("cached-claim", slot(&id).unwrap());
-        let entries = index.tenant("cached-claim").unwrap();
-        let snapshot = entries.get(&key).unwrap().value().clone();
-        let owner = remote.dequeue(ctx.clone(), &["q"]).await.unwrap().unwrap();
-        assert!(backend
-            .dequeue(ctx.clone(), &["q"])
-            .await
-            .unwrap()
-            .is_none());
-        let fake = JobId::from(format!("{}_{}", "f".repeat(64), uuid::Uuid::new_v4()));
-        let fake_key = cell("cached-claim", slot(&fake).unwrap());
-        let mut unobserved = snapshot.1.unwrap();
-        unobserved.record.job_id = fake;
-        entries.insert(fake_key.clone(), (0, Ok(unobserved)));
-        assert!(backend
-            .dequeue(ctx.clone(), &["q"])
-            .await
-            .unwrap()
-            .is_none());
-        assert!(backend
-            .store
-            .bucket
-            .entry(&fake_key)
-            .await
-            .unwrap()
-            .is_none());
-        remote
-            .ack_complete(ctx.clone(), id.clone(), owner.lease_token, None)
-            .await
-            .unwrap();
-        assert!(matches!(
-            remote.get_record(ctx, id).await.unwrap().status,
-            crate::JobStatus::Completed { .. }
-        ));
-        let js = async_nats::jetstream::new(async_nats::connect(url).await.unwrap());
-        js.delete_key_value(name).await.unwrap();
     }
 }
 

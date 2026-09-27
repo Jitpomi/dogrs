@@ -89,6 +89,7 @@ claim is in flight. It returns the job only after that exact revision is durably
 claimed. A lost or uncertain claim cannot return prefetched bytes. A failed early
 read receives one fresh read after a successful claim; uncertain writes are never
 replayed. Both the watch-hint path and the point-read fallback use this rule.
-Payload reads are bounded to 128 concurrent requests per store, independently of
-producer admission. This removes a serial network wait without caching payloads,
+Speculative reads, including payloads waiting for ownership, are bounded to 128
+per store. Excess consumers use claim-then-read without waiting for a prefetch
+permit. Producer admission remains independent. This removes a serial network wait without caching payloads,
 changing the stored format, or assuming that producers and consumers share a process.
