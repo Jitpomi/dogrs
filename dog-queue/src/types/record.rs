@@ -246,9 +246,9 @@ pub struct LeasedJob {
     /// extension, `lease_until` reflects the original dequeue-time expiry,
     /// not the current backend deadline.
     ///
-    /// To check whether a lease is still alive after heartbeating, compare
-    /// the current time against the deadline returned by the most recent
-    /// `heartbeat_extend` call — not this field.
+    /// `heartbeat_extend` returns only success or failure. Track successfully
+    /// acknowledged extensions separately, or fetch fresh backend metadata;
+    /// this field is not an authoritative post-heartbeat deadline.
     pub lease_until: DateTime<Utc>,
 }
 
@@ -281,8 +281,8 @@ impl LeasedJob {
     /// extended, but this field is **never refreshed**. Comparing against it
     /// after a heartbeat silently returns `false` for a lease that is alive.
     ///
-    /// Prefer tracking the `new_lease_until` value from the most recent
-    /// `heartbeat_extend` call for post-heartbeat validity checks.
+    /// Track successfully acknowledged extension durations separately, or fetch
+    /// fresh backend metadata. `heartbeat_extend` does not return a deadline.
     pub fn lease_valid(&self, now: DateTime<Utc>) -> bool {
         self.lease_until > now
     }
