@@ -257,20 +257,20 @@ impl RedisStore {
                 }
             }
             // Enqueue needs only the authoritative server clock, not existing
-            // record metadata. Pipeline tenant registration on first sight and TIME.
+            // record metadata. Pipeline tenant registration and TIME instead of
+            // waiting for registration before making a second empty read call.
             // The write/CAS still follows the acknowledged registration, so
             // failed registration cannot leave an undiscoverable accepted job.
             let (now, values) = if matches!(op, Operation::Enqueue(_)) {
-                let mut pipe = redis::pipe();
-                if !self.checked.contains(tenant) {
-                    pipe.cmd("SADD").arg(TENANTS).arg(tenant).ignore();
-                }
-                let (clock,): (Vec<i64>,) = pipe
+                let (clock,): (Vec<i64>,) = redis::pipe()
+                    .cmd("SADD")
+                    .arg(TENANTS)
+                    .arg(tenant)
+                    .ignore()
                     .cmd("TIME")
                     .query_async(&mut self.producers.clone())
                     .await
                     .map_err(error)?;
-                self.checked.insert(tenant.into());
                 if clock.len() != 2 {
                     return Err(error("Invalid Redis clock"));
                 }
