@@ -5,6 +5,8 @@ edition = "2021"
 description = "Authentication system for DogRS framework"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Jitpomi/dogrs"
+documentation = "https://docs.rs/dog-auth"
+readme = "README.md"
 keywords = ["authentication", "jwt", "dogrs", "framework"]
 categories = ["authentication", "web-programming"]
 

@@ -5,6 +5,8 @@ edition = "2021"
 description = "HTTP, gRPC, CLI and Iroh transports for DogRS"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Jitpomi/dogrs"
+documentation = "https://docs.rs/dog-transport"
+readme = "README.md"
 
 [dependencies]
 dog-core = { path = "../dog-core", version = "0.2.0", features = ["json"] }

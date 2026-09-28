@@ -4,6 +4,9 @@ version = "0.2.0"
 edition = "2021"
 description = "Local (username/password) authentication strategy for DogRS"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/Jitpomi/dogrs"
+documentation = "https://docs.rs/dog-auth-local"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0"
