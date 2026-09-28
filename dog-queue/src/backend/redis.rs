@@ -14,7 +14,6 @@ pub struct RedisStore {
     manager: ConnectionManager,
     producers: ConnectionManager,
     checked: dashmap::DashSet<String>,
-    registered: dashmap::DashSet<String>,
 }
 pub type RedisBackend = DurableBackend<RedisStore>;
 fn error(e: impl std::fmt::Display) -> QueueError {
@@ -122,7 +121,6 @@ impl RedisBackend {
                 manager,
                 producers,
                 checked: Default::default(),
-                registered: Default::default(),
             },
             lease_duration: std::time::Duration::from_secs(300),
         })
@@ -259,20 +257,20 @@ impl RedisStore {
                 }
             }
             // Enqueue needs only the authoritative server clock, not existing
-            // record metadata. Pipeline tenant registration and TIME on first sight.
+            // record metadata. Pipeline tenant registration and TIME instead of
+            // waiting for registration before making a second empty read call.
             // The write/CAS still follows the acknowledged registration, so
             // failed registration cannot leave an undiscoverable accepted job.
             let (now, values) = if matches!(op, Operation::Enqueue(_)) {
-                let mut pipe = redis::pipe();
-                if !self.registered.contains(tenant) {
-                    pipe.cmd("SADD").arg(TENANTS).arg(tenant).ignore();
-                }
-                let (clock,): (Vec<i64>,) = pipe
+                let (clock,): (Vec<i64>,) = redis::pipe()
+                    .cmd("SADD")
+                    .arg(TENANTS)
+                    .arg(tenant)
+                    .ignore()
                     .cmd("TIME")
                     .query_async(&mut self.producers.clone())
                     .await
                     .map_err(error)?;
-                self.registered.insert(tenant.into());
                 if clock.len() != 2 {
                     return Err(error("Invalid Redis clock"));
                 }

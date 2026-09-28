@@ -138,7 +138,7 @@ impl NatsBackend {
             store: NatsStore {
                 writer: None,
                 enqueue_slots: tokio::sync::Semaphore::new(16),
-                payload_slots: tokio::sync::Semaphore::new(1024),
+                payload_slots: tokio::sync::Semaphore::new(128),
                 bucket,
                 max_state_bytes,
                 index: Default::default(),
