@@ -67,7 +67,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()
                 token.len() >= 32,
                 "test API bearer token must be at least 32 characters"
             );
-            let (_app, service) = crate::build(adapter, tenant).await?;
+            let (_app, service) = crate::build_with(adapter, tenant).await?;
             let router =
                 axum::Router::new()
                     .fallback_service(service)

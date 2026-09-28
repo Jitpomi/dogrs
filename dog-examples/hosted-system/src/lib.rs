@@ -17,11 +17,21 @@ use dog_transport::{http::DogHttpService, HttpOptions, IntoDogService};
 use serde_json::Value;
 
 pub use app::build_app;
-pub use runner::{dispatch_role, env, run, run_app, tenant, LEASE};
 pub use services::{adapters::PaymentsAdapter, BillingContext, BillingService, RecordPayment};
 
-/// Reusable construction API exposing the DogApp and DogHttpService for tests and other entry points.
-pub async fn build<B: QueueBackend + 'static>(
+/// Standard zero-argument construction API matching other DogRS applications.
+/// Uses an in-memory queue adapter for testing without external services.
+pub async fn build() -> Result<(DogApp<Value, ()>, DogHttpService<Value, ()>)> {
+    let tenant =
+        std::env::var("DOGRS_TEST_TENANT").unwrap_or_else(|_| "dogrs-test-default".into());
+    let backend = dog_queue::backend::memory::MemoryBackend::new();
+    let adapter = Arc::new(QueueAdapter::new(backend));
+    adapter.register_job::<RecordPayment>().await?;
+    build_with(adapter, tenant).await
+}
+
+/// Parameterized construction API with a custom queue adapter and tenant.
+pub async fn build_with<B: QueueBackend + 'static>(
     adapter: Arc<QueueAdapter<B>>,
     tenant: String,
 ) -> Result<(DogApp<Value, ()>, DogHttpService<Value, ()>)> {

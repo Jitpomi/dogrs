@@ -12,5 +12,5 @@ async fn main() -> Result<()> {
         .nth(1)
         .context("usage: hosted-system init|inspect|serve|worker")?;
 
-    hosted_system::dispatch_role(&role).await
+    hosted_system::runner::dispatch_role(&role).await
 }
