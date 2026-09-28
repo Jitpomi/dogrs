@@ -5,3 +5,4 @@ pub mod rules_shared;
 pub use rules_hooks::*;
 pub use rules_service::*;
 pub use rules_shared::*;
+pub mod rules_schema;

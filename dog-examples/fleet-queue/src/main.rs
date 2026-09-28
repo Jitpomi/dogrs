@@ -24,6 +24,12 @@ async fn main() -> Result<()> {
 
     let port = dog.get("http.port").unwrap_or_else(|| "3030".to_string());
 
+    anyhow::ensure!(
+        host.parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+            || host == "localhost",
+        "this example is loopback-only; add application authorization before remote deployment"
+    );
     let addr = format!("{host}:{port}");
 
     println!("[fleet-queue] listening on http://{addr}");
@@ -48,12 +54,6 @@ async fn main() -> Result<()> {
             }),
         )
         .route("/events", axum::routing::get(to_sse))
-        .layer(
-            tower_http::cors::CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any),
-        )
         .fallback_service(dog_transport::tower::service_fn(
             move |req: axum::http::Request<axum::body::Body>| {
                 let mut static_svc = static_service.clone();
@@ -73,7 +73,17 @@ async fn main() -> Result<()> {
         ));
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, router).await?;
+    let result = axum::serve(listener, router)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await;
+    if let Some(background) =
+        dog.get::<std::sync::Arc<fleet_queue::background::BackgroundSystem>>("background_system")
+    {
+        background.shutdown().await?;
+    }
+    result?;
 
     Ok(())
 }

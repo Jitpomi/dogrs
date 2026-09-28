@@ -42,7 +42,11 @@ async fn main() -> Result<()> {
         );
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, router).await?;
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
 
     Ok(())
 }

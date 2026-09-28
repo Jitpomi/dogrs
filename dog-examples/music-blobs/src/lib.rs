@@ -1,11 +1,13 @@
 mod app;
 mod channels;
 mod hooks;
-mod metadata;
+pub mod metadata;
 pub mod multipart;
+mod receipts;
 mod rustfs;
 mod rustfs_store;
 mod services;
+pub mod uploads;
 
 use std::sync::Arc;
 
@@ -18,8 +20,8 @@ pub use services::MusicParams;
 struct MusicMultipartDefaults;
 
 impl MusicMultipartDefaults {
-    const MAX_FILE_SIZE_MB: usize = 200;
-    const MAX_TOTAL_SIZE_MB: usize = 500;
+    const MAX_FILE_SIZE_MB: usize = 8;
+    const MAX_TOTAL_SIZE_MB: usize = 9;
     const ALLOWED_TYPES: &'static str =
         "audio/mpeg,audio/wav,audio/flac,audio/aac,audio/ogg,application/octet-stream";
     const INCLUDE_METADATA: bool = true;
@@ -39,9 +41,11 @@ pub async fn build() -> anyhow::Result<(
     services::configure(&mut builder, Arc::clone(&state))?;
 
     let dog = builder.build();
-    let http_service = dog
-        .clone()
-        .into_service(dog_transport::HttpOptions::default().route("/music", "music"));
+    let http_service = dog.clone().into_service(
+        dog_transport::HttpOptions::default()
+            .body_limit(12 * 1024 * 1024)
+            .route("/music", "music"),
+    );
 
     Ok((dog, http_service))
 }
@@ -83,8 +87,8 @@ pub fn multipart_config() -> multipart::MultipartConfig {
     };
 
     let mut config = multipart::MultipartConfig::new()
-        .max_file_size(max_file_mb * 1024 * 1024)
-        .max_total_size(max_total_mb * 1024 * 1024)
+        .max_file_size(max_file_mb.clamp(1, 8) * 1024 * 1024)
+        .max_total_size(max_total_mb.clamp(1, 9) * 1024 * 1024)
         .file_field("file")
         .file_encoding(encoding)
         .include_metadata(include_metadata);

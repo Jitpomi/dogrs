@@ -1,4 +1,4 @@
-use super::*;
+use crate::app::*;
 #[cfg(any(
     feature = "rabbitmq",
     feature = "kafka",

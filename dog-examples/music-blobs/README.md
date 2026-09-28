@@ -1,143 +1,69 @@
-# 🎵 Music Blobs - Storage Demo
+# Music blob example
 
-A demo showcasing **dog-blob** storage capabilities with real RustFS integration.
+A loopback, single-tenant music application using `dog-transport` and `dog-blob`.
+RustFS is an S3-compatible choice made by this application; DogRS does not require it.
 
-## 🚀 Features
+## Run
 
-### Demo Capabilities
-- **Upload tracks** with multipart/resumable support
-- **Stream audio** with range requests (scrubbing/seeking)
-- **Multi-tenant isolation** - each user has their own library
+Create a bucket on your existing local S3-compatible service, then provide its
+settings through environment variables (never commit credentials):
 
-
-## 🏗️ Architecture
-
-This application demonstrates **dog-blob** capabilities with real RustFS storage:
-
-```mermaid
-graph LR
-    subgraph "Client"
-        CLI["Demo Runner<br>(Terminal)"]
-    end
-    
-    subgraph "Application"
-        Jango["JangoService<br>(Business Logic)"]
-    end
-    
-    subgraph "Infrastructure"
-        Blob["dog-blob<br>(Storage Adapter)"]
-        FS["RustFS<br>(S3-Compatible)"]
-    end
-    
-    CLI -->|"Upload Track"| Jango
-    Jango -->|"Multipart Stream"| Blob
-    Blob -->|"S3 API"| FS
-    
-    classDef client fill:#f3f4f6,stroke:#9ca3af;
-    classDef app fill:#d1fae5,stroke:#10b981;
-    classDef infra fill:#dbeafe,stroke:#3b82f6;
-    
-    class CLI client;
-    class Jango app;
-    class Blob,FS infra;
+```sh
+export RUSTFS_ENDPOINT_URL=http://127.0.0.1:9000
+export RUSTFS_REGION=us-east-1
+export RUSTFS_BUCKET=music-blobs
+# Also set RUSTFS_ACCESS_KEY_ID and RUSTFS_SECRET_ACCESS_KEY.
+cargo run -p music-blobs
 ```
 
-### Key Components
+Open `http://127.0.0.1:3030`. `HTTP_HOST` must be loopback unless the explicit container-only opt-in `MUSIC_ALLOW_CONTAINER_BIND=1` is set; the supplied Compose file publishes only loopback ports. This example deliberately
+uses a fixed `default` tenant and does not authenticate users. Add authorization
+and derive allowed tenants from verified identity before building a remote service.
 
-- **JangoService**: Music streaming business logic
-- **dog-blob**: Storage-agnostic blob management with multipart uploads
-- **RustFS**: Production distributed file system via AWS SDK
-- **Upload Coordination**: Resumable multipart uploads with session management
+## Current upload and download patterns
 
-## 🎯 Demo Features
+The browser sends file bodies to `POST /uploads`, with `Content-Type` and an
+optional `x-filename`. The server streams those bytes to `BlobAdapter::put`.
+DogRS validates and stages the upload once, then uses native provider multipart
+when appropriate. It never accepts a filesystem path from request JSON.
 
-This demo showcases:
-- **Multi-tenant uploads** (user123 vs user456)
-- **Range streaming** for audio scrubbing
-- **Multipart uploads** for large files
-- **Real RustFS storage** via S3-compatible API
-- **Upload session management** with proper state tracking
+`GET /blobs/{id}` streams a download and accepts a single `bytes=start-end` or
+`bytes=start-` range. The browser plays that URL directly, rather than copying
+whole songs through base64 JSON.
 
-## 🛠️ Setup & Running
+The older `POST /music` custom `upload` method remains available for bounded
+multipart/base64 inputs and Dropzone chunks: at most 8 MiB decoded per request,
+9 MiB multipart body, and the configured chunk part limit. This path can extract
+embedded cover art from a complete small file. Large streamed uploads do not run
+that optional extraction. JSON playback/waveform helpers are capped at 8 MiB;
+use the streaming route for larger files. Music tags are not automatically indexed
+in provider metadata by the generic S3 adapter.
 
-### Prerequisites
+## Resource limits and recovery
 
-- Rust 1.70+
-- RustFS instance (local or cloud)
-- Environment variables configured
+Defaults: 100,000,000 bytes per object, four concurrent uploads, 1 GiB shared
+staging budget, 120-second upload timeout and 15-second idle timeout. The adapter,
+coordinator and S3 store share one `UploadResources` handle. Native parts use a
+5 MiB size. Chunk assembly can temporarily retain both parts and the assembled file.
 
-### Option 1: Local RustFS (Development)
+`MUSIC_DATA_DIR` (default `.dogrs-music`) contains private application staging,
+receipts and a `FileUploadJournal`. Store it on a trusted writable local filesystem.
+Successful uploads persist and fsync the receipt before acknowledging the native
+journal record. Startup removes abandoned staging files while preserving live owners.
 
-1. **Install RustFS locally on macOS:**
-   - Download the graphical one-click startup package from [RustFS website](https://docs.rustfs.com/installation/macos/)
-   - Modify permissions and double-click to launch
-   - Configure disk storage and start service
-   - Access console at `http://127.0.0.1:7001`
+After a crash, inspect/reconcile native writes using the local administrative command:
 
-2. **Set environment variables:**
-   ```bash
-   export RUSTFS_REGION="local"
-   export RUSTFS_ACCESS_KEY_ID="your-admin-username"
-   export RUSTFS_SECRET_ACCESS_KEY="your-admin-password"
-   export RUSTFS_ENDPOINT_URL="http://127.0.0.1:7001"
-   export RUSTFS_BUCKET="jango-music"
-   ```
-
-### Option 2: Cloud RustFS (Production)
-
-1. **Set environment variables:**
-   ```bash
-   export RUSTFS_REGION="your-region"
-   export RUSTFS_ACCESS_KEY_ID="your-access-key"
-   export RUSTFS_SECRET_ACCESS_KEY="your-secret-key"
-   export RUSTFS_ENDPOINT_URL="your-rustfs-endpoint"
-   export RUSTFS_BUCKET="jango-music"
-   ```
-
-### Run the Demo
-```bash
-# Navigate to the project
-cd dog-examples/music-blobs
-
-# Build and run
-cargo run
+```sh
+cargo run -p music-blobs -- recover
 ```
 
-The demo will run and showcase dog-blob capabilities with RustFS storage.
+This command skips active writes, recognizes committed objects and aborts known
+incomplete multipart uploads. It retains journal records for operator review.
+Compare committed records with `receipts/` before acknowledging them in application
+code. Unknown provider outcomes must remain pending; do not delete final objects
+based on missing business metadata. Provider lifecycle rules can clean up lost
+multipart handles. The native journal does not cover every fallback write.
 
-## 🎵 How It Works
-
-The demo runs through these scenarios:
-
-1. **Upload Track** - Store audio data in RustFS via dog-blob
-2. **Stream Full Track** - Retrieve and stream complete audio file  
-3. **Stream Range** - Demonstrate audio scrubbing with byte ranges
-4. **Multi-tenant Upload** - Show user isolation (user123 vs user456)
-5. **Multipart Upload** - Handle large files with chunked uploads
-6. **Cleanup** - Delete uploaded tracks
-
-## 📊 Key Benefits
-
-### Upload Performance
-- **Small files** (< 10MB): Single-shot upload
-- **Large files** (> 10MB): Automatic multipart with 5MB chunks
-- **Resumable**: Network interruptions handled gracefully
-- **Parallel**: Multiple parts uploaded concurrently
-
-### Streaming Performance
-- **Range requests**: Efficient audio scrubbing
-- **Buffering**: 8KB chunks for smooth playback
-- **Caching**: ETag-based browser caching
-- **Compression**: Gzip for metadata responses
-
-## 🎉 What This Demonstrates
-
-This example showcases the power of the DogRS ecosystem:
-
-1. **dog-blob eliminates media boilerplate** - No custom multipart logic needed
-2. **Storage agnostic** - Same code works with any backend
-3. **Production ready** - Handles resumable uploads, range streaming, multi-tenancy
-4. **Clean architecture** - Services focus on business logic, not infrastructure
-5. **Extensible** - Easy to add features like transcoding, recommendations, social features
-
-**The result**: A complete music streaming service with professional-grade infrastructure, scalable architecture, and rich feature set - all powered by the DogRS ecosystem.
+Compatibility chunk sessions and playback controls remain process-local; they are
+not a resumable-across-restart or multi-host service. Disk budgets are per shared
+process handle, not physical host quotas. See the [blob guide](../../dog-blob/README.md).

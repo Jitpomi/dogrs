@@ -1,6 +1,6 @@
 //! Queue-level open-loop test. This measures real backend persistence and payload
 //! delivery; it is separate from the HTTP/PostgreSQL billing-effect acceptance test.
-use super::*;
+use crate::app::*;
 use dog_queue::JobMessage;
 use std::{
     collections::HashSet,

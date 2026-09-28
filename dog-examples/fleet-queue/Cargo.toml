@@ -26,3 +26,10 @@ dog-queue = { path = "../../dog-queue" }
 [lib]
 name = "fleet_queue"
 path = "src/lib.rs"
+
+[features]
+postgres = ["dog-queue/postgres", "dep:tokio-postgres"]
+
+[dependencies.tokio-postgres]
+version = "0.7"
+optional = true

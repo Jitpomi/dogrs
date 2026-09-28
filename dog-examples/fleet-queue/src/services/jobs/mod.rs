@@ -4,3 +4,4 @@ pub mod jobs_service;
 pub mod jobs_shared;
 
 pub use jobs_service::*;
+pub mod jobs_schema;

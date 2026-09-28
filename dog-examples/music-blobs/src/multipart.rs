@@ -106,6 +106,7 @@ impl MultipartConfig {
 #[derive(Clone)]
 pub struct MultipartToJson {
     config: MultipartConfig,
+    slots: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 impl Default for MultipartToJson {
@@ -118,11 +119,15 @@ impl MultipartToJson {
     pub fn new() -> Self {
         Self {
             config: MultipartConfig::default(),
+            slots: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
 
     pub fn with_config(config: MultipartConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            slots: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+        }
     }
 }
 
@@ -133,6 +138,7 @@ impl<S> Layer<S> for MultipartToJson {
         MultipartToJsonService {
             inner,
             config: self.config.clone(),
+            slots: self.slots.clone(),
         }
     }
 }
@@ -141,6 +147,7 @@ impl<S> Layer<S> for MultipartToJson {
 pub struct MultipartToJsonService<S> {
     inner: S,
     config: MultipartConfig,
+    slots: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 impl<S> Service<Request<Body>> for MultipartToJsonService<S>
@@ -163,8 +170,10 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let mut inner = self.inner.clone();
+        let clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, clone);
         let config = self.config.clone();
+        let slots = self.slots.clone();
 
         Box::pin(async move {
             // Check if this is a multipart request
@@ -180,11 +189,23 @@ where
             );
 
             if content_type.starts_with("multipart/form-data") {
+                let Ok(_permit) = slots.try_acquire_owned() else {
+                    return Ok(Response::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .body(Body::from("too many multipart uploads"))
+                        .expect("static response"));
+                };
                 println!(
                     "🔧 MultipartToJson middleware: Converting multipart to JSON with BlobRef"
                 );
 
-                match convert_multipart_to_json(req, &config).await {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    convert_multipart_to_json(req, &config),
+                )
+                .await
+                .unwrap_or_else(|_| Err("multipart read deadline exceeded".into()))
+                {
                     Ok(json_req) => {
                         println!("✅ MultipartToJson middleware: Successfully converted to JSON with BlobRef");
                         inner.call(json_req).await
@@ -211,168 +232,107 @@ async fn convert_multipart_to_json(
     req: Request<Body>,
     config: &MultipartConfig,
 ) -> Result<Request<Body>, Box<dyn std::error::Error + Send + Sync>> {
-    // Store original headers before extracting multipart data
-    let original_headers = req.headers().clone();
-
-    // Extract boundary from content-type header
-    let content_type = original_headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    let boundary = content_type
-        .split("boundary=")
-        .nth(1)
-        .ok_or("Missing boundary in multipart content-type")?;
-
-    // Use multer instead of Axum's parser for large file support
-    let body_stream = req.into_body();
-    let body_bytes = axum::body::to_bytes(body_stream, 200 * 1024 * 1024)
-        .await // 200MB limit
-        .map_err(|e| format!("Failed to read request body: {}", e))?;
-
-    let mut multipart = multer::Multipart::new(
-        futures::stream::once(async { Ok::<bytes::Bytes, multer::Error>(body_bytes) }),
-        boundary,
+    use base64::Engine;
+    let boundary = multer::parse_boundary(
+        req.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .ok_or("missing content type")?,
+    )?;
+    let (mut parts, body) = req.into_parts();
+    let max_file = config
+        .max_file_size
+        .unwrap_or(8 * 1024 * 1024)
+        .min(8 * 1024 * 1024) as u64;
+    let max_total = config
+        .max_total_size
+        .unwrap_or(9 * 1024 * 1024)
+        .min(9 * 1024 * 1024) as u64;
+    let constraints = multer::Constraints::new().size_limit(
+        multer::SizeLimit::new()
+            .whole_stream(max_total)
+            .per_field(max_file),
     );
+    let mut multipart =
+        multer::Multipart::with_constraints(body.into_data_stream(), boundary, constraints);
     let mut json_map = HashMap::new();
-
+    let mut file_metadata = None;
+    let mut fields = 0;
     while let Some(field) = multipart.next_field().await? {
-        let name = field.name().unwrap_or("unknown").to_string();
-        let content_type = field.content_type().map(|ct| ct.to_string());
-        let filename = field.file_name().map(|f| f.to_string());
-
-        // Determine if this is a file field
-        let is_file_field = if !config.file_fields.is_empty() {
-            config.file_fields.contains(&name)
-        } else if !config.text_fields.is_empty() {
-            !config.text_fields.contains(&name)
-        } else {
-            // Auto-detect: has filename or content-type suggests file
-            filename.is_some()
-                || content_type
-                    .as_ref()
-                    .is_some_and(|ct| !ct.starts_with("text/"))
-        };
-
-        if is_file_field {
-            // Handle file field with BlobRef approach - stream to temp storage
-            println!(
-                "   Processing file field '{}' with content-type: {:?}",
-                name, content_type
+        fields += 1;
+        if fields > 32 {
+            return Err("too many fields".into());
+        }
+        let name = field.name().ok_or("missing field name")?.to_owned();
+        if json_map.contains_key(&name) {
+            return Err("duplicate multipart field".into());
+        }
+        if name == "file" {
+            if config.file_encoding != FileEncoding::Base64 {
+                return Err(
+                    "upload requires base64 compatibility mode; use /uploads for large files"
+                        .into(),
+                );
+            }
+            let filename = field.file_name().unwrap_or("upload").to_owned();
+            let content_type = field
+                .content_type()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "application/octet-stream".into());
+            if !config.allowed_content_types.is_empty()
+                && !config.allowed_content_types.contains(&content_type)
+            {
+                return Err("unsupported file content type".into());
+            }
+            let bytes = field.bytes().await?;
+            json_map.insert(
+                name,
+                json!(base64::engine::general_purpose::STANDARD.encode(bytes)),
             );
-
-            // Create temp file for streaming
-            let temp_id = uuid::Uuid::new_v4();
-            let temp_path = format!("/tmp/multipart_{}_{}", name, temp_id);
-
-            // Ensure temp directory exists
-            if let Some(parent) = std::path::Path::new(&temp_path).parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-            }
-
-            let mut temp_file = tokio::fs::File::create(&temp_path)
-                .await
-                .map_err(|e| format!("Failed to create temp file: {}", e))?;
-
-            let mut total_size = 0u64;
-            let mut stream = field;
-
-            // Stream chunks directly to disk - no memory buffering
-            while let Some(chunk) = stream.chunk().await.map_err(|e| {
-                println!("❌ Failed to read chunk from file field '{}': {}", name, e);
-                e
-            })? {
-                use tokio::io::AsyncWriteExt;
-                temp_file
-                    .write_all(&chunk)
-                    .await
-                    .map_err(|e| format!("Failed to write chunk: {}", e))?;
-                total_size += chunk.len() as u64;
-            }
-
-            // Flush and close the file
-            use tokio::io::AsyncWriteExt;
-            temp_file
-                .flush()
-                .await
-                .map_err(|e| format!("Failed to flush file: {}", e))?;
-            drop(temp_file);
-
-            println!(
-                "   File field '{}' streamed to temp file: {} bytes",
-                name, total_size
-            );
-
-            // Check file size limits
-            if let Some(max_size) = config.max_file_size {
-                if total_size > max_size as u64 {
-                    return Err(format!(
-                        "File '{}' exceeds maximum size of {} bytes",
-                        name, max_size
-                    )
-                    .into());
-                }
-            }
-
-            // Create BlobRef instead of storing file data
-            let blob_ref = serde_json::json!({
-                "key": format!("temp/{}", temp_id),
-                "temp_path": temp_path,
-                "filename": filename,
-                "content_type": content_type,
-                "size": total_size
-            });
-
-            json_map.insert(name.clone(), blob_ref);
-
-            // Check content type if restricted
-            if !config.allowed_content_types.is_empty() {
-                if let Some(ct) = &content_type {
-                    if !config.allowed_content_types.contains(ct) {
-                        return Err(format!(
-                            "Content type '{}' not allowed for file '{}'",
-                            ct, name
-                        )
-                        .into());
-                    }
-                }
-            }
-
-            println!("   File field '{}': {} bytes -> BlobRef", name, total_size);
+            file_metadata = Some((filename, content_type));
         } else {
-            // Handle text fields
-            let value = field.text().await?;
-            json_map.insert(name.clone(), json!(value));
-            println!("   Text field '{}': {}", name, value);
+            let bytes = field.bytes().await?;
+            if bytes.len() > 4096 {
+                return Err("text field too large".into());
+            }
+            json_map.insert(name, json!(std::str::from_utf8(&bytes)?));
         }
     }
-
-    // Convert to JSON body
-    let json_body = json!(json_map);
-    let json_bytes = serde_json::to_vec(&json_body)?;
-
-    // Create new request with JSON body and preserve original headers
-    let (mut parts, _) = Request::new(Body::empty()).into_parts();
-
-    // Copy all original headers
-    parts.headers = original_headers;
-
-    // Update content-type and content-length for JSON body
+    let (filename, content_type) = file_metadata.ok_or("missing file")?;
+    json_map.insert("filename".into(), json!(filename));
+    json_map.insert("content_type".into(), json!(content_type));
+    let bytes = serde_json::to_vec(&json_map)?;
     parts
         .headers
-        .insert("content-type", "application/json".parse().unwrap());
-    parts.headers.insert(
-        "content-length",
-        json_bytes.len().to_string().parse().unwrap(),
-    );
+        .insert("content-type", "application/json".parse()?);
+    parts.headers.remove("transfer-encoding");
+    parts
+        .headers
+        .insert("content-length", bytes.len().to_string().parse()?);
+    Ok(Request::from_parts(parts, Body::from(bytes)))
+}
 
-    let new_body = Body::from(json_bytes);
-    let new_req = Request::from_parts(parts, new_body);
-
-    println!("   Converted to JSON with {} fields", json_map.len());
-
-    Ok(new_req)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn preserves_routing_and_supplies_accepted_file_data() {
+        let req = Request::builder().method("POST").uri("/music?test=1")
+            .header("content-type", "multipart/form-data; boundary=demo")
+            .body(Body::from("--demo\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nhello\r\n--demo--\r\n")).unwrap();
+        let req = convert_multipart_to_json(req, &MultipartConfig::default())
+            .await
+            .unwrap();
+        assert_eq!(req.method(), "POST");
+        assert_eq!(req.uri(), "/music?test=1");
+        let bytes = axum::body::to_bytes(req.into_body(), 1024).await.unwrap();
+        let data: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            dog_blob::BlobAdapter::extract_file_data(&data)
+                .await
+                .unwrap(),
+            b"hello"
+        );
+        assert!(data.to_string().find("temp_path").is_none());
+    }
 }

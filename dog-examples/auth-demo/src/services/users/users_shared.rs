@@ -38,7 +38,10 @@ pub fn register_hooks(
             "password",
             Arc::clone(&local),
         )));
-        // Protect everything except create/find
+        h.before_all(Arc::new(super::users_hooks::ProtectIdentityFields));
+        // Raw authentication resolvers bypass these external service hooks.
+        h.before_find(Arc::clone(&jwt));
+        // Protect everything except account registration
         h.before_get(Arc::clone(&jwt));
         h.before_update(Arc::clone(&jwt));
         h.before_patch(Arc::clone(&jwt));
@@ -54,7 +57,6 @@ pub fn register_hooks(
             Arc::clone(&local),
         )));
         h.after_all(Arc::new(ProtectHook::from_fields(&["password"])));
-        h.before_remove(Arc::new(super::users_hooks::EnforceUserOnDelete));
     });
 
     Ok(())

@@ -1,4 +1,4 @@
-/// Production-ready background processing system for fleet operations
+/// Fleet background jobs; select a persistent backend for restart recovery.
 ///
 /// This module provides proper dog-queue integration following the actual API patterns.
 pub mod jobs;
@@ -6,7 +6,10 @@ pub mod jobs;
 use crate::services::FleetParams;
 use anyhow::Result;
 use dog_core::DogApp;
-use dog_queue::backend::memory::MemoryBackend;
+#[cfg(not(feature = "postgres"))]
+use dog_queue::backend::memory::MemoryBackend as FleetBackend;
+#[cfg(feature = "postgres")]
+use dog_queue::backend::postgres::PostgresBackend as FleetBackend;
 use dog_queue::{EnqueueOptions, Job, QueueAdapter, QueueCtx, WorkerHandle};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
@@ -22,7 +25,7 @@ pub struct FleetContext {
 
 /// Main background processing system using proper dog-queue patterns
 pub struct BackgroundSystem {
-    adapter: Arc<QueueAdapter<MemoryBackend>>,
+    adapter: Arc<QueueAdapter<FleetBackend>>,
     worker_handles: Mutex<Vec<WorkerHandle>>,
 }
 
@@ -30,14 +33,30 @@ impl BackgroundSystem {
     /// Create new background system with proper dog-queue integration
     pub async fn new() -> Result<Self> {
         // Create memory backend for now (can be swapped for Redis/PostgreSQL)
-        let backend = MemoryBackend::new();
+        #[cfg(not(feature = "postgres"))]
+        let backend = {
+            eprintln!("fleet-queue: memory mode; queued jobs disappear on restart. Use --features postgres for local durable storage.");
+            FleetBackend::new()
+        };
+        #[cfg(feature = "postgres")]
+        let backend = {
+            let connection_string = std::env::var("FLEET_POSTGRES_URL")?;
+            let parsed: tokio_postgres::Config = connection_string.parse()?;
+            anyhow::ensure!(!parsed.get_hosts().is_empty() && parsed.get_hosts().iter().all(|host| match host {
+                tokio_postgres::config::Host::Tcp(host) => host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()),
+                #[cfg(unix)]
+                tokio_postgres::config::Host::Unix(_) => true,
+            }), "This example's PostgreSQL connector is local only; use a verified TLS connector for remote PostgreSQL (see hosted-system)");
+            FleetBackend::new(dog_queue::backend::postgres::PostgresConfig { connection_string })
+                .await?
+        };
 
         // Use custom configuration with long idle timeout so workers don't shutdown during testing
         let config = dog_queue::QueueConfig {
             worker_idle_timeout: std::time::Duration::from_secs(86400),
             ..Default::default()
         };
-        let adapter = Arc::new(QueueAdapter::with_config(backend, config));
+        let adapter = Arc::new(QueueAdapter::try_with_config(backend, config)?);
 
         // Register all implemented job types
         adapter.register_job::<GPSTrackingJob>().await?;
@@ -173,11 +192,45 @@ impl BackgroundSystem {
     }
 
     /// Shutdown background system
-    pub async fn shutdown(self) -> Result<()> {
+    pub async fn shutdown(&self) -> Result<()> {
         let handles: Vec<_> = self.worker_handles.lock().unwrap().drain(..).collect();
         for handle in handles {
             handle.shutdown().await?;
         }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "postgres"))]
+mod tests {
+    use super::*;
+    use dog_queue::QueueBackend;
+    #[tokio::test]
+    #[ignore = "requires disposable local PostgreSQL via FLEET_POSTGRES_URL"]
+    async fn queued_job_survives_backend_recreation() -> Result<()> {
+        let tenant = format!(
+            "fleet-test-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let ctx = QueueCtx::new(tenant);
+        let first = BackgroundSystem::new().await?;
+        let id = first
+            .adapter
+            .enqueue(
+                ctx.clone(),
+                GPSTrackingJob::new("example-assignment".into()),
+            )
+            .await?;
+        drop(first);
+        let second = BackgroundSystem::new().await?;
+        let snapshot = second
+            .adapter
+            .backend()
+            .get_snapshot(ctx.clone(), id.clone())
+            .await?;
+        assert_eq!(snapshot.job_id, id);
+        second.adapter.cancel(ctx, id).await?;
+        second.shutdown().await?;
         Ok(())
     }
 }

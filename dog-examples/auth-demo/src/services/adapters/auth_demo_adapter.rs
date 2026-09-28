@@ -30,12 +30,35 @@ impl InMemoryAdapter {
         let mut item = data;
         item["id"] = Value::String(id.clone());
 
-        self.store.lock().unwrap().insert(id.clone(), item.clone());
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("demo storage lock poisoned"))?;
+        anyhow::ensure!(store.len() < 10_000, "demo storage capacity reached");
+        if self.id_prefix == "user" {
+            for field in ["username", "googleId"] {
+                if let Some(value) = item.get(field).and_then(Value::as_str) {
+                    anyhow::ensure!(
+                        !store
+                            .values()
+                            .any(|u| u.get(field).and_then(Value::as_str) == Some(value)),
+                        "account identity already exists"
+                    );
+                }
+            }
+        }
+        store.insert(id.clone(), item.clone());
         Ok(item)
     }
 
     pub async fn find(&self, _ctx: &TenantContext, _params: AuthDemoParams) -> Result<Vec<Value>> {
-        let items = self.store.lock().unwrap().values().cloned().collect();
+        let items = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("demo storage lock poisoned"))?
+            .values()
+            .cloned()
+            .collect();
         Ok(items)
     }
 
@@ -45,7 +68,12 @@ impl InMemoryAdapter {
         id: &str,
         _params: AuthDemoParams,
     ) -> Result<Value> {
-        let item = self.store.lock().unwrap().get(id).cloned();
+        let item = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("demo storage lock poisoned"))?
+            .get(id)
+            .cloned();
         item.ok_or_else(|| anyhow::anyhow!("Item with id '{}' not found", id))
     }
 
@@ -58,7 +86,21 @@ impl InMemoryAdapter {
     ) -> Result<Value> {
         data["id"] = Value::String(id.to_string());
 
-        let mut store = self.store.lock().unwrap();
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("demo storage lock poisoned"))?;
+        if self.id_prefix == "user" {
+            for field in ["username", "googleId"] {
+                if let Some(value) = data.get(field).and_then(Value::as_str) {
+                    anyhow::ensure!(
+                        !store.iter().any(|(other_id, user)| other_id != id
+                            && user.get(field).and_then(Value::as_str) == Some(value)),
+                        "account identity already exists"
+                    );
+                }
+            }
+        }
         if store.contains_key(id) {
             store.insert(id.to_string(), data.clone());
             Ok(data)
@@ -100,7 +142,10 @@ impl InMemoryAdapter {
     ) -> Result<Value> {
         if let Some(id) = id {
             let item = self.get(ctx, id, params).await?;
-            self.store.lock().unwrap().remove(id);
+            self.store
+                .lock()
+                .map_err(|_| anyhow::anyhow!("demo storage lock poisoned"))?
+                .remove(id);
             Ok(item)
         } else {
             Err(anyhow::anyhow!("ID is required for remove operation"))

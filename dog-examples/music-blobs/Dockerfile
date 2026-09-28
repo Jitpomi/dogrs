@@ -1,5 +1,5 @@
 # Use official Rust image as builder
-FROM rust:1.90-slim as builder
+FROM rust:1.98-slim AS builder
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -16,7 +16,7 @@ COPY . .
 
 # Build the music-blobs binary
 WORKDIR /workspace/dog-examples/music-blobs
-RUN cargo build --release
+RUN cargo build --release --locked -p music-blobs
 
 # Runtime stage
 FROM debian:trixie-slim
@@ -40,10 +40,13 @@ COPY --from=builder /workspace/target/release/music-blobs /app/music-blobs
 COPY --from=builder /workspace/dog-examples/music-blobs/static /app/static
 
 # Change ownership to app user
-RUN chown -R appuser:appuser /app
+RUN mkdir -p /app/data && chown -R appuser:appuser /app
 
 # Switch to app user
 USER appuser
+
+ENV STATIC_DIR=/app/static
+ENV MUSIC_DATA_DIR=/app/data
 
 # Expose port
 EXPOSE 3030

@@ -103,11 +103,12 @@ WebSocket messages are formatted as JSON strings.
   "type": "REQUEST",
   "request_id": "optional-uuid-here",
   "service": "devices",
-  "method": "toggle",
-  "params": {
-    "id": "device-3",
-    "value": "unlocked"
-  }
+  "transport": "WebSocket",
+  "method": { "Custom": "toggle" },
+  "tenant": { "tenant_id": "default" },
+  "params": {},
+  "payload": { "id": "device-3", "value": "unlocked" },
+  "metadata": {}
 }
 ```
 
@@ -146,3 +147,11 @@ Any changes trigger broadcasts to all connected clients:
 
 ### Test Multi-Client Sync
 Open the dashboard in two side-by-side browser windows. Toggle a switch or add a device in one window, and see it update in the other window instantly. You can watch the raw messages scroll in the event logger at the bottom of each page.
+
+## Public simulator boundary
+
+This application binds to loopback and explicitly opts into public WebSocket
+broadcasts with `ws.public_broadcasts`. Devices are simulated shared data, not
+private tenant data. The allowed browser origins are localhost/127.0.0.1:3000.
+Private deployments must authenticate connections and authorize tenant-scoped
+subscriptions. Ctrl-C gracefully stops the HTTP/WebSocket server.

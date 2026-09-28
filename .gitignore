@@ -42,3 +42,7 @@ package-lock.json
 
 # === Misc ===
 *.bak
+
+# Local example journals, receipts, and revocation records
+.dogrs-music/
+.dogrs-auth-tokens/

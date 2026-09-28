@@ -1,3 +1,6 @@
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]));
+}
 // app.js (type="module")
 // Modern Music Player JavaScript with Real-Time Audio Visualization (FIXED)
 
@@ -186,12 +189,12 @@ class MusicPlayer {
             </div>
 
             <div class="track-info">
-              <div class="track-title">${title} <span class="track-badge">NEW</span></div>
-              <div class="track-artist">${artist}</div>
+              <div class="track-title">${escapeHtml(title)} <span class="track-badge">NEW</span></div>
+              <div class="track-artist">${escapeHtml(artist)}</div>
             </div>
 
 
-            <div class="track-genre-tag"><span class="genre-badge">${genre}</span></div>
+            <div class="track-genre-tag"><span class="genre-badge">${escapeHtml(genre)}</span></div>
             <div class="track-duration">${duration}</div>
             <div class="track-vocal-indicator"><iconify-icon icon="ph:microphone-fill"></iconify-icon></div>
 
@@ -551,34 +554,12 @@ class MusicPlayer {
       }
 
       // Stream from backend
-      const streamResponse = await fetch("/music", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-service-method": "stream",
-        },
-        body: JSON.stringify({ key: trackId }),
-      });
-
-      if (!streamResponse.ok) throw new Error(`Failed to start stream: ${streamResponse.status}`);
-
-      const streamInfo = await streamResponse.json();
-      if (!streamInfo.audio_data) throw new Error("No audio data available in stream response");
-
       const track = this.musicLibrary.find((t) => t.key === trackId);
-
-      // Make audio element
       this.currentAudio = new Audio();
       this.currentTrackId = trackId;
-
-      // Convert base64 -> blob URL
-      const bytes = this.base64ToBytes(streamInfo.audio_data);
-      const blob = new Blob([bytes], { type: streamInfo.content_type || "audio/mpeg" });
-
-      // Cleanup old url
       if (this.currentObjectUrl) URL.revokeObjectURL(this.currentObjectUrl);
-      this.currentObjectUrl = URL.createObjectURL(blob);
-      this.currentAudio.src = this.currentObjectUrl;
+      this.currentObjectUrl = null;
+      this.currentAudio.src = `/blobs/${encodeURIComponent(trackId.split('/').pop())}`;
 
       this.setupAudioEventListeners(trackId);
 
@@ -1043,28 +1024,12 @@ class MusicPlayer {
     this.showStatus("📥 Starting download...", "info");
 
     try {
-      const response = await fetch("/music", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-service-method": "stream" },
-        body: JSON.stringify({ key: trackId }),
-      });
-
-      if (!response.ok) throw new Error(`Download failed: ${response.status}`);
-
-      const streamInfo = await response.json();
-      if (!streamInfo.audio_data) throw new Error("No audio data available for download");
-
-      const bytes = this.base64ToBytes(streamInfo.audio_data);
-      const blob = new Blob([bytes], { type: streamInfo.content_type || "audio/mpeg" });
-
-      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
+      a.href = `/blobs/${encodeURIComponent(trackId.split('/').pop())}`;
       a.download = `${trackTitle}.mp3`;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
 
       this.showStatus(`📥 Downloaded: ${trackTitle}`, "success");
     } catch (e) {
@@ -1117,13 +1082,10 @@ class MusicPlayer {
     this.showStatus(`📤 Uploading ${file.name}...`, "info");
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const response = await fetch("/music", {
+      const response = await fetch("/uploads", {
         method: "POST",
-        headers: { "x-service-method": "upload" },
-        body: formData,
+        headers: { "Content-Type": file.type || "application/octet-stream", "x-filename": file.name.replace(/[^\x20-\x7e]/g, "_") },
+        body: file,
       });
 
       if (!response.ok) throw new Error(`Upload failed: ${response.status}`);

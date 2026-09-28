@@ -10,6 +10,7 @@ use crate::services::AuthDemoParams;
 pub mod jwt;
 pub mod local;
 pub mod oauth2;
+pub mod token_store;
 
 pub fn strategies(
     builder: &mut dog_core::DogAppBuilder<Value, AuthDemoParams>,
@@ -29,6 +30,14 @@ pub fn strategies(
 
     let mut auth_builder = AuthenticationService::builder(builder, Some(opts))?;
 
+    // Local durable example: the TokenStore interface also supports shared databases.
+    let directory = builder
+        .get::<String>("auth.token_store.directory")
+        .or_else(|| std::env::var("AUTH_TOKEN_STORE_DIR").ok())
+        .unwrap_or_else(|| ".dogrs-auth-tokens".into());
+    auth_builder =
+        auth_builder.with_token_store(Arc::new(token_store::FileTokenStore::new(directory)?));
+
     jwt::register_jwt(&mut auth_builder);
 
     let local_strategy = local::register_local(&mut auth_builder);
@@ -37,7 +46,13 @@ pub fn strategies(
         Arc::<LocalStrategy<AuthDemoParams>>::clone(&local_strategy),
     );
 
-    oauth2::google::register_google_oauth(builder, &mut auth_builder)?;
+    if builder
+        .config_snapshot()
+        .get_string("oauth.google.client_id")
+        .is_some()
+    {
+        oauth2::google::register_google_oauth(builder, &mut auth_builder)?;
+    }
 
     let auth = Arc::new(AuthenticationService::new(Arc::new(auth_builder.build())));
     let adapter = AuthenticationService::install(builder, auth.clone());

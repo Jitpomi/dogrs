@@ -78,6 +78,12 @@ fn configure_external_apis(
         .trim()
         .to_string();
 
+    if google_client_id.is_empty()
+        && google_client_secret.is_empty()
+        && google_redirect_uri.is_empty()
+    {
+        return Ok(()); // Local/JWT demonstration needs no external account.
+    }
     if google_client_id.is_empty() {
         return Err(anyhow!("Missing GOOGLE_CLIENT_ID"));
     }
