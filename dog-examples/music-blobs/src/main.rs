@@ -1,8 +1,4 @@
 use anyhow::Result;
-use axum::{routing::get, Router};
-use music_blobs::multipart::MultipartToJson;
-
-dog_transport::declare_adapter!(axum, to_endpoint, music_blobs::MusicParams);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,6 +15,10 @@ async fn main() -> Result<()> {
 
     let (dog, http_service) = music_blobs::build().await?;
 
+    if std::env::args().nth(1).as_deref() == Some("recover") {
+        music_blobs::uploads::recover(&dog).await?;
+        return Ok(());
+    }
     let host = dog
         .get("http.host")
         .unwrap_or_else(|| "127.0.0.1".to_string());
@@ -29,26 +29,24 @@ async fn main() -> Result<()> {
 
     println!("[music-blobs] listening on http://{addr}");
 
-    let config = music_blobs::multipart_config();
     let static_dir = std::env::var("STATIC_DIR")
         .unwrap_or_else(|_| format!("{}/static", env!("CARGO_MANIFEST_DIR")));
 
-    let router = Router::new()
-        .route("/health", get(|| async { "ok" }))
-        .layer(MultipartToJson::with_config(config))
-        .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB to match dog-blob config
-        .layer(
-            tower_http::cors::CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any),
-        )
-        .fallback_service(
-            tower_http::services::ServeDir::new(static_dir).fallback(to_endpoint(http_service)),
-        );
+    anyhow::ensure!(
+        host.parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+            || host == "localhost"
+            || std::env::var("MUSIC_ALLOW_CONTAINER_BIND").as_deref() == Ok("1"),
+        "music-blobs is a public single-tenant demo; bind it to loopback"
+    );
+    let router = music_blobs::http_router(&dog, http_service, static_dir)?;
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, router).await?;
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
 
     Ok(())
 }

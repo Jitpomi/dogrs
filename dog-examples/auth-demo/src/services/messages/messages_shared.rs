@@ -27,21 +27,18 @@ pub fn register_hooks(
         Arc::new(AuthenticateHook::new(auth_core, vec!["jwt".to_string()]));
 
     builder.service_hooks("messages", |h| {
+        // Messages are a shared authenticated demo board, not private mail.
+        h.before_find(Arc::clone(&jwt));
+        h.before_get(Arc::clone(&jwt));
+        h.before_update(Arc::clone(&jwt));
         // Protect write operations with JWT authentication
         h.before_create(Arc::clone(&jwt));
         h.before_patch(Arc::clone(&jwt));
         h.before_remove(Arc::clone(&jwt));
 
         h.before_create(Arc::new(super::messages_hooks::ValidateMessageAuthorExists));
+        h.before_update(Arc::new(super::messages_hooks::ValidateMessageAuthorExists));
         h.before_patch(Arc::new(super::messages_hooks::ValidateMessageAuthorExists));
-
-        h.after_find(Arc::new(super::messages_hooks::ExpandMessageAuthor));
-        h.after(
-            ServiceMethodKind::Get,
-            Arc::new(super::messages_hooks::ExpandMessageAuthor),
-        );
-
-        h.after_all(Arc::new(super::messages_hooks::NormalizeMessagesResult));
     });
     Ok(())
 }

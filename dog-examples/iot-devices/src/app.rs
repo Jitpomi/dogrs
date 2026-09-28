@@ -8,6 +8,8 @@ pub async fn build_builder() -> Result<DogAppBuilder<Value, DemoParams>> {
 
     builder.set("http.host", "127.0.0.1");
     builder.set("http.port", "3000");
+    // All simulated devices are public in this loopback-only example.
+    builder.set("ws.public_broadcasts", "true");
     builder.set(
         "ws.allowed_origins",
         std::sync::Arc::new(vec![

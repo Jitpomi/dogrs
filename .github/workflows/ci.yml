@@ -23,9 +23,13 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
+      - run: python3 dog-examples/check_structure.py
+      - run: cargo check -p fleet-queue --features postgres --all-targets --locked
       - name: Check diagnostic result classification
         run: python3 -m unittest discover -s dog-examples/hosted-system -p 'test_diagnostic_result.py'
       - run: cargo test --workspace --all-targets --locked
+      - run: cargo build -p iot-devices --locked
+      - run: node dog-examples/iot-devices/tests/realtime.cjs
       - run: cargo test --workspace --doc --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
   transports:
@@ -35,6 +39,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Check realtime example protocols
         run: |
+          node --check dog-examples/music-blobs/static/app.js
           node --check dog-examples/iot-devices/static/app.js
           node --check dog-examples/fleet-queue/static/app.js
           node dog-transport/tests/realtime_clients.cjs
@@ -76,7 +81,13 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: docker run -d --name typedb-ci -p 127.0.0.1:1729:1729 typedb/typedb:3.13.6
+      - run: cargo test -p fleet-queue --features postgres --lib queued_job_survives_backend_recreation --locked -- --ignored
+        env:
+          FLEET_POSTGRES_URL: host=127.0.0.1 port=5432 user=postgres password=dogrs-test-only
       - run: cargo test -p dog-queue --features redis,postgres,cron-scheduling --locked
+      - run: cargo test -p dog-queue --features redis --lib redis_registration_failure_cannot_accept_a_job --locked -- --ignored
+        env:
+          DOGRS_REDIS_URL: redis://127.0.0.1:6379
       - run: docker run -d --name nats-ci -p 127.0.0.1:4222:4222 nats:2.11-alpine -js -sd /data
       - run: cargo test -p dog-queue --features redis,postgres,nats --test durable_backends --locked -- --ignored
         env:
@@ -147,6 +158,9 @@ jobs:
           curl --fail --silent http://127.0.0.1:9000/health/ready
       - run: cargo test -p dog-blob --all-features --locked
       - run: cargo test -p dog-blob --features s3 --test s3_live --locked -- --ignored
+        env:
+          DOGRS_BLOB_TEST_ENDPOINT: http://127.0.0.1:9000
+      - run: cargo test -p music-blobs --lib live_upload_download_range_and_receipt --locked -- --ignored
         env:
           DOGRS_BLOB_TEST_ENDPOINT: http://127.0.0.1:9000
       - if: always()

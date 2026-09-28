@@ -3,3 +3,4 @@ pub mod operations_service;
 pub mod operations_shared;
 
 pub use operations_service::OperationsService;
+pub mod operations_schema;

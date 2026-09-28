@@ -106,7 +106,7 @@ impl RetiredRevisions {
     }
 }
 pub(super) struct Index {
-    claims: dashmap::DashSet<(String, JobId)>,
+    claims: dashmap::DashSet<JobId>,
     retired: std::sync::Mutex<RetiredRevisions>,
     entries: dashmap::DashMap<String, Arc<TenantIndex>>,
     notifications: dashmap::DashMap<String, Arc<tokio::sync::Notify>>,
@@ -116,12 +116,13 @@ pub(super) struct Index {
 // releases the hint; a remotely committed lease is still fenced by its revision.
 struct ClaimReservation<'a> {
     index: &'a Index,
-    key: (String, JobId),
+    tenant: String,
+    id: JobId,
 }
 impl Drop for ClaimReservation<'_> {
     fn drop(&mut self) {
-        self.index.claims.remove(&self.key);
-        self.index.notification(&self.key.0).notify_waiters();
+        self.index.claims.remove(&self.id);
+        self.index.notification(&self.tenant).notify_waiters();
     }
 }
 impl Drop for Index {
@@ -157,9 +158,7 @@ impl Index {
         )> = None;
         for entry in entries.iter() {
             let row = entry.value().1.as_ref().map_err(|e| error(e.clone()))?;
-            if !self
-                .claims
-                .contains(&(tenant.to_owned(), row.record.job_id.clone()))
+            if !self.claims.contains(&row.record.job_id)
                 && !skipped.contains(&row.record.job_id)
                 && queues.contains(&row.record.message.queue)
                 && row.record.message.run_at <= now
@@ -919,12 +918,15 @@ impl NatsStore {
                 _ => unreachable!(),
             };
             let _reservation = if matches!(op, Operation::Dequeue(..)) {
-                let key = (tenant.to_owned(), id.clone());
-                if !index.claims.insert(key.clone()) {
+                if !index.claims.insert(id.clone()) {
                     skipped_hints.insert(id);
                     continue;
                 }
-                Some(ClaimReservation { index, key })
+                Some(ClaimReservation {
+                    index,
+                    tenant: tenant.to_owned(),
+                    id: id.clone(),
+                })
             } else {
                 None
             };
@@ -1102,11 +1104,11 @@ mod tests {
         first.as_mut().enable();
         index.observe(key.clone(), 1, serde_json::to_vec(&row).unwrap(), false);
         assert!(first.now_or_never().is_some());
-        let reservation_key = ("test".to_string(), row.record.job_id.clone());
-        index.claims.insert(reservation_key.clone());
+        index.claims.insert(row.record.job_id.clone());
         let reservation = ClaimReservation {
             index: &index,
-            key: reservation_key,
+            tenant: "test".to_string(),
+            id: row.record.job_id.clone(),
         };
         assert!(index
             .candidate("test", &["q".into()], &Default::default())

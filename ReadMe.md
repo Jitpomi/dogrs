@@ -49,6 +49,10 @@ notifications. Memory is available for tests and ephemeral work. See the
 
 ## Development
 
+All DogRS applications follow the [standard application structure](docs/application-structure.md),
+including examples and generated apps. The convention separates application
+composition, hooks, channels and service modules without choosing a technology stack.
+
 ```sh
 cargo fmt --all -- --check
 cargo test --workspace --all-targets --locked
@@ -60,7 +64,7 @@ CI also checks transport feature combinations, JWT builds with and without PEM s
 TypeDB 3.13.6, persistent queues and local broker/emulator integrations. Cloud IAM,
 provider quotas and deployment-specific TLS configuration are not emulator-tested.
 
-Examples live in `dog-examples/`. `auth-demo` has a browser-bound OAuth flow with
+See the [example coverage and run guide](dog-examples/README.md) for applications in `dog-examples/`. `auth-demo` has a browser-bound OAuth flow with
 an in-memory demonstration session store; multi-instance deployments need shared
 session storage. Example apps are not published as library crates.
 

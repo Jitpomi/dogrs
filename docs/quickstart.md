@@ -2,7 +2,7 @@
 
 One service can run behind HTTP, gRPC, or a command-line session. Start with the checked-in, stateless echo example; it needs no database or credentials.
 
-## Run the same service through three transports
+## Run the same service through four transports
 
 From this repository:
 
@@ -32,9 +32,19 @@ printf '%s\n' '{"request_id":"demo","transport":"Cli","service":"echo","method":
 
 Each input line produces one JSON response. Invalid input produces an error response and leaves the session usable. Input is limited to 10 MiB per command.
 
+For Iroh:
+
+```sh
+cargo run -p transport-demo -- iroh
+```
+
+The server prints its endpoint ID and uses ALPN `dogrs/echo/1`. This is a public
+echo service and may be network reachable; do not send private data. See the
+[transport guide](../dog-transport/README.md) for framing and connection APIs.
+
 ## Application structure
 
-See the complete executable source in `dog-examples/transport-demo/src/main.rs`:
+See application composition in `dog-examples/transport-demo/src/app.rs` and the service in `src/services/echo/`. All examples follow the [application layout](application-structure.md):
 
 1. Implement `DogService<R, P>` for the business service.
 2. Register the service and its hooks with `DogAppBuilder`.

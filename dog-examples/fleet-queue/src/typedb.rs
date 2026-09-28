@@ -25,22 +25,38 @@ impl TypeDBStateTrait for TypeDBState {
 
 impl TypeDBState {
     pub async fn setup_db(app: &mut DogAppBuilder<serde_json::Value, FleetParams>) -> Result<()> {
-        let address = app
-            .get::<String>("typedb.address")
-            .unwrap_or_else(|| "127.0.0.1:1729".to_string());
-        let database = app
-            .get::<String>("typedb.database")
-            .unwrap_or_else(|| "fleet-db".to_string());
-        let username = app
-            .get::<String>("typedb.username")
-            .unwrap_or_else(|| "admin".to_string());
-        let password = app
-            .get::<String>("typedb.password")
-            .unwrap_or_else(|| "password".to_string());
-        let tls = app
-            .get::<String>("typedb.tls")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(false);
+        let address = std::env::var("TYPEDB_ADDRESS")
+            .ok()
+            .or_else(|| app.get::<String>("typedb.address"))
+            .unwrap_or_else(|| "127.0.0.1:1729".into());
+        let database = std::env::var("TYPEDB_DATABASE")
+            .ok()
+            .or_else(|| app.get::<String>("typedb.database"))
+            .unwrap_or_else(|| "fleet-db".into());
+        let local = address
+            .parse::<std::net::SocketAddr>()
+            .is_ok_and(|a| a.ip().is_loopback())
+            || address
+                .strip_prefix("localhost:")
+                .is_some_and(|p| p.parse::<u16>().is_ok());
+        let username = std::env::var("TYPEDB_USERNAME")
+            .ok()
+            .or_else(|| app.get::<String>("typedb.username"))
+            .or_else(|| local.then(|| "admin".into()))
+            .ok_or_else(|| anyhow::anyhow!("remote TypeDB requires TYPEDB_USERNAME"))?;
+        let password = std::env::var("TYPEDB_PASSWORD")
+            .ok()
+            .or_else(|| app.get::<String>("typedb.password"))
+            .or_else(|| local.then(|| "password".into()))
+            .ok_or_else(|| anyhow::anyhow!("remote TypeDB requires TYPEDB_PASSWORD"))?;
+        let tls = match std::env::var("TYPEDB_TLS")
+            .ok()
+            .or_else(|| app.get::<String>("typedb.tls"))
+        {
+            Some(value) => value.parse::<bool>()?,
+            None => !local,
+        };
+        anyhow::ensure!(local || tls, "remote TypeDB requires verified TLS");
 
         let credentials = Credentials::new(&username, &password);
         let tls_config = if tls {
@@ -52,23 +68,21 @@ impl TypeDBState {
         let addresses = Addresses::try_from_address_str(&address)?;
         let driver = Arc::new(TypeDBDriver::new(addresses, credentials, options).await?);
 
-        // Create database if it doesn't exist
-        if !driver
+        let exists = driver
             .databases()
             .all()
             .await?
             .iter()
-            .any(|db| db.name() == database)
-        {
-            println!("Creating TypeDB database: {}", database);
+            .any(|db| db.name() == database);
+        let initialize = std::env::var("TYPEDB_INIT_SCHEMA").as_deref() == Ok("1");
+        if !exists {
             driver.databases().create(&database).await?;
-        } else {
-            println!("TypeDB database '{}' already exists", database);
         }
-
         let state = Arc::new(Self { driver, database });
-
-        Self::load_schema_from_file(&state).await?;
+        // Existing databases are migrated explicitly, not on every server restart.
+        if !exists || initialize {
+            Self::load_schema_from_file(&state).await?;
+        }
         app.set("typedb", state);
         Ok(())
     }

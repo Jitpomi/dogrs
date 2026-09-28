@@ -1,6 +1,6 @@
 # Auth Demo (`auth-demo`)
 
-A complete, production-ready example demonstrating how to implement authentication in DogRS using `dog-auth` and `dog-transport`.
+A local learning example demonstrating how to implement authentication in DogRS using `dog-auth` and `dog-transport`.
 
 This demo showcases how to set up an immutable `DogAppBuilder`, configure multiple authentication strategies (Local, JWT, and Google OAuth2), and decouple your HTTP routing from your internal service registry.
 
@@ -18,12 +18,13 @@ This demo showcases how to set up an immutable `DogAppBuilder`, configure multip
 
 ### Prerequisites
 
-You need a `.env` file (or exported environment variables) for Google OAuth to work. If you don't need OAuth, you can skip this, but the OAuth routes will fail to initialize.
+Set `AUTH_JWT_SECRET` for local/JWT authentication. Configure the three Google settings together only if you want OAuth; otherwise leave all three unset.
 
 ```env
 HTTP_PORT=3000
 # Generate a random secret, e.g. openssl rand -hex 32
 AUTH_JWT_SECRET=<your-random-secret-at-least-32-bytes>
+# Optional Google OAuth settings:
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 GOOGLE_REDIRECT_URL=http://localhost:3000/oauth/google/callback
@@ -118,4 +119,10 @@ By default, the HTTP service automatically maps external paths directly to their
 
 In `src/services/mod.rs`, the `configure` function takes the `auth_adapter` built during the strategy initialization phase instead of creating a new one. This prevents duplicate instances from being registered, ensuring that the `setup(dog_app)` method properly wires the router to the initialized application state.
 
-This demo uses process-local user and OAuth state storage. It is not a production identity service. Configure a shared durable `TokenStore` for server-side logout/refresh rotation; without one, revocation requests fail explicitly. See [auth hardening](../../docs/auth-hardening.md).
+This demo uses process-local user and OAuth state storage. It is not a production identity service. A local durable `FileTokenStore` now supplies server-side revocation and atomic refresh consumption. Set `AUTH_TOKEN_STORE_DIR` to a trusted local directory (default `.dogrs-auth-tokens`). Multiple processes may share that directory on a local filesystem; distributed hosts need a shared transactional `TokenStore`. Revocation markers are retained intentionally: archive them only offline after all previously issued tokens expire. Users and pending OAuth state remain in memory. See [auth hardening](../../docs/auth-hardening.md).
+
+The server binds only to loopback. The local file token store is an application adapter, not a framework storage requirement. See the [example coverage guide](../README.md).
+
+Google OAuth is optional: omit all three Google settings to run local/JWT authentication without an external account. Partial Google configuration fails startup. Logout uses the configured durable revocation store; refresh-token APIs are available through the authentication core.
+
+The example uses only the `default` tenant. User reads and mutations are restricted to the authenticated account; OAuth identity fields are server-managed. Messages form an authenticated shared board, not private mail: only the author may change or delete a message.

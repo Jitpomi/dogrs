@@ -65,13 +65,41 @@ impl DogService<Value, MusicParams> for MusicService {
                 let data = data.ok_or_else(|| anyhow::anyhow!("Upload requires data"))?;
                 self.adapter.upload(data).await
             }
-            "stream" => self.adapter.stream(data.unwrap()).await,
-            "cover" => self.adapter.cover(data.unwrap()).await,
-            "pause" => self.adapter.pause(data.unwrap()).await,
-            "resume" => self.adapter.resume(data.unwrap()).await,
-            "stop" => self.adapter.stop(data.unwrap()).await,
-            "cancel" => self.adapter.cancel(data.unwrap()).await,
-            "peaks" => self.adapter.peaks(data.unwrap()).await,
+            "stream" => {
+                self.adapter
+                    .stream(data.ok_or_else(|| anyhow::anyhow!("method requires a data payload"))?)
+                    .await
+            }
+            "cover" => {
+                self.adapter
+                    .cover(data.ok_or_else(|| anyhow::anyhow!("method requires a data payload"))?)
+                    .await
+            }
+            "pause" => {
+                self.adapter
+                    .pause(data.ok_or_else(|| anyhow::anyhow!("method requires a data payload"))?)
+                    .await
+            }
+            "resume" => {
+                self.adapter
+                    .resume(data.ok_or_else(|| anyhow::anyhow!("method requires a data payload"))?)
+                    .await
+            }
+            "stop" => {
+                self.adapter
+                    .stop(data.ok_or_else(|| anyhow::anyhow!("method requires a data payload"))?)
+                    .await
+            }
+            "cancel" => {
+                self.adapter
+                    .cancel(data.ok_or_else(|| anyhow::anyhow!("method requires a data payload"))?)
+                    .await
+            }
+            "peaks" => {
+                self.adapter
+                    .peaks(data.ok_or_else(|| anyhow::anyhow!("method requires a data payload"))?)
+                    .await
+            }
             _ => Err(DogError::new(
                 ErrorKind::MethodNotAllowed,
                 format!("Unknown method: {}", method),

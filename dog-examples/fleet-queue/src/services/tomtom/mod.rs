@@ -5,3 +5,5 @@ pub mod tomtom_shared;
 pub use tomtom_adapter::*;
 pub use tomtom_service::*;
 pub use tomtom_shared::*;
+pub mod tomtom_hooks;
+pub mod tomtom_schema;

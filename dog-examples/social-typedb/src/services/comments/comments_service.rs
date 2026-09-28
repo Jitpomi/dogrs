@@ -39,8 +39,16 @@ impl DogService<Value, SocialParams> for CommentsService {
         _params: SocialParams,
     ) -> Result<Value> {
         match method {
-            "read" => self.adapter.read(data.unwrap()).await,
-            "write" => self.adapter.write(data.unwrap()).await,
+            "read" => {
+                self.adapter
+                    .read(data.ok_or_else(|| anyhow::anyhow!("method requires a data payload"))?)
+                    .await
+            }
+            "write" => {
+                self.adapter
+                    .write(data.ok_or_else(|| anyhow::anyhow!("method requires a data payload"))?)
+                    .await
+            }
             _ => Err(DogError::new(
                 ErrorKind::MethodNotAllowed,
                 format!("Unknown method: {}", method),

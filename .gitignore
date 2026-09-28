@@ -42,3 +42,9 @@ package-lock.json
 
 # === Misc ===
 *.bak
+__pycache__/
+*.py[cod]
+
+# Local example journals, receipts, and revocation records
+.dogrs-music/
+.dogrs-auth-tokens/

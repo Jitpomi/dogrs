@@ -5,9 +5,9 @@ pub fn register_hooks(
     builder: &mut dog_core::DogAppBuilder<serde_json::Value, AuthDemoParams>,
 ) -> anyhow::Result<()> {
     builder.service_hooks("authentication", |h| {
-        // Protect write operations with JWT authentication_service_hooks::LogAuthCreate));
+        // Protect write operations with JWT authentication_hooks::LogAuthCreate));
         h.after_create(Arc::new(
-            super::authentication_service_hooks::StripPasswordFromAuthResult,
+            super::authentication_hooks::StripPasswordFromAuthResult,
         ));
     });
     Ok(())

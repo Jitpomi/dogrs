@@ -21,6 +21,12 @@ async fn main() -> Result<()> {
 
     let port = dog.get("http.port").unwrap_or_else(|| "3030".to_string());
 
+    anyhow::ensure!(
+        host.parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+            || host == "localhost",
+        "this example is loopback-only; add application authorization before remote deployment"
+    );
     let addr = format!("{host}:{port}");
 
     println!("[auth-demo] listening on http://{addr}");

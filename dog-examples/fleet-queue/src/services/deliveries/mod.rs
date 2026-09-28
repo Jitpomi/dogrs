@@ -3,3 +3,4 @@ pub mod deliveries_service;
 pub mod deliveries_shared;
 
 pub use deliveries_service::DeliveriesService;
+pub mod deliveries_schema;

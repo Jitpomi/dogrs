@@ -193,6 +193,11 @@ try:
     (node_folder/'payload-storage.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT n.nspname,c.relname,a.attstorage,a.attcompression FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relname='dogrs_queue_jobs_v2' AND a.attname='payload' AND NOT a.attisdropped"))
     (node_folder/'io-profile.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT * FROM pg_stat_io WHERE object='wal'; SELECT * FROM pg_stat_wal;"))
     (node_folder/'query-profile.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT left(query,180) AS query,calls,round(mean_exec_time::numeric,3) AS mean_ms,round(total_exec_time::numeric,1) AS total_ms,shared_blks_read,shared_blks_hit,wal_bytes FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 12"))
+  elif a.backend=='redis':
+   # Collect provider costs without changing its persistence or rewrite policy.
+   for section in ('persistence','stats','memory','commandstats','latencystats'):
+    (folder/f'redis-{section}.txt').write_text(command('docker','exec',name,'redis-cli','INFO',section))
+   (folder/'redis-durability-settings.txt').write_text(command('docker','exec',name,'redis-cli','CONFIG','GET','appendfsync','appendonly','auto-aof-rewrite-percentage','auto-aof-rewrite-min-size','no-appendfsync-on-rewrite','maxmemory-policy'))
   print(json.dumps({'backend':a.backend,'restored_to_fresh_container':a.restore,'outage_seconds':a.outage_seconds,'replicas':3 if a.backend=='nats' else 1,'sync_policy':'always' if a.backend in ('redis','nats') else 'PostgreSQL default fsync/synchronous_commit','measurement':a.admission_mode or 'queue-capacity','passed':result.returncode==0,'capacity_log':str(folder/'capacity.log')}))
   raise SystemExit(result.returncode)
  log=folder/'client.log'

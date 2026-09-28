@@ -1,6 +1,6 @@
 # blog (dog.rs example)
 
-This is a small Axum HTTP server that showcases `dog-core` + `dog-transport`.
+This is a small Poem HTTP server that showcases `dog-core` + `dog-transport`.
 
 It demonstrates:
 
@@ -186,3 +186,5 @@ Optional full workspace run:
 ```bash
 cargo test --workspace
 ```
+
+This is a public loopback learning application with in-memory data. `x-tenant-id` selects a partition; it is not authentication. See the [example coverage guide](../README.md) before adapting it for deployment.

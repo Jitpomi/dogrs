@@ -18,3 +18,23 @@ pub async fn build_builder() -> Result<DogAppBuilder<Value, MusicParams>> {
     crate::rustfs::RustFsState::setup_store(&mut builder).await?;
     Ok(builder)
 }
+
+// Compose API and static routes in one place so integration tests exercise the real routing.
+dog_transport::declare_adapter!(axum, to_endpoint, MusicParams);
+pub fn http_router(
+    dog: &dog_core::DogApp<Value, MusicParams>,
+    service: dog_transport::http::DogHttpService<Value, MusicParams>,
+    static_dir: impl AsRef<std::path::Path>,
+) -> Result<axum::Router> {
+    Ok(axum::Router::new()
+        .merge(crate::uploads::router(dog)?)
+        .route("/health", axum::routing::get(|| async { "ok" }))
+        .fallback_service(
+            tower_http::services::ServeDir::new(static_dir)
+                .fallback(to_endpoint(service))
+                .call_fallback_on_method_not_allowed(true),
+        )
+        .layer(crate::multipart::MultipartToJson::with_config(
+            crate::multipart_config(),
+        )))
+}

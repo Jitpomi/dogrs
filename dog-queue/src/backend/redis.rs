@@ -99,20 +99,21 @@ impl RedisBackend {
     }
     pub async fn new(config: RedisConfig) -> QueueResult<Self> {
         let client = redis::Client::open(config.connection_string).map_err(error)?;
+        let manager = client
+            .get_connection_manager_with_config(
+                redis::aio::ConnectionManagerConfig::new()
+                    // A single reconnect cycle must fit inside the queue's
+                    // 30-second operation budget, even with black-holed TCP.
+                    .set_number_of_retries(3)
+                    .set_max_delay(500)
+                    .set_connection_timeout(std::time::Duration::from_secs(5))
+                    .set_response_timeout(std::time::Duration::from_secs(10)),
+            )
+            .await
+            .map_err(error)?;
         Ok(Self {
             store: RedisStore {
-                manager: client
-                    .get_connection_manager_with_config(
-                        redis::aio::ConnectionManagerConfig::new()
-                            // A single reconnect cycle must fit inside the queue's
-                            // 30-second operation budget, even with black-holed TCP.
-                            .set_number_of_retries(3)
-                            .set_max_delay(500)
-                            .set_connection_timeout(std::time::Duration::from_secs(5))
-                            .set_response_timeout(std::time::Duration::from_secs(10)),
-                    )
-                    .await
-                    .map_err(error)?,
+                manager,
                 checked: Default::default(),
             },
             lease_duration: std::time::Duration::from_secs(300),
@@ -121,17 +122,26 @@ impl RedisBackend {
 }
 impl RedisStore {
     async fn check_legacy(&self, tenant: &str) -> QueueResult<()> {
-        if !self.checked.contains(tenant) {
-            let exists: bool = self
-                .manager
-                .clone()
-                .exists(format!("{{dogrs-queue-v1}}:state:{}", hex(tenant)))
+        if self.checked.contains(tenant) {
+            return Ok(());
+        }
+        if self.checked.insert(tenant.into()) {
+            let (exists, _): (bool, usize) = redis::pipe()
+                .cmd("EXISTS")
+                .arg(format!("{{dogrs-queue-v1}}:state:{}", hex(tenant)))
+                .cmd("SADD")
+                .arg(TENANTS)
+                .arg(tenant)
+                .query_async(&mut self.manager.clone())
                 .await
-                .map_err(error)?;
+                .map_err(|e| {
+                    self.checked.remove(tenant);
+                    error(e)
+                })?;
             if exists {
+                self.checked.remove(tenant);
                 return Err(QueueError::InvalidConfig("Legacy Redis tenant detected: drain/export it with the previous release before selecting a fresh v2 tenant; never run legacy writers against a migrated tenant".into()));
             }
-            self.checked.insert(tenant.into());
         }
         Ok(())
     }
@@ -168,6 +178,7 @@ impl RedisStore {
         } else {
             "ready"
         };
+        let mut connection = self.manager.clone();
         redis::Script::new(include_str!("redis_write.lua"))
             .key(format!("{p}:meta"))
             .key(format!("{p}:payload"))
@@ -187,7 +198,7 @@ impl RedisStore {
             .arg(r.lease_until().map(|d| d.timestamp_millis()).unwrap_or(0))
             .arg(r.updated_at.timestamp_millis())
             .arg(if return_payload { "payload" } else { "" })
-            .invoke_async(&mut self.manager.clone())
+            .invoke_async(&mut connection)
             .await
             .map_err(error)
     }
@@ -208,14 +219,6 @@ impl RedisStore {
             let count:usize=redis::Script::new("local ids=redis.call('ZRANGEBYSCORE',KEYS[3],'-inf','('..ARGV[1],'LIMIT',0,1000); for _,id in ipairs(ids) do redis.call('HDEL',KEYS[1],id); redis.call('HDEL',KEYS[2],id); redis.call('ZREM',KEYS[3],id); end; return #ids")
                 .key(format!("{p}:meta")).key(format!("{p}:payload")).key(format!("{p}:terminal")).arg(before.timestamp_millis()).invoke_async(&mut self.manager.clone()).await.map_err(error)?;
             return Ok(Outcome::Purged(count));
-        }
-        if matches!(op, Operation::Enqueue(_)) {
-            let _: usize = self
-                .manager
-                .clone()
-                .sadd(TENANTS, tenant)
-                .await
-                .map_err(error)?;
         }
         let mut reaped = Vec::new();
         for _ in 0..64 {
@@ -252,15 +255,20 @@ impl RedisStore {
                     read.arg("read");
                 }
             }
-            let values: Vec<String> = read
-                .invoke_async(&mut self.manager.clone())
-                .await
-                .map_err(error)?;
-            let now = DateTime::from_timestamp_millis(values[0].parse().map_err(error)?)
-                .ok_or_else(|| error("Invalid Redis clock"))?;
+            let (now, values) = if matches!(op, Operation::Enqueue(_)) {
+                (Utc::now(), Vec::new())
+            } else {
+                let mut values: Vec<String> = read
+                    .invoke_async(&mut self.manager.clone())
+                    .await
+                    .map_err(error)?;
+                let now = DateTime::from_timestamp_millis(values.remove(0).parse().map_err(error)?)
+                    .ok_or_else(|| error("Invalid Redis clock"))?;
+                (now, values)
+            };
             let mut state = TenantState::default();
             let mut previous = HashMap::new();
-            for raw in values.into_iter().skip(1).filter(|s| !s.is_empty()) {
+            for raw in values.into_iter().filter(|s| !s.is_empty()) {
                 let row: StoredRecord = serde_json::from_str(&raw).map_err(error)?;
                 previous.insert(row.record.job_id.clone(), raw);
                 state.jobs.insert(row.record.job_id.clone(), row);

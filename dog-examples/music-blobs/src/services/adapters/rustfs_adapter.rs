@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Playback session state with production-grade features
+/// Process-local playback session state
 #[derive(Debug, Clone)]
 pub struct PlaybackSession {
     pub status: PlaybackStatus,
@@ -28,7 +28,7 @@ pub enum PlaybackStatus {
     Error,
 }
 
-/// Production-grade session manager with concurrent access and cleanup
+/// Process-local session manager with concurrent access and idle cleanup
 pub struct SessionManager {
     sessions: DashMap<String, PlaybackSession>,
     session_timeout: Duration,
@@ -107,6 +107,7 @@ static SESSION_MANAGER: Lazy<SessionManager> = Lazy::new(|| {
 /// RustFsAdapter wraps BlobAdapter and implements music-specific methods
 pub struct RustFsAdapter {
     adapter: BlobAdapter,
+    state: Arc<RustFsState>,
 }
 
 impl RustFsAdapter {
@@ -114,7 +115,7 @@ impl RustFsAdapter {
         // Create BlobAdapter from the BlobState inside RustFsState
         let adapter = BlobAdapter::new(state.blob_state.clone());
 
-        Self { adapter }
+        Self { adapter, state }
     }
 
     // Handle multipart form data from Dropzone
@@ -153,6 +154,10 @@ impl RustFsAdapter {
                 }))
             }
             dog_blob::ChunkResult::Complete { receipt } => {
+                crate::receipts::persist(&self.state.receipts_directory, &receipt).await?;
+                if let Some(id) = &receipt.recovery_id {
+                    self.adapter.acknowledge_write(id).await?;
+                }
                 let dzuuid = data.get("dzuuid").and_then(|v| v.as_str());
                 let total_chunks = data.get("dztotalchunkcount").and_then(|v| {
                     v.as_u64()
@@ -363,15 +368,15 @@ impl RustFsAdapter {
     async fn read_blob_content(&self, full_key: &str) -> Result<Vec<u8>> {
         println!("🎵 Reading actual blob content for key: {}", full_key);
 
-        // Use the RustFS store directly to read the raw MP3 content
-        use crate::rustfs_store::RustFSStore;
-        use dog_blob::BlobStore;
-
-        // Get the bucket name from environment
-        let bucket = std::env::var("RUSTFS_BUCKET").unwrap_or_else(|_| "music-blobs".to_string());
-
-        // Create a new RustFS store instance to read the content
-        let store = RustFSStore::new(bucket).await?;
+        use dog_blob::{BlobKeyStrategy, BlobStore};
+        let prefix = dog_blob::DefaultKeyStrategy
+            .tenant_prefix(&Self::create_default_context().tenant_id)
+            .ok_or_else(|| anyhow::anyhow!("missing tenant prefix"))?;
+        anyhow::ensure!(
+            full_key.starts_with(&prefix),
+            "key is outside the demo tenant"
+        );
+        let store = &self.state.rustfs_store;
 
         // Use the full key as provided (e.g., "default/2026/01/uuid")
         println!("🎵 Fetching object with key: {}", full_key);
@@ -386,6 +391,8 @@ impl RustFsAdapter {
                 while let Some(chunk_result) = stream.next().await {
                     match chunk_result {
                         Ok(chunk) => {
+                            anyhow::ensure!(content.len().saturating_add(chunk.len()) <= 8 * 1024 * 1024,
+                                "JSON audio processing is limited to 8 MiB; use the streaming download endpoint");
                             content.extend_from_slice(&chunk);
                         }
                         Err(e) => {

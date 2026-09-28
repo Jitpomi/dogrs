@@ -1,6 +1,6 @@
 # Fleet Command Enterprise 🚛
 
-Fleet Command is a production-grade fleet management and queueing system built with **Rust (Axum)**, **Vanilla JS/Tailwind**, and powered by **TypeDB**.
+Fleet Command is a local fleet management and queueing example built with **Rust (Axum)**, **Vanilla JS/Tailwind**, and powered by **TypeDB**.
 
 This project serves as a practical, comprehensive demonstration of how **TypeDB** solves complex, highly-relational data modeling problems that are typically cumbersome or inefficient in traditional SQL or NoSQL databases.
 
@@ -119,3 +119,33 @@ What would take hundreds of lines of application code and database ORM joins is 
 
 4. **Access the Application:**
    Open your browser and navigate to: `http://localhost:3000`
+
+## Queue persistence and shutdown
+
+The default queue is in memory; jobs disappear when the process exits. For a
+persistent queue on local PostgreSQL, set `FLEET_POSTGRES_URL` to its connection
+string and run:
+
+```sh
+cargo run -p fleet-queue --features postgres
+```
+
+The example rejects remote PostgreSQL hosts because this connector is plaintext.
+See `hosted-system` for verified TLS connections to hosted PostgreSQL. These are
+application backend choices; `dog-queue` remains backend-independent.
+Ctrl-C drains workers through `WorkerHandle::shutdown`. Jobs that perform external
+side effects still need domain-level idempotency. Queue persistence alone cannot
+make those effects exactly-once.
+
+The HTTP/SSE interface is a public loopback fleet simulator, not a private
+multi-tenant deployment. Add authentication and tenant-scoped event authorization
+before exposing it remotely.
+
+## TypeDB settings
+
+Set `TYPEDB_ADDRESS`, `TYPEDB_DATABASE`, `TYPEDB_USERNAME` and `TYPEDB_PASSWORD`.
+Remote TypeDB requires explicit credentials and verified TLS; local disposable
+servers can use the default credentials. Schema initialization runs for a newly
+created database, or explicitly with `TYPEDB_INIT_SCHEMA=1`. Existing database
+migrations are not reapplied on every startup. Test migrations on a disposable
+copy before opting in.
