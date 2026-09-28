@@ -4,7 +4,10 @@ use anyhow::{ensure, Result};
 use dog_schema::schema;
 use serde::{Deserialize, Serialize};
 
-#[schema(service = "payments", error_message = "Payments schema validation failed")]
+#[schema(
+    service = "payments",
+    error_message = "Payments schema validation failed"
+)]
 pub mod def {
     #[create]
     pub struct PaymentPayload {

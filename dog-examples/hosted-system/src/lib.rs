@@ -22,8 +22,7 @@ pub use services::{adapters::PaymentsAdapter, BillingContext, BillingService, Re
 /// Standard zero-argument construction API matching other DogRS applications.
 /// Uses an in-memory queue adapter for testing without external services.
 pub async fn build() -> Result<(DogApp<Value, ()>, DogHttpService<Value, ()>)> {
-    let tenant =
-        std::env::var("DOGRS_TEST_TENANT").unwrap_or_else(|_| "dogrs-test-default".into());
+    let tenant = std::env::var("DOGRS_TEST_TENANT").unwrap_or_else(|_| "dogrs-test-default".into());
     let backend = dog_queue::backend::memory::MemoryBackend::new();
     let adapter = Arc::new(QueueAdapter::new(backend));
     adapter.register_job::<RecordPayment>().await?;

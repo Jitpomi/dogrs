@@ -2,15 +2,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
 #[cfg(any(feature = "sqs", feature = "kafka-rust"))]
 use anyhow::Context;
-use dog_queue::{QueueBackend, QueueCtx};
+use anyhow::{bail, Result};
+#[cfg(feature = "nats")]
+use dog_queue::QueueCtx;
 use serde_json::json;
 use tokio_postgres::Client;
 use tokio_postgres_rustls::MakeRustlsConnect;
 
-use crate::runner::{env, run, tenant, LEASE};
+#[cfg(feature = "nats")]
+use crate::runner::tenant;
+use crate::runner::{env, run, LEASE};
 
 #[cfg(any(
     feature = "rabbitmq",
@@ -540,9 +543,12 @@ pub async fn dispatch_local(role: &str) -> Result<()> {
                 options,
             )
             .await?;
-            let backend = backend.with_lease_duration(Duration::from_secs(
-                if role == "capacity-local" { 300 } else { 2 },
-            ));
+            let backend =
+                backend.with_lease_duration(Duration::from_secs(if role == "capacity-local" {
+                    300
+                } else {
+                    2
+                }));
             dispatch_backend(backend, role).await
         }
         #[cfg(feature = "redis")]
@@ -552,15 +558,16 @@ pub async fn dispatch_local(role: &str) -> Result<()> {
                 uri.contains("127.0.0.1") || uri.contains("localhost"),
                 "local capacity requires loopback"
             );
-            let backend = dog_queue::backend::redis::RedisBackend::new(
-                dog_queue::backend::redis::RedisConfig {
-                    connection_string: uri,
-                },
-            )
-            .await?
-            .with_lease_duration(Duration::from_secs(
-                if role == "capacity-local" { 300 } else { 2 },
-            ));
+            let backend =
+                dog_queue::backend::redis::RedisBackend::new(
+                    dog_queue::backend::redis::RedisConfig {
+                        connection_string: uri,
+                    },
+                )
+                .await?
+                .with_lease_duration(Duration::from_secs(
+                    if role == "capacity-local" { 300 } else { 2 },
+                ));
             if std::env::var("DOGRS_REDIS_REQUIRE_AOF").as_deref() == Ok("1") {
                 backend.verify_persistence().await?;
             }
@@ -625,7 +632,8 @@ pub async fn dispatch_local(role: &str) -> Result<()> {
                             &name,
                             1024 * 1024,
                         )
-                        .await?,
+                        .await?
+                        .with_lease_duration(Duration::from_secs(300)),
                     ));
                 }
                 return crate::capacity::run(dog_queue::backend::sharded::ShardedBackend::new(
@@ -653,21 +661,18 @@ pub async fn dispatch_local(role: &str) -> Result<()> {
             };
             let mut config = bucket.stream.cached_info().config.clone();
             config.allow_direct = false;
-            config.allow_atomic_publish =
-                std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
+            config.allow_atomic_publish = std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
             js.update_stream(config).await?;
-            let backend = dog_queue::backend::nats::NatsBackend::from_context(
-                js.clone(),
-                &name,
-                1024 * 1024,
-            )
-            .await?
-            .with_lease_duration(Duration::from_secs(
-                if role == "capacity-local" { 300 } else { 2 },
-            ));
+            let backend =
+                dog_queue::backend::nats::NatsBackend::from_context(js.clone(), &name, 1024 * 1024)
+                    .await?
+                    .with_lease_duration(Duration::from_secs(if role == "capacity-local" {
+                        300
+                    } else {
+                        2
+                    }));
             dispatch_backend(backend, role).await
         }
         _ => bail!("unsupported local capacity backend"),
     }
 }
-

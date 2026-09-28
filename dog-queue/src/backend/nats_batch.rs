@@ -55,7 +55,17 @@ impl BatchWriter {
             // One in-flight 3-job batch at 100 ms caps admission at 30 jobs/s
             // regardless of how much unused capacity the provider has. Retain
             // a separate metadata lane so producer pipelining cannot consume it.
-            let concurrency = if enqueue { 16 } else { 8 };
+            let concurrency = if enqueue {
+                std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(32)
+            } else {
+                std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(64)
+            };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
             loop {
