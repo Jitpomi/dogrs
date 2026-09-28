@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use hosted_system::{admission, connections, runner};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -12,5 +13,14 @@ async fn main() -> Result<()> {
         .nth(1)
         .context("usage: hosted-system init|inspect|serve|worker")?;
 
-    hosted_system::runner::dispatch_role(&role).await
+    match role.as_str() {
+        "admission-native" => admission::native().await,
+        "network-probe" => connections::network_probe().await,
+        "init" => runner::init_schema().await,
+        "inspect" => runner::inspect_schema().await,
+        role if role == "capacity-local" || role.starts_with("recovery-") => {
+            connections::dispatch_local(role).await
+        }
+        role => connections::dispatch(role).await,
+    }
 }

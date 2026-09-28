@@ -1,16 +1,17 @@
 //! Matched open-loop admission diagnostics, not production queue acceptance.
 //! Native-layout uses the same durable admission shape but omits queue behavior.
-use crate::runner::*;
-use dog_queue::{JobMessage, JobRecord};
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
-    },
-    time::Instant,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use anyhow::{bail, Context, Result};
+use dog_queue::{JobId, JobMessage, JobRecord, QueueBackend, QueueCtx};
+use serde_json::json;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_postgres::types::Type;
+use tokio_postgres::Client;
+
+use crate::runner::{env, tenant};
 
 #[async_trait::async_trait]
 pub trait Admission: Send + Sync {

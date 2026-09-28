@@ -1,19 +1,15 @@
 //! Acceptance test harness runner, process orchestration, and role execution.
 
-pub use std::sync::Arc;
-pub use std::time::Duration;
+use std::sync::Arc;
+use std::time::Duration;
 
-pub use anyhow::{bail, Context, Result};
-pub use dog_queue::{Job, JobId, QueueAdapter, QueueBackend, QueueConfig, QueueCtx};
-pub use dog_transport::{HttpOptions, IntoDogService};
-pub use serde::{Deserialize, Serialize};
-pub use serde_json::{json, Value};
-pub use tokio_postgres::Client;
+use anyhow::{bail, Context, Result};
+use dog_queue::{Job, JobId, QueueAdapter, QueueBackend, QueueConfig, QueueCtx};
 
 use crate::services::adapters::PaymentsAdapter;
 use crate::services::types::BillingContext;
 use crate::services::RecordPayment;
-use crate::{admission, capacity, connections};
+use crate::{capacity, connections};
 
 pub const LEASE: Duration = Duration::from_secs(8);
 
@@ -168,39 +164,18 @@ pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()
     }
 }
 
-pub async fn dispatch_role(role: &str) -> Result<()> {
-    if role == "admission-native" {
-        return admission::native().await;
-    }
-    if role == "capacity-local" || role.starts_with("recovery-") {
-        return connections::dispatch_local(role).await;
-    }
-    if role == "network-probe" {
-        return connections::network_probe().await;
-    }
-    if role == "init" {
-        let db = connections::postgres_client().await?;
-        PaymentsAdapter::init_schema(&db).await?;
-        println!("SYNTHETIC_SCHEMA_READY");
-        return Ok(());
-    }
-    if role == "inspect" {
-        let db = connections::postgres_client().await?;
-        let rows = PaymentsAdapter::inspect_schema(&db, &tenant()?).await?;
-        println!("{}", serde_json::to_string(&rows)?);
-        return Ok(());
-    }
-    connections::dispatch(role).await
+/// Initializes the synthetic billing schema in PostgreSQL.
+pub async fn init_schema() -> Result<()> {
+    let db = connections::postgres_client().await?;
+    PaymentsAdapter::init_schema(&db).await?;
+    println!("SYNTHETIC_SCHEMA_READY");
+    Ok(())
 }
 
-pub async fn run_app() -> Result<()> {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    tracing_subscriber::fmt()
-        .with_env_filter("warn")
-        .with_writer(std::io::stderr)
-        .init();
-    let role = std::env::args()
-        .nth(1)
-        .context("usage: hosted-system init|inspect|serve|worker")?;
-    dispatch_role(&role).await
+/// Inspects recorded payment rows for the configured tenant.
+pub async fn inspect_schema() -> Result<()> {
+    let db = connections::postgres_client().await?;
+    let rows = PaymentsAdapter::inspect_schema(&db, &tenant()?).await?;
+    println!("{}", serde_json::to_string(&rows)?);
+    Ok(())
 }
