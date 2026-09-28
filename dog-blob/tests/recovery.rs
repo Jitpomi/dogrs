@@ -68,7 +68,7 @@ async fn journal_leases_protect_live_writes_and_preserve_uncertainty() {
         Arc::new(MemoryUploadJournal::default()) as Arc<dyn UploadJournal>,
         Arc::new(FileUploadJournal::new(dir.path()).unwrap()),
     ] {
-        let lease = journal.create(record("live")).unwrap();
+        let lease = journal.create(record("live")).await.unwrap();
         let store = Native {
             committed: false,
             aborted: AtomicUsize::new(0),
@@ -89,14 +89,16 @@ async fn journal_leases_protect_live_writes_and_preserve_uncertainty() {
         );
         journal
             .acquire("live")
+            .await
             .unwrap()
             .unwrap()
             .acknowledge()
+            .await
             .unwrap();
-        assert!(journal.list().unwrap().is_empty());
+        assert!(journal.list().await.unwrap().is_empty());
         let mut unknown = record("unknown");
         unknown.native_id = None;
-        drop(journal.create(unknown).unwrap());
+        drop(journal.create(unknown).await.unwrap());
         let store = Native {
             committed: false,
             aborted: AtomicUsize::new(0),
@@ -123,19 +125,19 @@ async fn journal_leases_protect_live_writes_and_preserve_uncertainty() {
             WriteOutcome::Committed
         );
         assert_eq!(store.aborted.load(Ordering::SeqCst), 0);
-        let mut lease = journal.acquire("unknown").unwrap().unwrap();
+        let mut lease = journal.acquire("unknown").await.unwrap().unwrap();
         let mut changed = lease.record().clone();
         changed.key = "another-tenant".into();
-        assert!(lease.save(changed).is_err());
+        assert!(lease.save(changed).await.is_err());
     }
 }
-#[test]
-fn journal_crash_child() {
+#[tokio::test]
+async fn journal_crash_child() {
     let Ok(path) = std::env::var("DOGRS_JOURNAL_CRASH_TEST") else {
         return;
     };
     let journal = FileUploadJournal::new(&path).unwrap();
-    let _lease = journal.create(record("crashed")).unwrap();
+    let _lease = journal.create(record("crashed")).await.unwrap();
     std::fs::write(std::path::Path::new(&path).join("ready"), b"ready").unwrap();
     loop {
         std::thread::park();
@@ -167,7 +169,7 @@ async fn durable_journal_recovers_after_process_kill_and_excludes_live_process()
     .await
     .unwrap();
     let journal = FileUploadJournal::new(dir.path()).unwrap();
-    assert!(journal.acquire("crashed").unwrap().is_none());
+    assert!(journal.acquire("crashed").await.unwrap().is_none());
     child.0.kill().unwrap();
     child.0.wait().unwrap();
     let store = Native {
@@ -180,4 +182,49 @@ async fn durable_journal_recovers_after_process_kill_and_excludes_live_process()
         .unwrap();
     assert_eq!(report.record.native_id.as_deref(), Some("provider-handle"));
     assert_eq!(report.outcome, WriteOutcome::Aborted);
+}
+
+#[test]
+fn canceled_disk_journal_mutation_cannot_be_reused_or_race_recovery() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let directory = tempfile::tempdir().unwrap();
+        let journal = FileUploadJournal::new(directory.path()).unwrap();
+        let mut initial = record("queued-save");
+        initial.native_id = None;
+        let mut lease = journal.create(initial.clone()).await.unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = tokio::task::spawn_blocking(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.await.unwrap();
+        let mut next = initial;
+        next.native_id = Some("first-handle".into());
+        let mut saving = lease.save(next.clone());
+        assert!(futures::poll!(saving.as_mut()).is_pending());
+        drop(saving); // Its disk worker is queued and still owns a duplicate lock.
+        assert!(lease.save(next.clone()).await.is_err());
+        assert!(lease.acknowledge().await.is_err());
+        drop(lease);
+        // Direct OS probe cannot acquire while the canceled worker retains its lock.
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(directory.path().join("queued-save.lock"))
+            .unwrap();
+        assert!(matches!(
+            file.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        release_tx.send(()).unwrap();
+        worker.await.unwrap();
+        let recovered = journal.acquire("queued-save").await.unwrap().unwrap();
+        assert_eq!(recovered.record().native_id, next.native_id);
+    });
 }

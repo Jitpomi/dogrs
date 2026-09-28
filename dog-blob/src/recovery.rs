@@ -23,16 +23,21 @@ pub struct PendingWrite {
 /// Implementations must durably save before returning if restart recovery is promised.
 /// A lease must exclude every other writer/reconciler until dropped. list() is only
 /// discovery: always acquire a fresh lease before acting. Never unlink a lock inode.
+#[async_trait::async_trait]
 pub trait UploadJournal: Send + Sync {
-    fn create(&self, record: PendingWrite) -> BlobResult<Box<dyn UploadLease>>;
-    fn acquire(&self, id: &str) -> BlobResult<Option<Box<dyn UploadLease>>>;
-    fn list(&self) -> BlobResult<Vec<PendingWrite>>;
+    async fn create(&self, record: PendingWrite) -> BlobResult<Box<dyn UploadLease>>;
+    async fn acquire(&self, id: &str) -> BlobResult<Option<Box<dyn UploadLease>>>;
+    async fn list(&self) -> BlobResult<Vec<PendingWrite>>;
 }
+/// After canceling a mutation, drop and reacquire this lease before another
+/// mutation. Implementations must retain exclusion until outstanding durable
+/// work settles, even if the async caller drops its lease.
+#[async_trait::async_trait]
 pub trait UploadLease: Send {
     fn record(&self) -> &PendingWrite;
-    fn save(&mut self, record: PendingWrite) -> BlobResult<()>;
+    async fn save(&mut self, record: PendingWrite) -> BlobResult<()>;
     /// Call only after persisting the receipt or resolving the recovery report.
-    fn acknowledge(&mut self) -> BlobResult<()>;
+    async fn acknowledge(&mut self) -> BlobResult<()>;
 }
 #[derive(Default, Clone)]
 pub struct MemoryUploadJournal(Arc<Mutex<JournalRecords>>);
@@ -52,11 +57,12 @@ impl Drop for MemoryLease {
         }
     }
 }
+#[async_trait::async_trait]
 impl UploadLease for MemoryLease {
     fn record(&self) -> &PendingWrite {
         &self.record
     }
-    fn save(&mut self, record: PendingWrite) -> BlobResult<()> {
+    async fn save(&mut self, record: PendingWrite) -> BlobResult<()> {
         if self.acknowledged {
             return Err(BlobError::invalid("journal lease already acknowledged"));
         }
@@ -69,7 +75,7 @@ impl UploadLease for MemoryLease {
         self.record = record;
         Ok(())
     }
-    fn acknowledge(&mut self) -> BlobResult<()> {
+    async fn acknowledge(&mut self) -> BlobResult<()> {
         self.journal.0.lock().unwrap().remove(&self.record.id);
         self.acknowledged = true;
         Ok(())
@@ -89,8 +95,9 @@ fn unchanged(old: &PendingWrite, next: &PendingWrite) -> BlobResult<()> {
     }
     Ok(())
 }
+#[async_trait::async_trait]
 impl UploadJournal for MemoryUploadJournal {
-    fn create(&self, record: PendingWrite) -> BlobResult<Box<dyn UploadLease>> {
+    async fn create(&self, record: PendingWrite) -> BlobResult<Box<dyn UploadLease>> {
         let mut records = self.0.lock().unwrap();
         if records.len() >= 1024 || records.contains_key(&record.id) {
             return Err(BlobError::ResourceLimit {
@@ -104,7 +111,7 @@ impl UploadJournal for MemoryUploadJournal {
             record,
         }))
     }
-    fn acquire(&self, id: &str) -> BlobResult<Option<Box<dyn UploadLease>>> {
+    async fn acquire(&self, id: &str) -> BlobResult<Option<Box<dyn UploadLease>>> {
         let mut records = self.0.lock().unwrap();
         let Some((record, busy)) = records.get_mut(id) else {
             return Ok(None);
@@ -119,7 +126,7 @@ impl UploadJournal for MemoryUploadJournal {
             record: record.clone(),
         })))
     }
-    fn list(&self) -> BlobResult<Vec<PendingWrite>> {
+    async fn list(&self) -> BlobResult<Vec<PendingWrite>> {
         Ok(self
             .0
             .lock()
@@ -138,6 +145,7 @@ pub struct FileUploadJournal {
     directory: PathBuf,
 }
 struct FileLease {
+    in_flight: bool,
     acknowledged: bool,
     _lock: File,
     path: PathBuf,
@@ -176,36 +184,70 @@ impl FileUploadJournal {
         }
     }
 }
+fn persist_record(path: &Path, directory: &Path, record: &PendingWrite) -> BlobResult<()> {
+    let mut temp = tempfile::NamedTempFile::new_in(directory)?;
+    temp.write_all(&serde_json::to_vec(record)?)?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|e| e.error)?;
+    File::open(directory)?.sync_all()?;
+    Ok(())
+}
+#[async_trait::async_trait]
 impl UploadLease for FileLease {
     fn record(&self) -> &PendingWrite {
         &self.record
     }
-    fn save(&mut self, record: PendingWrite) -> BlobResult<()> {
-        if self.acknowledged {
+    async fn save(&mut self, record: PendingWrite) -> BlobResult<()> {
+        if self.acknowledged || self.in_flight {
             return Err(BlobError::invalid("journal lease already acknowledged"));
         }
         unchanged(&self.record, &record)?;
-        let mut temp = tempfile::NamedTempFile::new_in(&self.directory)?;
-        temp.write_all(&serde_json::to_vec(&record)?)?;
-        temp.as_file().sync_all()?;
-        temp.persist(&self.path).map_err(|e| e.error)?;
-        File::open(&self.directory)?.sync_all()?;
+        let path = self.path.clone();
+        let directory = self.directory.clone();
+        let value = record.clone();
+        let lock = self._lock.try_clone()?;
+        // Retain a duplicate lock descriptor in the blocking operation even if
+        // the async caller is canceled, so recovery cannot race a late rename.
+        self.in_flight = true;
+        tokio::task::spawn_blocking(move || {
+            let _lock = lock;
+            persist_record(&path, &directory, &value)
+        })
+        .await
+        .map_err(BlobError::backend)??;
+        self.in_flight = false;
         self.record = record;
         Ok(())
     }
-    fn acknowledge(&mut self) -> BlobResult<()> {
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+    async fn acknowledge(&mut self) -> BlobResult<()> {
+        if self.in_flight {
+            return Err(BlobError::invalid(
+                "canceled journal lease must be reacquired",
+            ));
         }
-        File::open(&self.directory)?.sync_all()?;
+        let path = self.path.clone();
+        let directory = self.directory.clone();
+        let lock = self._lock.try_clone()?;
+        self.in_flight = true;
+        tokio::task::spawn_blocking(move || -> BlobResult<()> {
+            let _lock = lock;
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+            File::open(directory)?.sync_all()?;
+            Ok(())
+        })
+        .await
+        .map_err(BlobError::backend)??;
+        self.in_flight = false;
         self.acknowledged = true;
         Ok(())
     }
 }
-impl UploadJournal for FileUploadJournal {
-    fn create(&self, record: PendingWrite) -> BlobResult<Box<dyn UploadLease>> {
+impl FileUploadJournal {
+    fn create_sync(&self, record: PendingWrite) -> BlobResult<Box<dyn UploadLease>> {
         let lock = self
             .lock(&record.id)?
             .ok_or_else(|| BlobError::invalid("write already leased"))?;
@@ -213,17 +255,17 @@ impl UploadJournal for FileUploadJournal {
         if path.exists() {
             return Err(BlobError::invalid("write already recorded"));
         }
-        let mut lease = FileLease {
+        persist_record(&path, &self.directory, &record)?;
+        Ok(Box::new(FileLease {
+            in_flight: false,
             acknowledged: false,
             _lock: lock,
             path,
             directory: self.directory.clone(),
-            record: record.clone(),
-        };
-        lease.save(record)?;
-        Ok(Box::new(lease))
+            record,
+        }))
     }
-    fn acquire(&self, id: &str) -> BlobResult<Option<Box<dyn UploadLease>>> {
+    fn acquire_sync(&self, id: &str) -> BlobResult<Option<Box<dyn UploadLease>>> {
         let Some(lock) = self.lock(id)? else {
             return Ok(None);
         };
@@ -238,6 +280,7 @@ impl UploadJournal for FileUploadJournal {
             return Err(BlobError::invalid("journal identity mismatch"));
         }
         Ok(Some(Box::new(FileLease {
+            in_flight: false,
             acknowledged: false,
             _lock: lock,
             path,
@@ -245,7 +288,7 @@ impl UploadJournal for FileUploadJournal {
             record,
         })))
     }
-    fn list(&self) -> BlobResult<Vec<PendingWrite>> {
+    fn list_sync(&self) -> BlobResult<Vec<PendingWrite>> {
         let mut records = Vec::new();
         for entry in std::fs::read_dir(&self.directory)? {
             let path = entry?.path();
@@ -258,5 +301,27 @@ impl UploadJournal for FileUploadJournal {
             }
         }
         Ok(records)
+    }
+}
+#[async_trait::async_trait]
+impl UploadJournal for FileUploadJournal {
+    async fn create(&self, record: PendingWrite) -> BlobResult<Box<dyn UploadLease>> {
+        let journal = self.clone();
+        tokio::task::spawn_blocking(move || journal.create_sync(record))
+            .await
+            .map_err(BlobError::backend)?
+    }
+    async fn acquire(&self, id: &str) -> BlobResult<Option<Box<dyn UploadLease>>> {
+        let journal = self.clone();
+        let id = id.to_owned();
+        tokio::task::spawn_blocking(move || journal.acquire_sync(&id))
+            .await
+            .map_err(BlobError::backend)?
+    }
+    async fn list(&self) -> BlobResult<Vec<PendingWrite>> {
+        let journal = self.clone();
+        tokio::task::spawn_blocking(move || journal.list_sync())
+            .await
+            .map_err(BlobError::backend)?
     }
 }

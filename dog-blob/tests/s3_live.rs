@@ -95,7 +95,7 @@ async fn real_s3_streams_ranges_metadata_limits_and_signed_reads() {
         WriteOutcome::Committed
     );
     assert!(recovered.acknowledge_write(write_id).await.unwrap());
-    assert!(recovered.pending_writes().unwrap().is_empty());
+    assert!(recovered.pending_writes().await.unwrap().is_empty());
     // Persist an initiated upload, then drop its writer as if the process stopped.
     let mut interrupted = PendingWrite {
         id: uuid::Uuid::new_v4().to_string(),
@@ -107,9 +107,9 @@ async fn real_s3_streams_ranges_metadata_limits_and_signed_reads() {
         filename: None,
         native_id: None,
     };
-    let mut lease = journal.create(interrupted.clone()).unwrap();
+    let mut lease = journal.create(interrupted.clone()).await.unwrap();
     interrupted.native_id = Some(store.initiate(&interrupted).await.unwrap());
-    lease.save(interrupted.clone()).unwrap();
+    lease.save(interrupted.clone()).await.unwrap();
     assert!(recovered
         .reconcile_write(&interrupted.id)
         .await

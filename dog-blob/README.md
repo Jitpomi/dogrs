@@ -128,9 +128,9 @@ fn durable_state(store: impl BlobStore + 'static, directory: &Path) -> dog_blob:
 
 File records use atomic rename, fsync and OS locking. The directory must be shared
 by all processes responsible for those writes; for multiple hosts, implement the
-journal lease contract using your chosen durable service. File journal control
-operations perform synchronous local metadata I/O; place the directory on suitable
-local storage. Zero-byte lock files remain after acknowledgement to prevent inode
+async journal lease contract using your chosen durable service. File journal I/O
+runs on blocking workers, retaining its OS lock through canceled writes. Place the
+directory on suitable local storage. Zero-byte lock files remain after acknowledgement to prevent inode
 replacement races. Archive that directory only while its users are stopped.
 
 Administrative `pending_writes` discovers records. `reconcile_write` acquires a

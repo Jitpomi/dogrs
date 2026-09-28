@@ -91,8 +91,8 @@ impl BlobAdapter {
     }
 
     /// Administrative pending writes; do not expose across tenants in a public API.
-    pub fn pending_writes(&self) -> BlobResult<Vec<crate::PendingWrite>> {
-        self.state.journal.list()
+    pub async fn pending_writes(&self) -> BlobResult<Vec<crate::PendingWrite>> {
+        self.state.journal.list().await
     }
     pub async fn reconcile_write(&self, id: &str) -> BlobResult<Option<crate::RecoveryReport>> {
         let native = self
@@ -112,7 +112,7 @@ impl BlobAdapter {
     /// After saving the receipt/recovery report, remove its journal record.
     /// Uncertain writes cannot be acknowledged. Live writers return false.
     pub async fn acknowledge_write(&self, id: &str) -> BlobResult<bool> {
-        let Some(mut lease) = self.state.journal.acquire(id)? else {
+        let Some(mut lease) = self.state.journal.acquire(id).await? else {
             return Ok(false);
         };
         let native = self
@@ -126,7 +126,7 @@ impl BlobAdapter {
         if native.inspect(lease.record()).await? == crate::WriteOutcome::Uncertain {
             return Err(BlobError::invalid("write outcome remains uncertain"));
         }
-        lease.acknowledge()?;
+        lease.acknowledge().await?;
         Ok(true)
     }
     /// Store a blob from a stream (single-shot upload)

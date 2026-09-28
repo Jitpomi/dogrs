@@ -75,9 +75,9 @@ pub(crate) async fn upload(
     };
     // Persist intention before any external mutation. Unknown initiation outcomes
     // remain explicit, rather than guessing which provider upload to delete.
-    let mut lease = journal.create(record.clone())?;
+    let mut lease = journal.create(record.clone()).await?;
     record.native_id = Some(store.initiate(&record).await?);
-    lease.save(record.clone())?;
+    lease.save(record.clone()).await?;
     let mut parts = Vec::new();
     for index in 0..count {
         let offset = index * part_size;
@@ -102,7 +102,7 @@ pub async fn reconcile_write(
     journal: &dyn UploadJournal,
     id: &str,
 ) -> BlobResult<Option<RecoveryReport>> {
-    let Some(lease) = journal.acquire(id)? else {
+    let Some(lease) = journal.acquire(id).await? else {
         return Ok(None);
     };
     let record = lease.record().clone();
@@ -212,7 +212,7 @@ mod tests {
             });
             backend.entered.notified().await;
             if stall {
-                let record = journal.list().unwrap().pop().unwrap();
+                let record = journal.list().await.unwrap().pop().unwrap();
                 assert!(
                     reconcile_write(backend.as_ref(), journal.as_ref(), &record.id)
                         .await
@@ -225,7 +225,7 @@ mod tests {
                 assert!(task.await.unwrap().is_err());
             }
             assert_eq!(resources.usage().staging_bytes, 0);
-            let record = journal.list().unwrap().pop().unwrap();
+            let record = journal.list().await.unwrap().pop().unwrap();
             let report = reconcile_write(backend.as_ref(), journal.as_ref(), &record.id)
                 .await
                 .unwrap()
