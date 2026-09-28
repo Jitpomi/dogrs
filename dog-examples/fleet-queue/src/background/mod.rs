@@ -42,6 +42,13 @@ impl BackgroundSystem {
         let backend = {
             let connection_string = std::env::var("FLEET_POSTGRES_URL")?;
             let parsed: tokio_postgres::Config = connection_string.parse()?;
+            anyhow::ensure!(
+                parsed
+                    .get_hostaddrs()
+                    .iter()
+                    .all(std::net::IpAddr::is_loopback),
+                "hostaddr overrides must also be loopback; use verified TLS for remote PostgreSQL"
+            );
             anyhow::ensure!(!parsed.get_hosts().is_empty() && parsed.get_hosts().iter().all(|host| match host {
                 tokio_postgres::config::Host::Tcp(host) => host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()),
                 #[cfg(unix)]
