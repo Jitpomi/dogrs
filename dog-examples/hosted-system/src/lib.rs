@@ -5,7 +5,9 @@ pub mod channels;
 mod connections;
 pub mod hooks;
 mod recovery;
+pub mod runner;
 pub mod services;
 
-pub use app::{build_app, run, run_app};
+pub use app::build_app;
+pub use runner::{env, run, run_app, tenant, LEASE};
 pub use services::{BillingContext, BillingService, RecordPayment};

@@ -1,5 +1,5 @@
 //! Controlled provider-process recovery against disposable local services only.
-use crate::app::*;
+use crate::runner::*;
 use dog_queue::{JobMessage, JobStatus, LeaseToken, QueueError};
 use std::path::PathBuf;
 #[derive(Serialize, Deserialize)]

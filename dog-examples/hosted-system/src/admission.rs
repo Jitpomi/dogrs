@@ -1,6 +1,6 @@
 //! Matched open-loop admission diagnostics, not production queue acceptance.
 //! Native-layout uses the same durable admission shape but omits queue behavior.
-use crate::app::*;
+use crate::runner::*;
 use dog_queue::{JobMessage, JobRecord};
 use std::{
     sync::{
@@ -260,7 +260,7 @@ pub async fn native() -> Result<()> {
                 } else {
                     js.clone()
                 };
-                let bucket = crate::app::create_fixture_bucket(
+                let bucket = crate::connections::create_fixture_bucket(
                     &js,
                     async_nats::jetstream::kv::Config {
                         bucket: format!("{}_{shard}", env("DOGRS_NATS_BUCKET")?),
