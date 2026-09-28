@@ -55,7 +55,7 @@ impl BatchWriter {
             // One in-flight 3-job batch at 100 ms caps admission at 30 jobs/s
             // regardless of how much unused capacity the provider has. Retain
             // a separate metadata lane so producer pipelining cannot consume it.
-            let concurrency = 16;
+            let concurrency = if enqueue { 16 } else { 1 };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
             loop {
@@ -98,10 +98,7 @@ impl BatchWriter {
                 // dispatching. On a slow CI runner a hard 500 µs sleep serialises
                 // the lane (8 × 80 ms/commit ≈ 100 enqueues/s); a cooperative
                 // yield costs nothing when the channel is already drained.
-                if bytes < TARGET_BATCH_BYTES
-                    && deferred.is_none()
-                    && count < MAX_MESSAGES
-                {
+                if bytes < TARGET_BATCH_BYTES && deferred.is_none() && count < MAX_MESSAGES {
                     tokio::task::yield_now().await;
                     while count < MAX_MESSAGES {
                         let Ok(group) = receiver.try_recv() else {
