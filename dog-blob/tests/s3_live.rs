@@ -41,10 +41,18 @@ async fn real_s3_streams_ranges_metadata_limits_and_signed_reads() {
     let bucket = format!("dogrs-blob-{}", uuid::Uuid::new_v4());
     client.create_bucket().bucket(&bucket).send().await.unwrap();
     let store = S3CompatibleStore::with_config(bucket.clone(), config()).await;
-    let adapter = BlobAdapter::new(Arc::new(BlobState::new(
-        store.clone(),
-        BlobConfig::default().with_checksum("sha256"),
-    )));
+    let journal_dir = tempfile::tempdir().unwrap();
+    let journal = Arc::new(FileUploadJournal::new(journal_dir.path()).unwrap());
+    let resources = UploadResources::new(UploadLimits {
+        max_staging_bytes: 32 * 1024 * 1024,
+        ..Default::default()
+    })
+    .unwrap();
+    let adapter = BlobAdapter::new(Arc::new(
+        BlobState::new(store.clone(), BlobConfig::default().with_checksum("sha256"))
+            .with_resources(resources.clone())
+            .with_journal(journal.clone()),
+    ));
     let ctx = BlobCtx::new("tenant-a".into()).with_actor("owner".into());
     // Unknown-length stream: 32 MiB without collecting its contents in memory.
     let stream = futures::stream::iter(
@@ -61,6 +69,63 @@ async fn real_s3_streams_ranges_metadata_limits_and_signed_reads() {
         .await
         .unwrap();
     assert_eq!(receipt.size_bytes, 32 * 1024 * 1024);
+    assert_eq!(resources.usage().staged_files, 1);
+    assert_eq!(resources.usage().peak_staging_bytes, receipt.size_bytes);
+    assert_eq!(resources.usage().staging_bytes, 0);
+    let write_id = receipt
+        .recovery_id
+        .as_deref()
+        .expect("native journal identity");
+    assert!(
+        receipt.etag.as_ref().unwrap().contains('-'),
+        "provider multipart etag"
+    );
+    let recovered = BlobAdapter::new(Arc::new(
+        BlobState::new(store.clone(), BlobConfig::default()).with_journal(Arc::new(
+            FileUploadJournal::new(journal_dir.path()).unwrap(),
+        )),
+    ));
+    assert_eq!(
+        recovered
+            .reconcile_write(write_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .outcome,
+        WriteOutcome::Committed
+    );
+    assert!(recovered.acknowledge_write(write_id).await.unwrap());
+    assert!(recovered.pending_writes().await.unwrap().is_empty());
+    // Persist an initiated upload, then drop its writer as if the process stopped.
+    let mut interrupted = PendingWrite {
+        id: uuid::Uuid::new_v4().to_string(),
+        scope: store.recovery_scope(),
+        key: "interrupted".into(),
+        size_bytes: 4,
+        checksum: "sha256:fixture".into(),
+        content_type: None,
+        filename: None,
+        native_id: None,
+    };
+    let mut lease = journal.create(interrupted.clone()).await.unwrap();
+    interrupted.native_id = Some(store.initiate(&interrupted).await.unwrap());
+    lease.save(interrupted.clone()).await.unwrap();
+    assert!(recovered
+        .reconcile_write(&interrupted.id)
+        .await
+        .unwrap()
+        .is_none());
+    drop(lease);
+    assert_eq!(
+        recovered
+            .reconcile_write(&interrupted.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .outcome,
+        WriteOutcome::Aborted
+    );
+    assert!(recovered.acknowledge_write(&interrupted.id).await.unwrap());
     let mut result = store.get(&receipt.key, None).await.unwrap();
     let mut count = 0usize;
     while let Some(bytes) = result.stream.next().await {
@@ -131,6 +196,51 @@ async fn real_s3_streams_ranges_metadata_limits_and_signed_reads() {
         }
         _ => panic!("signed URL capability missing"),
     }
+    // The resumable coordinator also forwards validated parts/assembly without
+    // causing S3 to stage them again. Share one budget across both components.
+    let staged_resources = UploadResources::new(UploadLimits {
+        max_staging_bytes: 6,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut resumable_config = BlobConfig::default().with_max_blob_bytes(6);
+    resumable_config.upload_rules.part_size = 4;
+    let coordinator = DefaultUploadCoordinator::new(
+        store.clone().with_resources(staged_resources.clone()),
+        MemoryUploadSessionStore::new(),
+        DefaultKeyStrategy,
+        resumable_config,
+    )
+    .with_resources(staged_resources.clone());
+    let id = BlobId::new();
+    let key = DefaultKeyStrategy.object_key(&ctx.tenant_id, id.as_str(), &Default::default());
+    let session = coordinator
+        .begin(
+            ctx.clone(),
+            UploadIntent::new(id, key).with_parts(4, Some(2)),
+        )
+        .await
+        .unwrap();
+    coordinator
+        .accept_part(ctx.clone(), &session.upload_id, 1, body(b"1234"))
+        .await
+        .unwrap();
+    coordinator
+        .accept_part(ctx.clone(), &session.upload_id, 2, body(b"56"))
+        .await
+        .unwrap();
+    let assembled = coordinator
+        .complete(ctx.clone(), &session.upload_id)
+        .await
+        .unwrap();
+    assert_eq!(staged_resources.usage().staged_files, 3);
+    assert_eq!(staged_resources.usage().peak_staging_bytes, 6);
+    assert_eq!(staged_resources.usage().staging_bytes, 0);
+    coordinator
+        .forget(ctx.clone(), &session.upload_id)
+        .await
+        .unwrap();
+    store.delete(&assembled.key).await.unwrap();
     let limited = store.clone().with_max_put_bytes(3);
     assert!(limited.put("oversized", None, body(b"1234")).await.is_err());
     assert!(store.head("oversized").await.is_err());

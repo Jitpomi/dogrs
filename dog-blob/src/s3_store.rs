@@ -50,24 +50,32 @@ pub struct S3CompatibleStore {
     client: Client,
     bucket: String,
     max_put_bytes: u64,
+    scope: String,
+    resources: crate::UploadResources,
 }
 
 impl S3CompatibleStore {
     pub async fn new(bucket: String) -> BlobResult<Self> {
         let config = S3Config::from_env()?;
+        let scope = format!("{}|{}|{}", config.endpoint_url, config.region, bucket);
         let client = Self::create_client(config).await;
         Ok(Self {
             client,
             bucket,
+            scope,
+            resources: crate::UploadResources::default(),
             max_put_bytes: 5 * 1024 * 1024 * 1024,
         })
     }
 
     pub async fn with_config(bucket: String, config: S3Config) -> Self {
+        let scope = format!("{}|{}|{}", config.endpoint_url, config.region, bucket);
         let client = Self::create_client(config).await;
         Self {
             client,
             bucket,
+            scope,
+            resources: crate::UploadResources::default(),
             max_put_bytes: 5 * 1024 * 1024 * 1024,
         }
     }
@@ -95,6 +103,10 @@ impl S3CompatibleStore {
         )
     }
 
+    pub fn with_resources(mut self, resources: crate::UploadResources) -> Self {
+        self.resources = resources;
+        self
+    }
     /// Bound disk staging even when the store is used without BlobAdapter.
     pub fn with_max_put_bytes(mut self, limit: u64) -> Self {
         self.max_put_bytes = limit.min(5 * 1024 * 1024 * 1024);
@@ -251,6 +263,9 @@ impl S3CompatibleStore {
 
 #[async_trait]
 impl BlobStore for S3CompatibleStore {
+    fn native_multipart(&self) -> Option<&dyn crate::NativeMultipartStore> {
+        Some(self)
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -274,7 +289,25 @@ impl BlobStore for S3CompatibleStore {
         filename: Option<&str>,
         stream: ByteStream,
     ) -> BlobResult<PutResult> {
-        let staged = bounded::spool(stream, self.max_put_bytes).await?;
+        self.resources
+            .run(async {
+                let staged =
+                    bounded::spool_with(stream, self.max_put_bytes, &self.resources).await?;
+                self.put_validated(key, content_type, filename, staged)
+                    .await
+            })
+            .await
+    }
+    async fn put_validated(
+        &self,
+        key: &str,
+        content_type: Option<&str>,
+        filename: Option<&str>,
+        staged: crate::ValidatedUpload,
+    ) -> BlobResult<PutResult> {
+        if staged.size_bytes() > self.max_put_bytes {
+            return Err(BlobError::invalid("object exceeds store byte limit"));
+        }
         let body = AwsByteStream::from_path(staged.path())
             .await
             .map_err(Self::map_aws_error)?;
@@ -433,7 +466,10 @@ impl BlobStore for S3CompatibleStore {
     }
 
     fn capabilities(&self) -> StoreCapabilities {
-        StoreCapabilities::basic().with_range().with_signed_urls()
+        StoreCapabilities::basic()
+            .with_range()
+            .with_signed_urls()
+            .with_multipart(Some(5 * 1024 * 1024), Some(5 * 1024 * 1024 * 1024))
     }
 }
 
@@ -477,6 +513,206 @@ impl SignedUrlBlobStore for S3CompatibleStore {
             .to_owned())
     }
 }
+#[async_trait]
+impl crate::NativeMultipartStore for S3CompatibleStore {
+    fn maximum_upload_size(&self) -> Option<u64> {
+        Some(self.max_put_bytes)
+    }
+    fn recovery_scope(&self) -> String {
+        self.scope.clone()
+    }
+    fn minimum_part_size(&self) -> u64 {
+        5 * 1024 * 1024
+    }
+    async fn initiate(&self, record: &crate::PendingWrite) -> BlobResult<String> {
+        if record.size_bytes > self.max_put_bytes {
+            return Err(BlobError::invalid("object exceeds store byte limit"));
+        }
+        let mut request = self
+            .client
+            .create_multipart_upload()
+            .bucket(&self.bucket)
+            .key(&record.key)
+            .metadata("dogrs-write-id", &record.id)
+            .metadata("dogrs-sha256", &record.checksum);
+        if let Some(ct) = &record.content_type {
+            request = request.content_type(ct);
+        }
+        if let Some(filename) = &record.filename {
+            request = request.metadata("filename", filename);
+        }
+        request
+            .send()
+            .await
+            .map_err(Self::map_aws_error)?
+            .upload_id
+            .ok_or_else(|| BlobError::upload_failed("missing native upload id"))
+    }
+    async fn upload_part(
+        &self,
+        record: &crate::PendingWrite,
+        number: u32,
+        upload: &crate::ValidatedUpload,
+        offset: u64,
+        length: u64,
+    ) -> BlobResult<String> {
+        if number == 0
+            || number > 10000
+            || length == 0
+            || length > 5 * 1024 * 1024 * 1024
+            || offset
+                .checked_add(length)
+                .is_none_or(|end| end > upload.size_bytes())
+        {
+            return Err(BlobError::invalid("invalid native part bounds"));
+        }
+        let id = record
+            .native_id
+            .as_deref()
+            .ok_or_else(|| BlobError::invalid("missing native handle"))?;
+        let body = AwsByteStream::read_from()
+            .path(upload.path())
+            .offset(offset)
+            .length(aws_sdk_s3::primitives::Length::Exact(length))
+            .build()
+            .await
+            .map_err(Self::map_aws_error)?;
+        self.client
+            .upload_part()
+            .bucket(&self.bucket)
+            .key(&record.key)
+            .upload_id(id)
+            .part_number(number as i32)
+            .content_length(length as i64)
+            .body(body)
+            .send()
+            .await
+            .map_err(Self::map_aws_error)?
+            .e_tag
+            .ok_or_else(|| BlobError::upload_failed("missing part etag"))
+    }
+    async fn finish(
+        &self,
+        record: &crate::PendingWrite,
+        parts: Vec<crate::NativePart>,
+    ) -> BlobResult<PutResult> {
+        let id = record
+            .native_id
+            .as_deref()
+            .ok_or_else(|| BlobError::invalid("missing native handle"))?;
+        let parts = parts
+            .into_iter()
+            .map(|p| {
+                aws_sdk_s3::types::CompletedPart::builder()
+                    .part_number(p.number as i32)
+                    .e_tag(p.etag)
+                    .build()
+            })
+            .collect();
+        let result = self
+            .client
+            .complete_multipart_upload()
+            .bucket(&self.bucket)
+            .key(&record.key)
+            .upload_id(id)
+            .multipart_upload(
+                aws_sdk_s3::types::CompletedMultipartUpload::builder()
+                    .set_parts(Some(parts))
+                    .build(),
+            )
+            .send()
+            .await
+            .map_err(Self::map_aws_error)?;
+        Ok(PutResult {
+            size_bytes: record.size_bytes,
+            checksum: Some(record.checksum.clone()),
+            etag: result.e_tag,
+        })
+    }
+    async fn inspect(&self, record: &crate::PendingWrite) -> BlobResult<crate::WriteOutcome> {
+        use crate::WriteOutcome;
+        use aws_sdk_s3::error::ProvideErrorMetadata;
+        let absent = match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(&record.key)
+            .send()
+            .await
+        {
+            Ok(head) => {
+                let matching = head.content_length == i64::try_from(record.size_bytes).ok()
+                    && head.metadata.as_ref().is_some_and(|m| {
+                        m.get("dogrs-write-id") == Some(&record.id)
+                            && m.get("dogrs-sha256") == Some(&record.checksum)
+                    });
+                if matching {
+                    return Ok(WriteOutcome::Committed);
+                }
+                false
+            }
+            Err(error) if error.as_service_error().is_some_and(|e| e.is_not_found()) => true,
+            Err(error) => return Err(Self::map_aws_error(error)),
+        };
+        let Some(id) = &record.native_id else {
+            return Ok(WriteOutcome::Uncertain);
+        };
+        match self
+            .client
+            .list_parts()
+            .bucket(&self.bucket)
+            .key(&record.key)
+            .upload_id(id)
+            .max_parts(1)
+            .send()
+            .await
+        {
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|e| e.code() == Some("NoSuchUpload"))
+                    && absent =>
+            {
+                Ok(WriteOutcome::Aborted)
+            }
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|e| e.code() == Some("NoSuchUpload")) =>
+            {
+                Ok(WriteOutcome::Uncertain)
+            }
+            Err(error) => Err(Self::map_aws_error(error)),
+            Ok(_) => Ok(WriteOutcome::Uncertain),
+        }
+    }
+    async fn abort(&self, record: &crate::PendingWrite) -> BlobResult<()> {
+        let id = record
+            .native_id
+            .as_deref()
+            .ok_or_else(|| BlobError::invalid("unknown initiation requires provider inventory"))?;
+        match self
+            .client
+            .abort_multipart_upload()
+            .bucket(&self.bucket)
+            .key(&record.key)
+            .upload_id(id)
+            .send()
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|e| e.is_no_such_upload()) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(Self::map_aws_error(error)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

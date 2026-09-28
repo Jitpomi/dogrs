@@ -1,6 +1,9 @@
 /// Configuration for blob operations
 #[derive(Debug, Clone)]
 pub struct BlobConfig {
+    pub upload_limits: crate::UploadLimits,
+    /// Decoded base64 convenience API limit; streaming is preferred for large bodies.
+    pub max_base64_bytes: u64,
     /// Maximum active and retained chunk sessions per adapter.
     pub max_chunk_sessions: usize,
     /// Absolute lifetime for chunk and active multipart sessions.
@@ -8,7 +11,7 @@ pub struct BlobConfig {
     /// Absolute max size allowed for a single blob (safety guard)
     pub max_blob_bytes: u64,
 
-    /// If actual bytes >= this, prefer multipart/resumable path when available
+    /// If actual bytes >= this, use the backend native multipart capability when available
     pub multipart_threshold_bytes: u64,
 
     /// Rules for part-based uploads
@@ -26,6 +29,8 @@ pub struct BlobConfig {
 impl Default for BlobConfig {
     fn default() -> Self {
         Self {
+            upload_limits: crate::UploadLimits::default(),
+            max_base64_bytes: 8 * 1024 * 1024,
             max_chunk_sessions: 1024,
             session_ttl_secs: 3600,
             max_blob_bytes: 5 * 1024 * 1024 * 1024,      // 5GB
@@ -134,6 +139,12 @@ impl UploadRules {
 
 impl BlobConfig {
     pub fn validate(&self) -> crate::BlobResult<()> {
+        self.upload_limits.validate()?;
+        if self.max_base64_bytes == 0 || self.max_base64_bytes > 64 * 1024 * 1024 {
+            return Err(crate::BlobError::invalid(
+                "base64 limit must be between 1 byte and 64 MiB",
+            ));
+        }
         if self.max_blob_bytes == 0
             || self.max_blob_bytes > i64::MAX as u64
             || self.multipart_threshold_bytes == 0

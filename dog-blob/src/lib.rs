@@ -5,7 +5,16 @@ mod bounded;
 mod config;
 mod coordinator;
 mod error;
+mod native;
 mod receipt;
+mod recovery;
+mod resources;
+pub use bounded::ValidatedUpload;
+pub use native::{reconcile_write, NativeMultipartStore, NativePart, RecoveryReport, WriteOutcome};
+pub use recovery::{
+    FileUploadJournal, MemoryUploadJournal, PendingWrite, UploadJournal, UploadLease,
+};
+pub use resources::{UploadLimits, UploadResources, UploadUsage};
 #[cfg(feature = "s3")]
 mod s3_store;
 mod session_store;

@@ -47,6 +47,21 @@ pub struct BlobMetadata {
 /// Core blob storage operations - must be implemented by all storage backends
 #[async_trait]
 pub trait BlobStore: Send + Sync {
+    fn native_multipart(&self) -> Option<&dyn crate::NativeMultipartStore> {
+        None
+    }
+    /// Consume already validated data without restaging. The default supports
+    /// existing streaming backends; optimized backends read the owned file directly.
+    async fn put_validated(
+        &self,
+        key: &str,
+        content_type: Option<&str>,
+        filename: Option<&str>,
+        upload: crate::ValidatedUpload,
+    ) -> BlobResult<PutResult> {
+        self.put_with_metadata(key, content_type, filename, upload.into_stream())
+            .await
+    }
     /// Optional signed URL capability; the adapter never downcasts to a vendor.
     fn signed_urls(&self) -> Option<&dyn SignedUrlBlobStore> {
         None
@@ -223,6 +238,10 @@ impl StoreCapabilities {
 
 /// Strategy for generating blob keys
 pub trait BlobKeyStrategy: Send + Sync {
+    /// Exclusive namespace for one upload; None disables orphan cleanup.
+    fn staging_prefix(&self, _tenant: &str, _upload: &str) -> Option<String> {
+        None
+    }
     /// A stable, tenant-exclusive listing prefix. None disables adapter listing.
     fn tenant_prefix(&self, _tenant_id: &str) -> Option<String> {
         None
@@ -254,6 +273,13 @@ pub(crate) fn tenant_component(value: &str) -> String {
         .collect()
 }
 impl BlobKeyStrategy for DefaultKeyStrategy {
+    fn staging_prefix(&self, tenant: &str, upload: &str) -> Option<String> {
+        Some(format!(
+            "__uploads/v2/{}/{}/",
+            tenant_component(tenant),
+            upload
+        ))
+    }
     fn tenant_prefix(&self, tenant: &str) -> Option<String> {
         Some(format!("v2/{}/", tenant_component(tenant)))
     }
