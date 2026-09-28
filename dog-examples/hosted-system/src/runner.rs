@@ -10,7 +10,6 @@ pub use serde::{Deserialize, Serialize};
 pub use serde_json::{json, Value};
 pub use tokio_postgres::Client;
 
-use crate::app::build_app;
 use crate::services::adapters::PaymentsAdapter;
 use crate::services::types::BillingContext;
 use crate::services::RecordPayment;
@@ -68,8 +67,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()
                 token.len() >= 32,
                 "test API bearer token must be at least 32 characters"
             );
-            let app = build_app(adapter, tenant)?;
-            let service = app.into_service(HttpOptions::new());
+            let (_app, service) = crate::build(adapter, tenant).await?;
             let router =
                 axum::Router::new()
                     .fallback_service(service)
@@ -138,20 +136,12 @@ pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()
     Ok(())
 }
 
-pub async fn run_app() -> Result<()> {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    tracing_subscriber::fmt()
-        .with_env_filter("warn")
-        .with_writer(std::io::stderr)
-        .init();
-    let role = std::env::args()
-        .nth(1)
-        .context("usage: hosted-system init|inspect|serve|worker")?;
+pub async fn dispatch_role(role: &str) -> Result<()> {
     if role == "admission-native" {
         return admission::native().await;
     }
     if role == "capacity-local" || role.starts_with("recovery-") {
-        return capacity::run_local(&role).await;
+        return capacity::run_local(role).await;
     }
     if role == "network-probe" {
         return connections::network_probe().await;
@@ -168,5 +158,17 @@ pub async fn run_app() -> Result<()> {
         println!("{}", serde_json::to_string(&rows)?);
         return Ok(());
     }
-    connections::dispatch(&role).await
+    connections::dispatch(role).await
+}
+
+pub async fn run_app() -> Result<()> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    tracing_subscriber::fmt()
+        .with_env_filter("warn")
+        .with_writer(std::io::stderr)
+        .init();
+    let role = std::env::args()
+        .nth(1)
+        .context("usage: hosted-system init|inspect|serve|worker")?;
+    dispatch_role(&role).await
 }
