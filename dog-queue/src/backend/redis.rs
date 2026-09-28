@@ -122,10 +122,7 @@ impl RedisBackend {
 }
 impl RedisStore {
     async fn check_legacy(&self, tenant: &str) -> QueueResult<()> {
-        if self.checked.contains(tenant) {
-            return Ok(());
-        }
-        if self.checked.insert(tenant.into()) {
+        if !self.checked.contains(tenant) {
             let (exists, _): (bool, usize) = redis::pipe()
                 .cmd("EXISTS")
                 .arg(format!("{{dogrs-queue-v1}}:state:{}", hex(tenant)))
@@ -134,14 +131,11 @@ impl RedisStore {
                 .arg(tenant)
                 .query_async(&mut self.manager.clone())
                 .await
-                .map_err(|e| {
-                    self.checked.remove(tenant);
-                    error(e)
-                })?;
+                .map_err(error)?;
             if exists {
-                self.checked.remove(tenant);
                 return Err(QueueError::InvalidConfig("Legacy Redis tenant detected: drain/export it with the previous release before selecting a fresh v2 tenant; never run legacy writers against a migrated tenant".into()));
             }
+            self.checked.insert(tenant.into());
         }
         Ok(())
     }
