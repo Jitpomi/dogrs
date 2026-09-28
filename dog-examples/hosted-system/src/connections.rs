@@ -338,3 +338,76 @@ pub async fn dispatch(role: &str) -> Result<()> {
         _ => bail!("unknown DOGRS_BACKEND"),
     }
 }
+
+/// Measures PostgreSQL transport latency across 100 ping tasks.
+pub async fn network_probe() -> Result<()> {
+    let db = Arc::new(postgres_client().await?);
+    for bytes in [1024usize, 16384, 65536] {
+        let payload = Arc::new(vec![42u8; bytes]);
+        let mut tasks = tokio::task::JoinSet::new();
+        let start = std::time::Instant::now();
+        for index in 0..100u32 {
+            tokio::time::sleep_until(tokio::time::Instant::from_std(
+                start + Duration::from_millis(u64::from(index) * 100),
+            ))
+            .await;
+            let db = db.clone();
+            let payload = payload.clone();
+            tasks.spawn(async move {
+                let start = std::time::Instant::now();
+                let row = db
+                    .query_typed_one(
+                        "SELECT octet_length($1::bytea)",
+                        &[(&*payload, tokio_postgres::types::Type::BYTEA)],
+                    )
+                    .await?;
+                anyhow::ensure!(
+                    row.get::<_, i32>(0) == payload.len() as i32,
+                    "unexpected transport echo"
+                );
+                Ok::<_, anyhow::Error>(start.elapsed().as_secs_f64() * 1000.0)
+            });
+        }
+        let mut timings = vec![];
+        while let Some(result) = tasks.join_next().await {
+            timings.push(result??);
+        }
+        timings.sort_by(f64::total_cmp);
+        println!(
+            "{}",
+            json!({"probe":"postgres_transport_only","payload_bytes":bytes,"requests":100,"offered_rps":10,"seconds":start.elapsed().as_secs_f64(),"p50_ms":timings[49],"p95_ms":timings[94]})
+        );
+    }
+    Ok(())
+}
+
+// Cluster discovery can elect a leader before peer placement becomes available.
+// Retry only that structured transient error; quota/auth/config failures stay fatal.
+#[cfg(feature = "nats")]
+pub async fn create_fixture_bucket(
+    js: &async_nats::jetstream::Context,
+    config: async_nats::jetstream::kv::Config,
+) -> Result<async_nats::jetstream::kv::Store> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        match js.create_key_value(config.clone()).await {
+            Ok(bucket) => return Ok(bucket),
+            Err(error) => {
+                let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+                let mut placement_pending = false;
+                while let Some(current) = cause {
+                    if let Some(server) = current.downcast_ref::<async_nats::jetstream::Error>() {
+                        placement_pending = server.error_code()
+                            == async_nats::jetstream::ErrorCode::CLUSTER_NO_PEERS;
+                    }
+                    cause = current.source();
+                }
+                if !placement_pending || tokio::time::Instant::now() >= deadline {
+                    return Err(error.into());
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
