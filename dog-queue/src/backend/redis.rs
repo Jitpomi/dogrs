@@ -123,10 +123,13 @@ impl RedisBackend {
 impl RedisStore {
     async fn check_legacy(&self, tenant: &str) -> QueueResult<()> {
         if !self.checked.contains(tenant) {
-            let exists: bool = self
-                .manager
-                .clone()
-                .exists(format!("{{dogrs-queue-v1}}:state:{}", hex(tenant)))
+            let (exists, _): (bool, usize) = redis::pipe()
+                .cmd("EXISTS")
+                .arg(format!("{{dogrs-queue-v1}}:state:{}", hex(tenant)))
+                .cmd("SADD")
+                .arg(TENANTS)
+                .arg(tenant)
+                .query_async(&mut self.manager.clone())
                 .await
                 .map_err(error)?;
             if exists {
@@ -246,27 +249,8 @@ impl RedisStore {
                     read.arg("read");
                 }
             }
-            // Enqueue needs only the authoritative server clock, not existing
-            // record metadata. Pipeline tenant registration and TIME instead of
-            // waiting for registration before making a second empty read call.
-            // The write/CAS still follows the acknowledged registration, so
-            // failed registration cannot leave an undiscoverable accepted job.
             let (now, values) = if matches!(op, Operation::Enqueue(_)) {
-                let (clock,): (Vec<i64>,) = redis::pipe()
-                    .cmd("SADD")
-                    .arg(TENANTS)
-                    .arg(tenant)
-                    .ignore()
-                    .cmd("TIME")
-                    .query_async(&mut self.manager.clone())
-                    .await
-                    .map_err(error)?;
-                if clock.len() != 2 {
-                    return Err(error("Invalid Redis clock"));
-                }
-                let now = DateTime::from_timestamp_millis(clock[0] * 1000 + clock[1] / 1000)
-                    .ok_or_else(|| error("Invalid Redis clock"))?;
-                (now, Vec::new())
+                (Utc::now(), Vec::new())
             } else {
                 let mut values: Vec<String> = read
                     .invoke_async(&mut self.manager.clone())
@@ -398,4 +382,3 @@ impl StateStore for RedisStore {
         .map_err(|_| error("Redis tenant lookup timed out"))?
     }
 }
-
