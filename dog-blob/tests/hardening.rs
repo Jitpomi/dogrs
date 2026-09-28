@@ -420,7 +420,7 @@ async fn configuration_and_session_capacity_fail_closed() {
     begin(&c, 1).await;
 }
 #[tokio::test]
-async fn automatic_multipart_and_trusted_file_handle() {
+async fn validated_upload_avoids_redundant_coordinator_staging() {
     let store = Store::default();
     let mut conf = config();
     conf.multipart_threshold_bytes = 4;
@@ -440,10 +440,8 @@ async fn automatic_multipart_and_trusted_file_handle() {
         .unwrap();
     assert!(temp.path().exists());
     assert_eq!(store.objects.lock().unwrap()[&receipt.key], b"123456");
-    let UploadInfo::Multipart { upload_id, .. } = receipt.upload else {
-        panic!("multipart not used")
-    };
-    adapter.forget_upload(ctx("a"), upload_id).await.unwrap();
+    assert!(matches!(receipt.upload, UploadInfo::Single { .. }));
+    assert_eq!(store.objects.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -637,4 +635,269 @@ async fn chunk_size_hint_is_checked_against_actual_assembled_bytes() {
         .await
         .is_err());
     assert!(store.objects.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn shared_staging_budget_counts_once_and_releases_on_errors() {
+    let resources = UploadResources::new(UploadLimits {
+        max_staging_bytes: 4,
+        ..Default::default()
+    })
+    .unwrap();
+    let adapter = BlobAdapter::new(Arc::new(
+        BlobState::new(Store::default(), config()).with_resources(resources.clone()),
+    ));
+    adapter
+        .put(ctx("a"), BlobPut::new(), body(b"data"))
+        .await
+        .unwrap();
+    assert_eq!(resources.usage().staged_files, 1);
+    assert_eq!(resources.usage().peak_staging_bytes, 4);
+    assert_eq!(resources.usage().staging_bytes, 0);
+    assert!(matches!(
+        adapter.put(ctx("a"), BlobPut::new(), body(b"12345")).await,
+        Err(BlobError::ResourceLimit { .. })
+    ));
+    assert_eq!(resources.usage().staging_bytes, 0);
+    assert_eq!(resources.usage().active_uploads, 0);
+}
+
+#[tokio::test]
+async fn admission_idle_deadline_and_cancellation_release_resources() {
+    use std::time::Duration;
+    let resources = UploadResources::new(UploadLimits {
+        staging_directory: None,
+        max_concurrent_uploads: 1,
+        max_staging_bytes: 8,
+        idle_timeout: Duration::from_secs(5),
+        upload_timeout: Duration::from_secs(5),
+    })
+    .unwrap();
+    let adapter = Arc::new(BlobAdapter::new(Arc::new(
+        BlobState::new(Store::default(), config()).with_resources(resources.clone()),
+    )));
+    let running = adapter.clone();
+    let task = tokio::spawn(async move {
+        running
+            .put(
+                ctx("a"),
+                BlobPut::new(),
+                Box::pin(body(b"data").chain(futures::stream::pending())),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while resources.usage().staging_bytes != 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        adapter.put(ctx("b"), BlobPut::new(), body(b"x")).await,
+        Err(BlobError::ResourceLimit { .. })
+    ));
+    task.abort();
+    let _ = task.await;
+    assert_eq!(resources.usage().staging_bytes, 0);
+    assert_eq!(resources.usage().active_uploads, 0);
+    for idle in [true, false] {
+        let resources = UploadResources::new(UploadLimits {
+            idle_timeout: Duration::from_millis(if idle { 20 } else { 1000 }),
+            upload_timeout: Duration::from_millis(if idle { 1000 } else { 20 }),
+            ..Default::default()
+        })
+        .unwrap();
+        let adapter = BlobAdapter::new(Arc::new(
+            BlobState::new(Store::default(), config()).with_resources(resources.clone()),
+        ));
+        let error = adapter
+            .put(
+                ctx("a"),
+                BlobPut::new(),
+                Box::pin(body(b"data").chain(futures::stream::pending())),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BlobError::Timeout { .. }));
+        assert_eq!(resources.usage().staging_bytes, 0);
+        assert_eq!(resources.usage().active_uploads, 0);
+    }
+}
+
+#[tokio::test]
+async fn retained_chunks_share_budget_and_cleanup_releases_it() {
+    let resources = UploadResources::new(UploadLimits {
+        max_staging_bytes: 4,
+        ..Default::default()
+    })
+    .unwrap();
+    let adapter = BlobAdapter::new(Arc::new(
+        BlobState::new(Store::default(), config()).with_resources(resources.clone()),
+    ));
+    let id = ChunkSessionId::new();
+    adapter
+        .put_chunk(ctx("a"), id.clone(), 0, 2, BlobPut::new(), b"data".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(resources.usage().staging_bytes, 4);
+    assert!(matches!(
+        adapter.put(ctx("b"), BlobPut::new(), body(b"x")).await,
+        Err(BlobError::ResourceLimit { .. })
+    ));
+    adapter.forget_chunk(ctx("a"), id).await.unwrap();
+    assert_eq!(resources.usage().staging_bytes, 0);
+}
+
+#[tokio::test]
+async fn cleanup_fences_sessions_and_removes_orphans_without_touching_final_objects() {
+    let store = Store::default();
+    let c = coordinator(store.clone(), MemoryUploadSessionStore::new());
+    let session = begin(&c, 1).await;
+    c.accept_part(ctx("a"), &session.upload_id, 1, body(b"data"))
+        .await
+        .unwrap();
+    let prefix = DefaultKeyStrategy
+        .staging_prefix("a", session.upload_id.as_str())
+        .unwrap();
+    store
+        .objects
+        .lock()
+        .unwrap()
+        .insert(format!("{prefix}orphan"), b"lost".to_vec());
+    assert!(c
+        .reconcile_staging(ctx("a"), &session.upload_id)
+        .await
+        .is_err());
+    let receipt = c.complete(ctx("a"), &session.upload_id).await.unwrap();
+    assert!(c
+        .reconcile_staging(ctx("b"), &session.upload_id)
+        .await
+        .is_err());
+    assert_eq!(
+        c.reconcile_staging(ctx("a"), &session.upload_id)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(store.objects.lock().unwrap()[&receipt.key], b"data");
+    assert_eq!(
+        c.recover_upload(ctx("a"), &session.upload_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        receipt.id
+    );
+}
+
+#[tokio::test]
+async fn base64_limit_is_configurable_and_independent_of_part_size() {
+    let mut cfg = config();
+    cfg.max_base64_bytes = 6;
+    let adapter = BlobAdapter::new(Arc::new(BlobState::new(Store::default(), cfg)));
+    assert!(adapter
+        .put_from_multipart(ctx("a"), &serde_json::json!({"file":"MTIzNDU2"}))
+        .await
+        .is_ok());
+    assert!(adapter
+        .put_from_multipart(ctx("a"), &serde_json::json!({"file":"MTIzNDU2Nw=="}))
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn staging_crash_child() {
+    let Ok(path) = std::env::var("DOGRS_STAGING_CRASH_TEST") else {
+        return;
+    };
+    let resources = UploadResources::new(UploadLimits {
+        staging_directory: Some(path.clone().into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let adapter = Arc::new(BlobAdapter::new(Arc::new(
+        BlobState::new(Store::default(), config()).with_resources(resources.clone()),
+    )));
+    tokio::spawn(async move {
+        adapter
+            .put(
+                ctx("a"),
+                BlobPut::new(),
+                Box::pin(body(b"data").chain(futures::stream::pending())),
+            )
+            .await
+    });
+    while resources.usage().staging_bytes != 4 {
+        tokio::task::yield_now().await;
+    }
+    std::fs::write(std::path::Path::new(&path).join("ready"), b"ready").unwrap();
+    futures::future::pending::<()>().await;
+}
+#[tokio::test]
+async fn staging_sweep_preserves_live_process_and_cleans_after_crash() {
+    use std::time::Duration;
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let resources = UploadResources::new(UploadLimits {
+        staging_directory: Some(dir.path().into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut child = Child(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "staging_crash_child", "--nocapture"])
+            .env("DOGRS_STAGING_CRASH_TEST", dir.path())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !dir.path().join("ready").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(resources.cleanup_staging().await.unwrap(), 0);
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    assert_eq!(resources.cleanup_staging().await.unwrap(), 1);
+    assert_eq!(resources.cleanup_staging().await.unwrap(), 0);
+    assert!(
+        dir.path().join("ready").exists(),
+        "unrelated files must remain"
+    );
+}
+
+#[tokio::test]
+async fn empty_chunks_do_not_reset_the_idle_deadline_or_starve_the_runtime() {
+    let resources = UploadResources::new(UploadLimits {
+        idle_timeout: std::time::Duration::from_millis(20),
+        ..Default::default()
+    })
+    .unwrap();
+    let adapter = BlobAdapter::new(Arc::new(
+        BlobState::new(Store::default(), config()).with_resources(resources.clone()),
+    ));
+    let result = adapter
+        .put(
+            ctx("a"),
+            BlobPut::new(),
+            Box::pin(futures::stream::repeat_with(|| Ok(bytes::Bytes::new()))),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(BlobError::Timeout {
+            operation: "upload stream idle"
+        })
+    ));
+    assert_eq!(resources.usage().staging_bytes, 0);
 }

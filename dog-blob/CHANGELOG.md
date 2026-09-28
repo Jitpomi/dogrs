@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upload resource management and recovery
+- Reuse opaque validated uploads across adapters, coordinators and S3; avoid repeated disk staging.
+- Add shared concurrency/staging budgets, total and idle deadlines, configurable base64 limits, and cancellation-safe cleanup.
+- Add backend-neutral native multipart and pending-write journal traits, with S3 support and local durable OS-locked journals.
+- Add recovery for committed/abandoned native writes, expired coordinator sessions, orphan staging objects, and local files after process crashes.
+- Test live native multipart and coordinator disk usage, interrupted writes, process kills and cleanup exclusion.
+- Native receipts now contain recovery_id; acknowledge it after persisting the receipt. Input still requires one full validated staging copy.
+
+
 ### Security and correctness
 - Check tenant and actor ownership on every upload-session operation.
 - Reject request-supplied filesystem paths; accept trusted handles or bounded byte streams.

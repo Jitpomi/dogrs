@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 /// Receipt returned after successfully storing a blob
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobReceipt {
+    /// Native write journal identity; acknowledge only after persisting this receipt.
+    #[serde(default)]
+    pub recovery_id: Option<String>,
     pub id: BlobId,
     pub key: String,
     pub size_bytes: u64,
@@ -92,6 +95,7 @@ impl BlobReceipt {
             .as_secs() as i64;
 
         Self {
+            recovery_id: None,
             id,
             key,
             size_bytes,

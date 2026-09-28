@@ -26,12 +26,34 @@ pub(crate) fn put_options(put: &BlobPut) -> BlobResult<()> {
     }
     Ok(())
 }
-pub(crate) struct StagedFile {
-    path: tempfile::TempPath,
-    pub size: u64,
-    pub checksum: String,
+/// An immutable, privately owned upload validated by DogRS. No public constructor
+/// accepts a path. Backends may read path() while borrowing this value; consuming
+/// into_stream() retains both the file and its disk reservation until drop.
+pub struct ValidatedUpload {
+    path: std::path::PathBuf,
+    _directory: StagingDirectory,
+    _lock: std::fs::File,
+    pub(crate) size: u64,
+    pub(crate) checksum: String,
+    _disk: crate::resources::DiskReservation,
 }
-impl StagedFile {
+struct StagingDirectory(std::path::PathBuf);
+impl Drop for StagingDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+pub(crate) type StagedFile = ValidatedUpload;
+impl ValidatedUpload {
+    pub fn size_bytes(&self) -> u64 {
+        self.size
+    }
+    pub fn checksum(&self) -> &str {
+        &self.checksum
+    }
+    pub fn into_stream(self) -> ByteStream {
+        self.stream()
+    }
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
@@ -47,25 +69,67 @@ impl StagedFile {
 }
 /// Bounded disk staging validates the entire input before a backend can commit it.
 /// Only the caller's chunk and the buffered file writer are held in memory.
-pub(crate) async fn spool(mut body: ByteStream, limit: u64) -> BlobResult<StagedFile> {
-    let temp = tempfile::NamedTempFile::new()?;
-    let file = tokio::fs::File::from_std(temp.reopen()?);
-    let path = temp.into_temp_path();
+pub(crate) async fn spool_with(
+    mut body: ByteStream,
+    limit: u64,
+    resources: &crate::UploadResources,
+) -> BlobResult<StagedFile> {
+    let mut disk = resources.disk();
+    let directory = tempfile::Builder::new()
+        .prefix(".dogrs-building-")
+        .tempdir_in(resources.staging_directory())?;
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(directory.path().join("owner.lock"))?;
+    lock.lock()?;
+    // Publish the cleanup-visible name only after locking: a concurrent sweeper
+    // can never mistake an upload being initialized for an abandoned directory.
+    let published = resources
+        .staging_directory()
+        .join(format!("dogrs-upload-{}", uuid::Uuid::new_v4()));
+    std::fs::rename(directory.path(), &published)?;
+    drop(directory);
+    let directory = StagingDirectory(published);
+    let path = directory.0.join("data");
+    let file = tokio::fs::File::create(&path).await?;
     let mut writer = tokio::io::BufWriter::new(file);
     let mut size = 0_u64;
     let mut hash = Sha256::new();
-    while let Some(chunk) = body.next().await {
+    let mut last_progress = tokio::time::Instant::now();
+    while let Some(chunk) =
+        tokio::time::timeout_at(last_progress + resources.idle_timeout(), body.next())
+            .await
+            .map_err(|_| BlobError::Timeout {
+                operation: "upload stream idle",
+            })?
+    {
+        if last_progress.elapsed() >= resources.idle_timeout() {
+            return Err(BlobError::Timeout {
+                operation: "upload stream idle",
+            });
+        }
+        tokio::task::consume_budget().await;
         let chunk = chunk?;
+        if chunk.is_empty() {
+            continue;
+        }
+        last_progress = tokio::time::Instant::now();
         size = size
             .checked_add(chunk.len() as u64)
             .filter(|n| *n <= limit)
             .ok_or_else(|| BlobError::invalid("upload exceeds byte limit"))?;
+        disk.grow(chunk.len() as u64)?;
         writer.write_all(&chunk).await?;
         hash.update(&chunk);
     }
     writer.flush().await?;
     drop(writer);
-    Ok(StagedFile {
+    Ok(ValidatedUpload {
+        _directory: directory,
+        _lock: lock,
+        _disk: disk,
         path,
         size,
         checksum: format!("sha256:{:x}", hash.finalize()),

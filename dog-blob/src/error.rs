@@ -6,6 +6,10 @@ pub type BlobResult<T> = Result<T, BlobError>;
 /// Errors that can occur during blob operations
 #[derive(Error, Debug)]
 pub enum BlobError {
+    #[error("Upload resource limit reached: {resource}")]
+    ResourceLimit { resource: &'static str },
+    #[error("Upload timed out: {operation}")]
+    Timeout { operation: &'static str },
     #[error("Blob not found: {id}")]
     NotFound { id: String },
 

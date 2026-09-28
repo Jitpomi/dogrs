@@ -17,7 +17,7 @@ struct ChunkState {
     ctx: BlobCtx,
     total: u32,
     put: BlobPut,
-    directory: Option<tempfile::TempDir>,
+    files: BTreeMap<u32, crate::ValidatedUpload>,
     parts: BTreeMap<u32, (u64, String)>,
     bytes: u64,
     completed: Option<BlobReceipt>,
@@ -28,6 +28,8 @@ pub struct BlobState {
     keys: Arc<dyn BlobKeyStrategy>,
     uploads: Option<Arc<dyn UploadCoordinator>>,
     config: BlobConfig,
+    resources: crate::UploadResources,
+    journal: Arc<dyn crate::UploadJournal>,
     chunk_sessions: Arc<tokio::sync::Mutex<HashMap<ChunkSessionId, Arc<ChunkSlot>>>>,
 }
 /// The main blob adapter - this is what DogService implementations embed
@@ -42,6 +44,8 @@ impl BlobState {
             store: Arc::new(store),
             keys: Arc::new(DefaultKeyStrategy),
             uploads: None,
+            journal: Arc::new(crate::MemoryUploadJournal::default()),
+            resources: crate::UploadResources::from_limits(config.upload_limits.clone()),
             config,
             chunk_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
@@ -57,11 +61,22 @@ impl BlobState {
             store: Arc::new(store),
             keys: Arc::new(keys),
             uploads: None,
+            journal: Arc::new(crate::MemoryUploadJournal::default()),
+            resources: crate::UploadResources::from_limits(config.upload_limits.clone()),
             config,
             chunk_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
+    pub fn with_journal(mut self, journal: Arc<dyn crate::UploadJournal>) -> Self {
+        self.journal = journal;
+        self
+    }
+    /// Share admission and staging budgets with other adapters/coordinators.
+    pub fn with_resources(mut self, resources: crate::UploadResources) -> Self {
+        self.resources = resources;
+        self
+    }
     /// Add upload coordinator for multipart/resumable uploads
     pub fn with_uploads<U: UploadCoordinator + 'static>(mut self, coordinator: U) -> Self {
         self.uploads = Some(Arc::new(coordinator));
@@ -75,8 +90,58 @@ impl BlobAdapter {
         Self { state }
     }
 
+    /// Administrative pending writes; do not expose across tenants in a public API.
+    pub fn pending_writes(&self) -> BlobResult<Vec<crate::PendingWrite>> {
+        self.state.journal.list()
+    }
+    pub async fn reconcile_write(&self, id: &str) -> BlobResult<Option<crate::RecoveryReport>> {
+        let native = self
+            .state
+            .store
+            .native_multipart()
+            .ok_or(BlobError::Unsupported)?;
+        self.state
+            .resources
+            .run(crate::reconcile_write(
+                native,
+                self.state.journal.as_ref(),
+                id,
+            ))
+            .await
+    }
+    /// After saving the receipt/recovery report, remove its journal record.
+    /// Uncertain writes cannot be acknowledged. Live writers return false.
+    pub async fn acknowledge_write(&self, id: &str) -> BlobResult<bool> {
+        let Some(mut lease) = self.state.journal.acquire(id)? else {
+            return Ok(false);
+        };
+        let native = self
+            .state
+            .store
+            .native_multipart()
+            .ok_or(BlobError::Unsupported)?;
+        if lease.record().scope != native.recovery_scope() {
+            return Err(BlobError::invalid("recovery scope mismatch"));
+        }
+        if native.inspect(lease.record()).await? == crate::WriteOutcome::Uncertain {
+            return Err(BlobError::invalid("write outcome remains uncertain"));
+        }
+        lease.acknowledge()?;
+        Ok(true)
+    }
     /// Store a blob from a stream (single-shot upload)
     pub async fn put(
+        &self,
+        ctx: BlobCtx,
+        put: BlobPut,
+        body: ByteStream,
+    ) -> BlobResult<BlobReceipt> {
+        self.state
+            .resources
+            .run(self.put_inner(ctx, put, body))
+            .await
+    }
+    async fn put_inner(
         &self,
         ctx: BlobCtx,
         put: BlobPut,
@@ -91,39 +156,63 @@ impl BlobAdapter {
         {
             return Err(BlobError::invalid("blob exceeds byte limit"));
         }
-        let staged = bounded::spool(body, self.state.config.max_blob_bytes).await?;
+        let staged = bounded::spool_with(
+            body,
+            self.state.config.max_blob_bytes,
+            &self.state.resources,
+        )
+        .await?;
         if put.size_hint.is_some_and(|size| size != staged.size) {
             return Err(BlobError::invalid("declared and received sizes differ"));
         }
         let size = staged.size;
         let checksum = staged.checksum.clone();
-        if size >= self.state.config.multipart_threshold_bytes && self.state.uploads.is_some() {
-            return self.put_staged_multipart(ctx, put, staged).await;
-        }
-        let body = staged.stream();
-
         let blob_id = BlobId::new();
         let key = self
             .state
             .keys
             .object_key(&ctx.tenant_id, blob_id.as_str(), &put.key_hints);
 
-        // Store the blob with metadata if filename is available
-        let result = if put.filename.is_some() {
-            self.state
-                .store
-                .put_with_metadata(
+        let (result, recovery_id) = if size >= self.state.config.multipart_threshold_bytes {
+            if let Some(native) = self.state.store.native_multipart() {
+                let (result, id) = crate::native::upload(
+                    native,
+                    self.state.journal.as_ref(),
                     &key,
                     put.content_type.as_deref(),
                     put.filename.as_deref(),
-                    body,
+                    staged,
+                    &self.state.config.upload_rules,
                 )
-                .await?
+                .await?;
+                (result, Some(id))
+            } else {
+                (
+                    self.state
+                        .store
+                        .put_validated(
+                            &key,
+                            put.content_type.as_deref(),
+                            put.filename.as_deref(),
+                            staged,
+                        )
+                        .await?,
+                    None,
+                )
+            }
         } else {
-            self.state
-                .store
-                .put(&key, put.content_type.as_deref(), body)
-                .await?
+            (
+                self.state
+                    .store
+                    .put_validated(
+                        &key,
+                        put.content_type.as_deref(),
+                        put.filename.as_deref(),
+                        staged,
+                    )
+                    .await?,
+                None,
+            )
         };
 
         if result.size_bytes != size {
@@ -136,6 +225,7 @@ impl BlobAdapter {
         let mut receipt =
             BlobReceipt::new(blob_id, key, result.size_bytes).with_attributes(put.attributes);
 
+        receipt.recovery_id = recovery_id;
         if let Some(ct) = put.content_type {
             receipt = receipt.with_content_type(ct);
         }
@@ -439,7 +529,7 @@ impl BlobAdapter {
         let encoded = data.get("file").and_then(|v| v.as_str()).ok_or_else(|| {
             BlobError::invalid("file must be base64; JSON file paths are not accepted")
         })?;
-        let max = max.min(8 * 1024 * 1024);
+        let max = max.min(64 * 1024 * 1024);
         if encoded.len() as u64 > max.div_ceil(3) * 4 {
             return Err(BlobError::invalid("encoded file exceeds byte limit"));
         }
@@ -462,39 +552,6 @@ impl BlobAdapter {
         self.put(ctx, put, Box::pin(tokio_util::io::ReaderStream::new(file)))
             .await
     }
-    async fn put_staged_multipart(
-        &self,
-        ctx: BlobCtx,
-        mut put: BlobPut,
-        staged: bounded::StagedFile,
-    ) -> BlobResult<BlobReceipt> {
-        use tokio::io::{AsyncReadExt, AsyncSeekExt};
-        put.size_hint = Some(staged.size);
-        let session = self.begin_multipart(ctx.clone(), put).await?;
-        let result = async {
-            let part_size = self.state.config.upload_rules.part_size;
-            for index in 0..staged.size.div_ceil(part_size) {
-                let mut file = tokio::fs::File::open(staged.path()).await?;
-                file.seek(std::io::SeekFrom::Start(index * part_size))
-                    .await?;
-                let stream = tokio_util::io::ReaderStream::new(file.take(part_size));
-                self.upload_part(
-                    ctx.clone(),
-                    session.upload_id.clone(),
-                    index as u32 + 1,
-                    Box::pin(stream),
-                )
-                .await?;
-            }
-            self.complete_multipart(ctx.clone(), session.upload_id.clone())
-                .await
-        }
-        .await;
-        if result.is_err() {
-            let _ = self.abort_multipart(ctx, session.upload_id).await;
-        }
-        result
-    }
     /// Remove a caller-owned chunk session and its private files. This waits for
     /// any in-flight operation; it never deletes an already completed blob.
     pub async fn forget_chunk(&self, ctx: BlobCtx, id: ChunkSessionId) -> BlobResult<()> {
@@ -513,7 +570,7 @@ impl BlobAdapter {
             return Err(BlobError::invalid("chunk session unavailable"));
         }
         session.closed = true;
-        session.directory = None;
+        session.files.clear();
         let mut sessions = self.state.chunk_sessions.lock().await;
         if sessions
             .get(&id)
@@ -560,6 +617,20 @@ impl BlobAdapter {
         put: BlobPut,
         bytes: Vec<u8>,
     ) -> BlobResult<ChunkResult> {
+        self.state
+            .resources
+            .run(self.put_chunk_inner(ctx, id, index, total, put, bytes))
+            .await
+    }
+    async fn put_chunk_inner(
+        &self,
+        ctx: BlobCtx,
+        id: ChunkSessionId,
+        index: u32,
+        total: u32,
+        put: BlobPut,
+        bytes: Vec<u8>,
+    ) -> BlobResult<ChunkResult> {
         self.state.config.validate()?;
         bounded::context(&ctx)?;
         bounded::identifier(id.as_str())?;
@@ -597,7 +668,7 @@ impl BlobAdapter {
                     ctx: ctx.clone(),
                     total,
                     put: put.clone(),
-                    directory: Some(tempfile::tempdir()?),
+                    files: BTreeMap::new(),
                     parts: BTreeMap::new(),
                     bytes: 0,
                     completed: None,
@@ -642,20 +713,15 @@ impl BlobAdapter {
                 .filter(|n| *n <= self.state.config.max_blob_bytes)
                 .ok_or_else(|| BlobError::invalid("blob exceeds byte limit"))?;
             let size = bytes.len() as u64;
-            let staged = bounded::spool(
+            let staged = bounded::spool_with(
                 Box::pin(futures::stream::once(async {
                     Ok(bytes::Bytes::from(bytes))
                 })),
                 rules.part_size,
+                &self.state.resources,
             )
             .await?;
-            let target = session
-                .directory
-                .as_ref()
-                .unwrap()
-                .path()
-                .join(format!("chunk-{index}"));
-            tokio::fs::rename(staged.path(), target).await?;
+            session.files.insert(index, staged);
             session.parts.insert(index, (size, hash));
             session.bytes = total_bytes;
         }
@@ -671,14 +737,7 @@ impl BlobAdapter {
             });
         }
         let paths: Vec<_> = (0..total)
-            .map(|n| {
-                session
-                    .directory
-                    .as_ref()
-                    .unwrap()
-                    .path()
-                    .join(format!("chunk-{n}"))
-            })
+            .map(|n| session.files[&n].path().to_path_buf())
             .collect();
         let body = Box::pin(async_stream::try_stream! {
             for path in paths {
@@ -692,14 +751,24 @@ impl BlobAdapter {
             return Err(BlobError::invalid("declared and received sizes differ"));
         }
         put.size_hint = Some(session.bytes);
-        let receipt = self.put(ctx, put, body).await?;
+        let receipt = self.put_inner(ctx, put, body).await?;
         session.completed = Some(receipt.clone());
-        session.directory.take();
+        session.files.clear();
         Ok(ChunkResult::Complete {
             receipt: Box::new(receipt),
         })
     }
     pub async fn put_from_multipart(
+        &self,
+        ctx: BlobCtx,
+        data: &serde_json::Value,
+    ) -> BlobResult<ChunkResult> {
+        self.state
+            .resources
+            .run(self.put_from_multipart_inner(ctx, data))
+            .await
+    }
+    async fn put_from_multipart_inner(
         &self,
         ctx: BlobCtx,
         data: &serde_json::Value,
@@ -721,7 +790,12 @@ impl BlobAdapter {
             self.state
                 .config
                 .max_blob_bytes
-                .min(self.state.config.upload_rules.part_size),
+                .min(self.state.config.max_base64_bytes)
+                .min(if count == 3 {
+                    self.state.config.upload_rules.part_size
+                } else {
+                    u64::MAX
+                }),
         )?;
         let mut put = BlobPut::new();
         put.filename = data
@@ -744,7 +818,7 @@ impl BlobAdapter {
                     .ok_or_else(|| BlobError::invalid("invalid chunk number"))?;
                 u32::try_from(n).map_err(|_| BlobError::invalid("chunk number overflow"))
             };
-            self.put_chunk(
+            self.put_chunk_inner(
                 ctx,
                 ChunkSessionId::from_string(id.into()),
                 number("dzchunkindex")?,
@@ -757,7 +831,7 @@ impl BlobAdapter {
             let stream = Box::pin(futures::stream::once(async {
                 Ok(bytes::Bytes::from(bytes))
             }));
-            self.put(ctx, put, stream)
+            self.put_inner(ctx, put, stream)
                 .await
                 .map(|receipt| ChunkResult::Complete {
                     receipt: Box::new(receipt),
