@@ -141,7 +141,7 @@ pub async fn dispatch_role(role: &str) -> Result<()> {
         return admission::native().await;
     }
     if role == "capacity-local" || role.starts_with("recovery-") {
-        return capacity::run_local(role).await;
+        return connections::dispatch_local(role).await;
     }
     if role == "network-probe" {
         return connections::network_probe().await;
