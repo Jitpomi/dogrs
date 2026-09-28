@@ -7,9 +7,11 @@ use dog_core::DogAppBuilder;
 use dog_queue::{QueueAdapter, QueueBackend};
 use serde_json::Value;
 
+pub mod adapters;
 pub mod payments;
 pub mod types;
 
+pub use adapters::PaymentsAdapter;
 pub use payments::{BillingService, RecordPayment};
 pub use types::*;
 

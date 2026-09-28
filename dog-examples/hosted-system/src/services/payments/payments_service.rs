@@ -8,9 +8,9 @@ use anyhow::{Context, Result};
 use dog_core::{DogService, ServiceCapabilities, TenantContext};
 use dog_queue::{Job, JobError, JobId, QueueAdapter, QueueBackend, QueueCtx};
 use serde_json::{json, Value};
-use tokio_postgres::Client;
 
-use super::payments_schema::{validate_status_batch, RecordPayment};
+use super::payments_schema::RecordPayment;
+use crate::services::adapters::PaymentsAdapter;
 use crate::services::types::BillingContext;
 
 pub struct BillingService<B: QueueBackend> {
@@ -33,7 +33,6 @@ impl<B: QueueBackend + 'static> DogService<Value, ()> for BillingService<B> {
     async fn create(&self, _: &TenantContext, data: Value, _: ()) -> Result<Value> {
         if let Some(ids) = data.get("status_ids") {
             let ids: Vec<String> = serde_json::from_value(ids.clone())?;
-            validate_status_batch(&ids)?;
             let ids: Vec<JobId> = ids.into_iter().map(JobId::from).collect();
             let snapshots = self
                 .adapter
@@ -55,8 +54,6 @@ impl<B: QueueBackend + 'static> DogService<Value, ()> for BillingService<B> {
         }
 
         let job: RecordPayment = serde_json::from_value(data)?;
-        job.validate()?;
-
         let id = self
             .adapter
             .enqueue(QueueCtx::new(&self.tenant), job)
@@ -86,34 +83,6 @@ impl<B: QueueBackend + 'static> DogService<Value, ()> for BillingService<B> {
     }
 }
 
-async fn record_attempt(
-    client: &Client,
-    tenant: &str,
-    invoice: &str,
-) -> Result<i32, tokio_postgres::Error> {
-    let row = client
-        .query_one(
-            "INSERT INTO dogrs_validation_attempts (tenant,invoice,attempts) VALUES ($1,$2,1) ON CONFLICT (tenant,invoice) DO UPDATE SET attempts=dogrs_validation_attempts.attempts+1 RETURNING attempts",
-            &[&tenant, &invoice],
-        )
-        .await?;
-    Ok(row.get(0))
-}
-
-async fn record_effect(
-    client: &Client,
-    tenant: &str,
-    invoice: &str,
-    worker_id: &str,
-) -> Result<u64, tokio_postgres::Error> {
-    client
-        .execute(
-            "INSERT INTO dogrs_validation_effects (tenant,invoice,worker) VALUES ($1,$2,$3) ON CONFLICT (tenant,invoice) DO NOTHING",
-            &[&tenant, &invoice, &worker_id],
-        )
-        .await
-}
-
 #[async_trait::async_trait]
 impl Job for RecordPayment {
     type Context = BillingContext;
@@ -126,7 +95,7 @@ impl Job for RecordPayment {
 
     async fn execute(&self, ctx: BillingContext) -> Result<Value, JobError> {
         let fail = |e: tokio_postgres::Error| JobError::retryable(e.to_string());
-        let attempts = record_attempt(&ctx.db, &ctx.tenant, &self.invoice)
+        let attempts = PaymentsAdapter::record_attempt(&ctx.db, &ctx.tenant, &self.invoice)
             .await
             .map_err(fail)?;
 
@@ -140,7 +109,7 @@ impl Job for RecordPayment {
             tokio::time::sleep(Duration::from_secs(18)).await;
         }
 
-        let inserted = record_effect(
+        let inserted = PaymentsAdapter::record_effect(
             &ctx.db,
             &ctx.tenant,
             &self.invoice,
