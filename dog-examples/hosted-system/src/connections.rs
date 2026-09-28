@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::{bail, Result};
 #[cfg(feature = "nats")]
-use dog_queue::QueueCtx;
+use dog_queue::{QueueBackend, QueueCtx};
 use serde_json::json;
 use tokio_postgres::Client;
 use tokio_postgres_rustls::MakeRustlsConnect;
