@@ -90,7 +90,7 @@ pub(crate) async fn spool_with(
         .staging_directory()
         .join(format!("dogrs-upload-{}", uuid::Uuid::new_v4()));
     std::fs::rename(directory.path(), &published)?;
-    drop(directory);
+    let _ = directory.keep(); // Disarm cleanup of the old, unpublished name.
     let directory = StagingDirectory(published);
     let path = directory.0.join("data");
     let file = tokio::fs::File::create(&path).await?;
