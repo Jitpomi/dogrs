@@ -10,6 +10,7 @@ anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
 dog-core = { path = "../../dog-core" }
+dog-schema = { path = "../../dog-schema" }
 dog-transport = { path = "../../dog-transport", features = ["http"] }
 dog-queue = { path = "../../dog-queue", features = ["postgres"] }
 serde = { version = "1", features = ["derive"] }

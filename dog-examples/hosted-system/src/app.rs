@@ -1,20 +1,25 @@
-//! A synthetic billing system for hosted infrastructure validation. No real payments or email.
-pub(crate) use crate::services::{payments::payments_service::BillingService, types::*};
+//! Application construction and composition of services, hooks, channels, and runtime runners.
+
+#[allow(unused_imports)]
+pub(crate) use crate::services::{types::*, BillingService, RecordPayment};
 pub(crate) use crate::{admission, capacity, connections, recovery};
 pub(crate) use anyhow::{bail, Context, Result};
-pub(crate) use dog_core::{DogAppBuilder, DogService, TenantContext};
+pub(crate) use dog_core::{DogApp, DogAppBuilder};
+#[allow(unused_imports)]
 pub(crate) use dog_queue::{
     Job, JobError, JobId, QueueAdapter, QueueBackend, QueueConfig, QueueCtx,
 };
 pub(crate) use dog_transport::{HttpOptions, IntoDogService};
 pub(crate) use serde::{Deserialize, Serialize};
 pub(crate) use serde_json::{json, Value};
+#[allow(unused_imports)]
 pub(crate) use std::{borrow::Cow, sync::Arc, time::Duration};
 pub(crate) use tokio_postgres::Client;
 
 pub(crate) fn env(name: &str) -> Result<String> {
     std::env::var(name).with_context(|| format!("missing {name}"))
 }
+
 pub(crate) fn tenant() -> Result<String> {
     let value = env("DOGRS_TEST_TENANT")?;
     anyhow::ensure!(
@@ -23,9 +28,22 @@ pub(crate) fn tenant() -> Result<String> {
     );
     Ok(value)
 }
+
 pub(crate) const LEASE: Duration = Duration::from_secs(8);
 
-pub(crate) async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {
+/// Constructs the DogApp by composing services, global hooks, and channels.
+pub fn build_app<B: QueueBackend + 'static>(
+    adapter: Arc<QueueAdapter<B>>,
+    tenant: String,
+) -> Result<DogApp<Value, ()>> {
+    let mut builder = DogAppBuilder::<Value, ()>::new();
+    crate::hooks::register_global_hooks(&mut builder)?;
+    crate::channels::configure(&mut builder)?;
+    crate::services::configure(&mut builder, adapter, tenant)?;
+    Ok(builder.build())
+}
+
+pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {
     if role == "capacity" {
         return capacity::run(backend).await;
     }
@@ -62,9 +80,8 @@ pub(crate) async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Re
                 token.len() >= 32,
                 "test API bearer token must be at least 32 characters"
             );
-            let mut builder = DogAppBuilder::<Value, ()>::new();
-            builder.register_service("payments", Arc::new(BillingService { adapter, tenant }));
-            let service = builder.build().into_service(HttpOptions::new());
+            let app = build_app(adapter, tenant)?;
+            let service = app.into_service(HttpOptions::new());
             let router =
                 axum::Router::new()
                     .fallback_service(service)
@@ -132,6 +149,7 @@ pub(crate) async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Re
     }
     Ok(())
 }
+
 pub async fn run_app() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     tracing_subscriber::fmt()
