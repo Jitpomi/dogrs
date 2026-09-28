@@ -30,11 +30,10 @@ pub fn tenant() -> Result<String> {
     Ok(value)
 }
 
-pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {
-    if role == "capacity" {
-        return capacity::run(backend).await;
-    }
-    let tenant = tenant()?;
+/// Builds and registers a configured QueueAdapter for harness execution.
+pub async fn build_queue_adapter<B: QueueBackend + 'static>(
+    backend: B,
+) -> Result<Arc<QueueAdapter<B>>> {
     let max_payload: usize = std::env::var("DOGRS_TEST_MAX_PAYLOAD")
         .unwrap_or_else(|_| "4096".into())
         .parse()?;
@@ -60,80 +59,113 @@ pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()
         },
     )?);
     adapter.register_job::<RecordPayment>().await?;
+    Ok(adapter)
+}
+
+/// Runs the HTTP API service with Bearer token authentication and loopback binding.
+pub async fn serve<B: QueueBackend + 'static>(
+    adapter: Arc<QueueAdapter<B>>,
+    tenant: String,
+) -> Result<()> {
+    let token = env("DOGRS_TEST_TOKEN")?;
+    anyhow::ensure!(
+        token.len() >= 32,
+        "test API bearer token must be at least 32 characters"
+    );
+    let (_app, service) = crate::build_with(adapter, tenant).await?;
+    let expected_auth = format!("Bearer {token}");
+
+    let router = axum::Router::new()
+        .fallback_service(service)
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let expected = expected_auth.clone();
+                async move {
+                    if request
+                        .headers()
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        != Some(expected.as_str())
+                    {
+                        return axum::response::IntoResponse::into_response(
+                            axum::http::StatusCode::UNAUTHORIZED,
+                        );
+                    }
+                    next.run(request).await
+                }
+            },
+        ));
+
+    // Loopback only. A deployed reverse proxy must provide authenticated HTTPS.
+    let address = env("DOGRS_TEST_BIND").unwrap_or_else(|_| "127.0.0.1:38171".into());
+    let listener = tokio::net::TcpListener::bind(&address).await?;
+    println!("API_READY {address}");
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
+    Ok(())
+}
+
+/// Runs background workers for billing payment processing with graceful shutdown.
+pub async fn run_worker<B: QueueBackend + 'static>(
+    adapter: Arc<QueueAdapter<B>>,
+    tenant: String,
+) -> Result<()> {
+    let db = Arc::new(connections::postgres_client().await?);
+    let ctx = BillingContext {
+        db,
+        tenant: tenant.clone(),
+        crash_after_effect: std::env::var("DOGRS_CRASH_AFTER_EFFECT").as_deref() == Ok("1"),
+    };
+    let handle = adapter
+        .start_workers(
+            QueueCtx::new(tenant),
+            ctx,
+            vec![RecordPayment::JOB_TYPE.into()],
+        )
+        .await?;
+    println!("WORKER_READY");
+    tokio::signal::ctrl_c().await?;
+    handle.shutdown().await?;
+    Ok(())
+}
+
+/// Verifies tenant boundary isolation for the test job.
+pub async fn verify_isolation<B: QueueBackend + 'static>(
+    adapter: Arc<QueueAdapter<B>>,
+    tenant: &str,
+) -> Result<()> {
+    let result = adapter
+        .backend()
+        .get_status(
+            QueueCtx::new(format!("{tenant}-other")),
+            JobId::from(env("DOGRS_TEST_JOB")?),
+        )
+        .await;
+    anyhow::ensure!(
+        matches!(result, Err(dog_queue::QueueError::JobNotFound(_))),
+        "tenant isolation failed"
+    );
+    println!("TENANT_ISOLATION_VERIFIED");
+    Ok(())
+}
+
+/// Executes the requested role against the given queue backend.
+pub async fn run<B: QueueBackend + 'static>(backend: B, role: &str) -> Result<()> {
+    if role == "capacity" {
+        return capacity::run(backend).await;
+    }
+    let tenant = tenant()?;
+    let adapter = build_queue_adapter(backend).await?;
+
     match role {
-        "serve" => {
-            let token = env("DOGRS_TEST_TOKEN")?;
-            anyhow::ensure!(
-                token.len() >= 32,
-                "test API bearer token must be at least 32 characters"
-            );
-            let (_app, service) = crate::build_with(adapter, tenant).await?;
-            let router =
-                axum::Router::new()
-                    .fallback_service(service)
-                    .layer(axum::middleware::from_fn(
-                        move |request: axum::extract::Request, next: axum::middleware::Next| {
-                            let expected = format!("Bearer {token}");
-                            async move {
-                                if request
-                                    .headers()
-                                    .get(axum::http::header::AUTHORIZATION)
-                                    .and_then(|v| v.to_str().ok())
-                                    != Some(expected.as_str())
-                                {
-                                    return axum::response::IntoResponse::into_response(
-                                        axum::http::StatusCode::UNAUTHORIZED,
-                                    );
-                                }
-                                next.run(request).await
-                            }
-                        },
-                    ));
-            // Loopback only. A deployed reverse proxy must provide authenticated HTTPS.
-            let address = env("DOGRS_TEST_BIND").unwrap_or_else(|_| "127.0.0.1:38171".into());
-            let listener = tokio::net::TcpListener::bind(&address).await?;
-            println!("API_READY {address}");
-            axum::serve(listener, router)
-                .with_graceful_shutdown(async {
-                    let _ = tokio::signal::ctrl_c().await;
-                })
-                .await?;
-        }
-        "worker" => {
-            let db = Arc::new(connections::postgres_client().await?);
-            let ctx = BillingContext {
-                db,
-                tenant: tenant.clone(),
-                crash_after_effect: std::env::var("DOGRS_CRASH_AFTER_EFFECT").as_deref() == Ok("1"),
-            };
-            let handle = adapter
-                .start_workers(
-                    QueueCtx::new(tenant),
-                    ctx,
-                    vec![RecordPayment::JOB_TYPE.into()],
-                )
-                .await?;
-            println!("WORKER_READY");
-            tokio::signal::ctrl_c().await?;
-            handle.shutdown().await?;
-        }
-        "isolation" => {
-            let result = adapter
-                .backend()
-                .get_status(
-                    QueueCtx::new(format!("{tenant}-other")),
-                    JobId::from(env("DOGRS_TEST_JOB")?),
-                )
-                .await;
-            anyhow::ensure!(
-                matches!(result, Err(dog_queue::QueueError::JobNotFound(_))),
-                "tenant isolation failed"
-            );
-            println!("TENANT_ISOLATION_VERIFIED");
-        }
+        "serve" => serve(adapter, tenant).await,
+        "worker" => run_worker(adapter, tenant).await,
+        "isolation" => verify_isolation(adapter, &tenant).await,
         _ => bail!("role must be serve, worker or isolation"),
     }
-    Ok(())
 }
 
 pub async fn dispatch_role(role: &str) -> Result<()> {
