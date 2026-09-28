@@ -246,7 +246,7 @@ mod tests {
         )
         .await;
         let directory = tempfile::tempdir()?;
-        let adapter = Arc::new(BlobAdapter::new(Arc::new(
+        let blob_state = Arc::new(
             BlobState::new(
                 store.clone(),
                 BlobConfig {
@@ -257,15 +257,35 @@ mod tests {
             .with_journal(Arc::new(FileUploadJournal::new(
                 directory.path().join("journal"),
             )?)),
-        )));
-        let router = Router::new()
-            .route("/uploads", post(upload))
-            .route("/blobs/{id}", get(download))
-            .with_state(UploadState {
-                adapter: adapter.clone(),
-                store: Arc::new(store),
-                receipts: directory.path().to_owned(),
-            });
+        );
+        let adapter = Arc::new(BlobAdapter::new(blob_state.clone()));
+        let state = Arc::new(crate::rustfs::RustFsState {
+            blob_state,
+            rustfs_store: store.clone(),
+            receipts_directory: directory.path().to_owned(),
+        });
+        let mut builder = dog_core::DogAppBuilder::new();
+        builder.set("rustfs", state.clone());
+        crate::services::configure(&mut builder, state)?;
+        let app = builder.build();
+        use dog_transport::IntoDogService;
+        let service = app
+            .clone()
+            .into_service(dog_transport::HttpOptions::new().route("/music", "music"));
+        let router = crate::http_router(&app, service, directory.path().join("empty-static"))?;
+        let response = router.clone().oneshot(Request::post("/music?preserve=routing")
+            .header("x-service-method", "upload")
+            .header("content-type", "multipart/form-data; boundary=demo")
+            .body(Body::from("--demo\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\nhello\r\n--demo--\r\n"))?).await?;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "multipart must reach the API behind the static file service"
+        );
+        let small: serde_json::Value =
+            serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 16 * 1024).await?)?;
+        assert_eq!(small["status"], "uploaded");
+        store.delete(small["key"].as_str().unwrap()).await?;
         // Cross the native multipart threshold using an unknown-length request stream.
         let data = bytes::Bytes::from(vec![42; 6 * 1024 * 1024]);
         let response = router

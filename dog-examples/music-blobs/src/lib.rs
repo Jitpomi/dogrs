@@ -15,6 +15,7 @@ use dog_core::DogApp;
 use dog_transport::{http::DogHttpService, IntoDogService};
 use serde_json::Value;
 
+pub use app::http_router;
 pub use services::MusicParams;
 
 struct MusicMultipartDefaults;

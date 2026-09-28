@@ -1,8 +1,4 @@
 use anyhow::Result;
-use axum::{routing::get, Router};
-use music_blobs::multipart::MultipartToJson;
-
-dog_transport::declare_adapter!(axum, to_endpoint, music_blobs::MusicParams);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -33,7 +29,6 @@ async fn main() -> Result<()> {
 
     println!("[music-blobs] listening on http://{addr}");
 
-    let config = music_blobs::multipart_config();
     let static_dir = std::env::var("STATIC_DIR")
         .unwrap_or_else(|_| format!("{}/static", env!("CARGO_MANIFEST_DIR")));
 
@@ -44,14 +39,7 @@ async fn main() -> Result<()> {
             || std::env::var("MUSIC_ALLOW_CONTAINER_BIND").as_deref() == Ok("1"),
         "music-blobs is a public single-tenant demo; bind it to loopback"
     );
-    let router = Router::new()
-        .merge(music_blobs::uploads::router(&dog)?)
-        .route("/health", get(|| async { "ok" }))
-        .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB to match dog-blob config
-        .fallback_service(
-            tower_http::services::ServeDir::new(static_dir).fallback(to_endpoint(http_service)),
-        )
-        .layer(MultipartToJson::with_config(config));
+    let router = music_blobs::http_router(&dog, http_service, static_dir)?;
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, router)
