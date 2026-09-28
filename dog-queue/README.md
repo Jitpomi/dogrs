@@ -99,6 +99,11 @@ replication work without changing revision checks or the stored format. See
 ## Capacity, security and migration
 
 PostgreSQL v2 uses indexed job rows, binary payloads and a bounded connection pool.
+Redis uses two connections per backend instance: one for payload admission and
+one for worker/control operations. Tenant registration and the authoritative
+server-clock read are pipelined; a registration error still prevents the job write.
+Both connections retain the same reconnect and response deadlines.
+
 Redis v2 uses indexed per-job metadata and separate binary payloads. JetStream
 uses independent active idempotency cells, immutable payloads and separate terminal
 history. Neither rewrites one growing tenant document. See [KV storage and upgrade

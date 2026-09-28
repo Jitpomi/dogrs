@@ -85,6 +85,9 @@ jobs:
         env:
           FLEET_POSTGRES_URL: host=127.0.0.1 port=5432 user=postgres password=dogrs-test-only
       - run: cargo test -p dog-queue --features redis,postgres,cron-scheduling --locked
+      - run: cargo test -p dog-queue --features redis --lib redis_registration_failure_cannot_accept_a_job --locked -- --ignored
+        env:
+          DOGRS_REDIS_URL: redis://127.0.0.1:6379
       - run: docker run -d --name nats-ci -p 127.0.0.1:4222:4222 nats:2.11-alpine -js -sd /data
       - run: cargo test -p dog-queue --features redis,postgres,nats --test durable_backends --locked -- --ignored
         env:

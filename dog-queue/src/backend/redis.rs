@@ -12,6 +12,7 @@ pub struct RedisConfig {
 }
 pub struct RedisStore {
     manager: ConnectionManager,
+    producers: ConnectionManager,
     checked: dashmap::DashSet<String>,
 }
 pub type RedisBackend = DurableBackend<RedisStore>;
@@ -99,20 +100,26 @@ impl RedisBackend {
     }
     pub async fn new(config: RedisConfig) -> QueueResult<Self> {
         let client = redis::Client::open(config.connection_string).map_err(error)?;
+        // Payload writes must not queue ahead of lease/completion traffic on
+        // the same multiplexed socket. Both connections use identical bounded
+        // reconnect/response policies; persistence and CAS rules are unchanged.
+        let connection_config = redis::aio::ConnectionManagerConfig::new()
+            .set_number_of_retries(3)
+            .set_max_delay(500)
+            .set_connection_timeout(std::time::Duration::from_secs(5))
+            .set_response_timeout(std::time::Duration::from_secs(10));
+        let manager = client
+            .get_connection_manager_with_config(connection_config.clone())
+            .await
+            .map_err(error)?;
+        let producers = client
+            .get_connection_manager_with_config(connection_config)
+            .await
+            .map_err(error)?;
         Ok(Self {
             store: RedisStore {
-                manager: client
-                    .get_connection_manager_with_config(
-                        redis::aio::ConnectionManagerConfig::new()
-                            // A single reconnect cycle must fit inside the queue's
-                            // 30-second operation budget, even with black-holed TCP.
-                            .set_number_of_retries(3)
-                            .set_max_delay(500)
-                            .set_connection_timeout(std::time::Duration::from_secs(5))
-                            .set_response_timeout(std::time::Duration::from_secs(10)),
-                    )
-                    .await
-                    .map_err(error)?,
+                manager,
+                producers,
                 checked: Default::default(),
             },
             lease_duration: std::time::Duration::from_secs(300),
@@ -168,6 +175,11 @@ impl RedisStore {
         } else {
             "ready"
         };
+        let mut connection = if enqueue {
+            self.producers.clone()
+        } else {
+            self.manager.clone()
+        };
         redis::Script::new(include_str!("redis_write.lua"))
             .key(format!("{p}:meta"))
             .key(format!("{p}:payload"))
@@ -187,7 +199,7 @@ impl RedisStore {
             .arg(r.lease_until().map(|d| d.timestamp_millis()).unwrap_or(0))
             .arg(r.updated_at.timestamp_millis())
             .arg(if return_payload { "payload" } else { "" })
-            .invoke_async(&mut self.manager.clone())
+            .invoke_async(&mut connection)
             .await
             .map_err(error)
     }
@@ -208,14 +220,6 @@ impl RedisStore {
             let count:usize=redis::Script::new("local ids=redis.call('ZRANGEBYSCORE',KEYS[3],'-inf','('..ARGV[1],'LIMIT',0,1000); for _,id in ipairs(ids) do redis.call('HDEL',KEYS[1],id); redis.call('HDEL',KEYS[2],id); redis.call('ZREM',KEYS[3],id); end; return #ids")
                 .key(format!("{p}:meta")).key(format!("{p}:payload")).key(format!("{p}:terminal")).arg(before.timestamp_millis()).invoke_async(&mut self.manager.clone()).await.map_err(error)?;
             return Ok(Outcome::Purged(count));
-        }
-        if matches!(op, Operation::Enqueue(_)) {
-            let _: usize = self
-                .manager
-                .clone()
-                .sadd(TENANTS, tenant)
-                .await
-                .map_err(error)?;
         }
         let mut reaped = Vec::new();
         for _ in 0..64 {
@@ -252,15 +256,39 @@ impl RedisStore {
                     read.arg("read");
                 }
             }
-            let values: Vec<String> = read
-                .invoke_async(&mut self.manager.clone())
-                .await
-                .map_err(error)?;
-            let now = DateTime::from_timestamp_millis(values[0].parse().map_err(error)?)
-                .ok_or_else(|| error("Invalid Redis clock"))?;
+            // Enqueue needs only the authoritative server clock, not existing
+            // record metadata. Pipeline tenant registration and TIME instead of
+            // waiting for registration before making a second empty read call.
+            // The write/CAS still follows the acknowledged registration, so
+            // failed registration cannot leave an undiscoverable accepted job.
+            let (now, values) = if matches!(op, Operation::Enqueue(_)) {
+                let (clock,): (Vec<i64>,) = redis::pipe()
+                    .cmd("SADD")
+                    .arg(TENANTS)
+                    .arg(tenant)
+                    .ignore()
+                    .cmd("TIME")
+                    .query_async(&mut self.producers.clone())
+                    .await
+                    .map_err(error)?;
+                if clock.len() != 2 {
+                    return Err(error("Invalid Redis clock"));
+                }
+                let now = DateTime::from_timestamp_millis(clock[0] * 1000 + clock[1] / 1000)
+                    .ok_or_else(|| error("Invalid Redis clock"))?;
+                (now, Vec::new())
+            } else {
+                let mut values: Vec<String> = read
+                    .invoke_async(&mut self.manager.clone())
+                    .await
+                    .map_err(error)?;
+                let now = DateTime::from_timestamp_millis(values.remove(0).parse().map_err(error)?)
+                    .ok_or_else(|| error("Invalid Redis clock"))?;
+                (now, values)
+            };
             let mut state = TenantState::default();
             let mut previous = HashMap::new();
-            for raw in values.into_iter().skip(1).filter(|s| !s.is_empty()) {
+            for raw in values.into_iter().filter(|s| !s.is_empty()) {
                 let row: StoredRecord = serde_json::from_str(&raw).map_err(error)?;
                 previous.insert(row.record.job_id.clone(), raw);
                 state.jobs.insert(row.record.job_id.clone(), row);
@@ -378,5 +406,66 @@ impl StateStore for RedisStore {
         )
         .await
         .map_err(|_| error("Redis tenant lookup timed out"))?
+    }
+}
+
+#[cfg(test)]
+mod pipeline_tests {
+    use super::*;
+    use crate::{JobMessage, QueueBackend, QueueCtx};
+    use redis::IntoConnectionInfo;
+
+    #[tokio::test]
+    #[ignore = "requires disposable Redis with ACL administration"]
+    async fn redis_registration_failure_cannot_accept_a_job() {
+        let url = std::env::var("DOGRS_REDIS_URL").unwrap();
+        let mut backend = RedisBackend::new(RedisConfig {
+            connection_string: url.clone(),
+        })
+        .await
+        .unwrap();
+        let user = format!("dogrs_test_{}", uuid::Uuid::new_v4().simple());
+        let mut admin = backend.store.manager.clone();
+        let _: () = redis::cmd("ACL")
+            .arg("SETUSER")
+            .arg(&user)
+            .arg("on")
+            .arg("nopass")
+            .arg("~*")
+            .arg("+@all")
+            .arg("-sadd")
+            .query_async(&mut admin)
+            .await
+            .unwrap();
+        let mut info = url.into_connection_info().unwrap();
+        info.redis.username = Some(user.clone());
+        info.redis.password = Some(String::new());
+        backend.store.producers = redis::Client::open(info)
+            .unwrap()
+            .get_connection_manager()
+            .await
+            .unwrap();
+        let tenant = format!("registration-{}", uuid::Uuid::new_v4());
+        let result = backend
+            .enqueue(
+                QueueCtx::new(&tenant),
+                JobMessage::new("test", vec![1; 65536], "bytes", "q"),
+            )
+            .await;
+        let exists: bool = admin
+            .exists(format!("{}:meta", prefix(&tenant)))
+            .await
+            .unwrap();
+        let _: usize = redis::cmd("ACL")
+            .arg("DELUSER")
+            .arg(&user)
+            .query_async(&mut admin)
+            .await
+            .unwrap();
+        assert!(result.is_err(), "failed registration must fail admission");
+        assert!(
+            !exists,
+            "do not commit a job after a pipeline registration error"
+        );
     }
 }

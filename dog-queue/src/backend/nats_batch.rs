@@ -69,7 +69,10 @@ impl BatchWriter {
                         None => break,
                     },
                 };
-                tokio::task::yield_now().await;
+                // Collect a short microbatch even when the receiver was empty at
+                // dispatch. A scheduler yield is not a batching window: at a
+                // steady arrival rate it flushes nearly every job separately.
+                tokio::time::sleep(Duration::from_millis(2)).await;
                 let mut bytes: usize = first.writes.iter().map(|w| w.value.len()).sum();
                 let mut count = first.writes.len();
                 let mut keys: HashSet<_> = first.writes.iter().map(|w| w.key.clone()).collect();

@@ -96,3 +96,13 @@ Speculative reads, including payloads waiting for ownership, are bounded to 128
 per store. Excess consumers use claim-then-read without waiting for a prefetch
 permit. Producer admission remains independent. This removes a serial network wait without caching payloads,
 changing the stored format, or assuming that producers and consumers share a process.
+
+### Small-batch collection
+
+The atomic writer allows a 2 ms collection window so independently arriving
+operations can share a durable commit. This adds bounded collection latency to
+light traffic. Byte/message bounds, the separate metadata lane, expected-revision
+checks and final durable-acknowledgement requirements are unchanged. Increasing
+producer concurrency is not a substitute for measuring durable storage latency;
+it can increase timeouts. Consumer concurrency must also cover the measured
+claim-plus-completion latency at the required arrival rate.
