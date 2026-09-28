@@ -7,7 +7,7 @@ use std::{collections::HashSet, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
 const MAX_MESSAGES: usize = 128;
-pub(super) const ADMISSION_CAPACITY: usize = 128;
+pub(super) const ADMISSION_CAPACITY: usize = 1024;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 // JetStream closes a Raft append after the entry that crosses 256 KiB,
 // rather than before it. Include the logical operation crossing the target;
@@ -55,7 +55,7 @@ impl BatchWriter {
             // One in-flight 3-job batch at 100 ms caps admission at 30 jobs/s
             // regardless of how much unused capacity the provider has. Retain
             // a separate metadata lane so producer pipelining cannot consume it.
-            let concurrency = if enqueue { 4 } else { 1 };
+            let concurrency = if enqueue { 8 } else { 2 };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
             loop {
@@ -69,10 +69,6 @@ impl BatchWriter {
                         None => break,
                     },
                 };
-                // Collect a short microbatch even when the receiver was empty at
-                // dispatch. A scheduler yield is not a batching window: at a
-                // steady arrival rate it flushes nearly every job separately.
-                tokio::time::sleep(Duration::from_millis(2)).await;
                 let mut bytes: usize = first.writes.iter().map(|w| w.value.len()).sum();
                 let mut count = first.writes.len();
                 let mut keys: HashSet<_> = first.writes.iter().map(|w| w.key.clone()).collect();
@@ -96,6 +92,29 @@ impl BatchWriter {
                     count += group.writes.len();
                     keys.extend(group.writes.iter().map(|w| w.key.clone()));
                     groups.push(group);
+                }
+                // If the batch hasn't reached the target size yet, allow a short
+                // window for concurrent arrivals before sending to the broker.
+                if bytes < TARGET_BATCH_BYTES && deferred.is_none() && count < MAX_MESSAGES {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    while count < MAX_MESSAGES {
+                        let Ok(group) = receiver.try_recv() else {
+                            break;
+                        };
+                        let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
+                        if count + group.writes.len() > MAX_MESSAGES
+                            || bytes >= TARGET_BATCH_BYTES
+                            || bytes + size > MAX_BYTES
+                            || group.writes.iter().any(|w| keys.contains(&w.key))
+                        {
+                            deferred = Some(group);
+                            break;
+                        }
+                        bytes += size;
+                        count += group.writes.len();
+                        keys.extend(group.writes.iter().map(|w| w.key.clone()));
+                        groups.push(group);
+                    }
                 }
                 groups.retain(|group| !group.reply.is_closed());
                 if groups.is_empty() {
