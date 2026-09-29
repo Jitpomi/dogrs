@@ -64,7 +64,7 @@ impl BatchWriter {
                 std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(2)
+                    .unwrap_or(1)
             };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
