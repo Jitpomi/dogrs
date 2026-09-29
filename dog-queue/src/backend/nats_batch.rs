@@ -103,30 +103,51 @@ impl BatchWriter {
                     keys.extend(group.writes.iter().map(|w| w.key.clone()));
                     groups.push(group);
                 }
-                // If the batch hasn't reached the target size yet, yield once to
-                // let concurrently-arriving operations land in the channel before
-                // dispatching. On a slow CI runner a hard 500 µs sleep serialises
-                // the lane (8 × 80 ms/commit ≈ 100 enqueues/s); a cooperative
-                // yield costs nothing when the channel is already drained.
-                if bytes < TARGET_BATCH_BYTES && deferred.is_none() && count < MAX_MESSAGES {
-                    tokio::task::yield_now().await;
-                    while count < MAX_MESSAGES {
-                        let Ok(group) = receiver.try_recv() else {
-                            break;
-                        };
-                        let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
-                        if count + group.writes.len() > MAX_MESSAGES
-                            || bytes >= TARGET_BATCH_BYTES
-                            || bytes + size > MAX_BYTES
-                            || group.writes.iter().any(|w| keys.contains(&w.key))
-                        {
-                            deferred = Some(group);
+                if deferred.is_none() {
+                    let target_bytes = if enqueue {
+                        TARGET_BATCH_BYTES
+                    } else {
+                        16 * 1024
+                    };
+                    let target_count = if enqueue {
+                        std::env::var("DOGRS_NATS_ENQUEUE_BATCH_TARGET")
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(16)
+                    } else {
+                        std::env::var("DOGRS_NATS_UPDATE_BATCH_TARGET")
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(16)
+                    };
+                    for _ in 0..2 {
+                        if bytes >= target_bytes || count >= target_count {
                             break;
                         }
-                        bytes += size;
-                        count += group.writes.len();
-                        keys.extend(group.writes.iter().map(|w| w.key.clone()));
-                        groups.push(group);
+                        tokio::task::yield_now().await;
+                        let mut received = false;
+                        while count < MAX_MESSAGES {
+                            let Ok(group) = receiver.try_recv() else {
+                                break;
+                            };
+                            let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
+                            if count + group.writes.len() > MAX_MESSAGES
+                                || bytes >= TARGET_BATCH_BYTES
+                                || bytes + size > MAX_BYTES
+                                || group.writes.iter().any(|w| keys.contains(&w.key))
+                            {
+                                deferred = Some(group);
+                                break;
+                            }
+                            bytes += size;
+                            count += group.writes.len();
+                            keys.extend(group.writes.iter().map(|w| w.key.clone()));
+                            groups.push(group);
+                            received = true;
+                        }
+                        if !received {
+                            break;
+                        }
                     }
                 }
                 groups.retain(|group| !group.reply.is_closed());
