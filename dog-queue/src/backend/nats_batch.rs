@@ -7,7 +7,7 @@ use std::{collections::HashSet, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
 const MAX_MESSAGES: usize = 128;
-pub(super) const ADMISSION_CAPACITY: usize = 1024;
+pub(super) const ADMISSION_CAPACITY: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 // JetStream closes a Raft append after the entry that crosses 256 KiB,
 // rather than before it. Include the logical operation crossing the target;
@@ -59,12 +59,12 @@ impl BatchWriter {
                 std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(16)
+                    .unwrap_or(4)
             } else {
                 std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(8)
+                    .unwrap_or(2)
             };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
@@ -104,24 +104,26 @@ impl BatchWriter {
                     groups.push(group);
                 }
                 if bytes < TARGET_BATCH_BYTES && deferred.is_none() && count < MAX_MESSAGES {
-                    tokio::task::yield_now().await;
+                    let deadline = tokio::time::Instant::now() + Duration::from_millis(2);
                     while count < MAX_MESSAGES {
-                        let Ok(group) = receiver.try_recv() else {
-                            break;
-                        };
-                        let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
-                        if count + group.writes.len() > MAX_MESSAGES
-                            || bytes >= TARGET_BATCH_BYTES
-                            || bytes + size > MAX_BYTES
-                            || group.writes.iter().any(|w| keys.contains(&w.key))
-                        {
-                            deferred = Some(group);
-                            break;
+                        match tokio::time::timeout_at(deadline, receiver.recv()).await {
+                            Ok(Some(group)) => {
+                                let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
+                                if count + group.writes.len() > MAX_MESSAGES
+                                    || bytes >= TARGET_BATCH_BYTES
+                                    || bytes + size > MAX_BYTES
+                                    || group.writes.iter().any(|w| keys.contains(&w.key))
+                                {
+                                    deferred = Some(group);
+                                    break;
+                                }
+                                bytes += size;
+                                count += group.writes.len();
+                                keys.extend(group.writes.iter().map(|w| w.key.clone()));
+                                groups.push(group);
+                            }
+                            _ => break,
                         }
-                        bytes += size;
-                        count += group.writes.len();
-                        keys.extend(group.writes.iter().map(|w| w.key.clone()));
-                        groups.push(group);
                     }
                 }
                 groups.retain(|group| !group.reply.is_closed());
@@ -286,7 +288,7 @@ where
 {
     execute_groups_until(
         groups,
-        tokio::time::Instant::now() + Duration::from_secs(15),
+        tokio::time::Instant::now() + Duration::from_secs(5),
         attempt,
     )
     .await
