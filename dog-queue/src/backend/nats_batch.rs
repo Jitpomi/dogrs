@@ -103,51 +103,29 @@ impl BatchWriter {
                     keys.extend(group.writes.iter().map(|w| w.key.clone()));
                     groups.push(group);
                 }
-                if deferred.is_none() {
-                    let target_bytes = if enqueue {
-                        TARGET_BATCH_BYTES
-                    } else {
-                        16 * 1024
-                    };
-                    let target_count = if enqueue {
-                        std::env::var("DOGRS_NATS_ENQUEUE_BATCH_TARGET")
-                            .ok()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(16)
-                    } else {
-                        std::env::var("DOGRS_NATS_UPDATE_BATCH_TARGET")
-                            .ok()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(16)
-                    };
-                    for _ in 0..2 {
-                        if bytes >= target_bytes || count >= target_count {
+                if enqueue
+                    && deferred.is_none()
+                    && bytes < TARGET_BATCH_BYTES
+                    && count < MAX_MESSAGES
+                {
+                    tokio::task::yield_now().await;
+                    while count < MAX_MESSAGES {
+                        let Ok(group) = receiver.try_recv() else {
+                            break;
+                        };
+                        let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
+                        if count + group.writes.len() > MAX_MESSAGES
+                            || bytes >= TARGET_BATCH_BYTES
+                            || bytes + size > MAX_BYTES
+                            || group.writes.iter().any(|w| keys.contains(&w.key))
+                        {
+                            deferred = Some(group);
                             break;
                         }
-                        tokio::task::yield_now().await;
-                        let mut received = false;
-                        while count < MAX_MESSAGES {
-                            let Ok(group) = receiver.try_recv() else {
-                                break;
-                            };
-                            let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
-                            if count + group.writes.len() > MAX_MESSAGES
-                                || bytes >= TARGET_BATCH_BYTES
-                                || bytes + size > MAX_BYTES
-                                || group.writes.iter().any(|w| keys.contains(&w.key))
-                            {
-                                deferred = Some(group);
-                                break;
-                            }
-                            bytes += size;
-                            count += group.writes.len();
-                            keys.extend(group.writes.iter().map(|w| w.key.clone()));
-                            groups.push(group);
-                            received = true;
-                        }
-                        if !received {
-                            break;
-                        }
+                        bytes += size;
+                        count += group.writes.len();
+                        keys.extend(group.writes.iter().map(|w| w.key.clone()));
+                        groups.push(group);
                     }
                 }
                 groups.retain(|group| !group.reply.is_closed());
