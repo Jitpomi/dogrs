@@ -43,9 +43,7 @@ impl SessionPool {
         let mut guard = self.sessions.lock().await;
         while let Some(mut session) = guard.pop() {
             let mut closed = false;
-            while let Ok(res) =
-                tokio::time::timeout(Duration::ZERO, session.replies.next()).await
-            {
+            while let Ok(res) = tokio::time::timeout(Duration::ZERO, session.replies.next()).await {
                 if res.is_none() {
                     closed = true;
                     break;
@@ -105,12 +103,12 @@ impl BatchWriter {
                 std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(8)
+                    .unwrap_or(2)
             } else {
                 std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(2)
+                    .unwrap_or(1)
             };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
@@ -149,8 +147,13 @@ impl BatchWriter {
                     keys.extend(group.writes.iter().map(|w| w.key.clone()));
                     groups.push(group);
                 }
-                if bytes < TARGET_BATCH_BYTES && deferred.is_none() && count < MAX_MESSAGES {
-                    let deadline = tokio::time::Instant::now() + Duration::from_millis(2);
+                let target_reached = if enqueue {
+                    bytes >= TARGET_BATCH_BYTES || count >= MAX_MESSAGES
+                } else {
+                    count >= 2
+                };
+                if !target_reached && deferred.is_none() && count < MAX_MESSAGES {
+                    let deadline = tokio::time::Instant::now() + Duration::from_millis(1);
                     while count < MAX_MESSAGES {
                         match tokio::time::timeout_at(deadline, receiver.recv()).await {
                             Ok(Some(group)) => {
@@ -167,6 +170,14 @@ impl BatchWriter {
                                 count += group.writes.len();
                                 keys.extend(group.writes.iter().map(|w| w.key.clone()));
                                 groups.push(group);
+                                let reached = if enqueue {
+                                    bytes >= TARGET_BATCH_BYTES
+                                } else {
+                                    count >= 2
+                                };
+                                if reached {
+                                    break;
+                                }
                             }
                             _ => break,
                         }
@@ -327,7 +338,7 @@ async fn execute_with_pool(
     })
     .await
 }
-#[allow(dead_code)]
+#[cfg(test)]
 async fn execute(
     context: &jetstream::Context,
     bucket: &kv::Store,
@@ -335,6 +346,15 @@ async fn execute(
 ) -> QueueResult<Vec<QueueResult<Option<Vec<u64>>>>> {
     let pool = SessionPool::new(context.client());
     execute_with_pool(&pool, context, bucket, groups).await
+}
+#[cfg(test)]
+async fn atomic(
+    context: &jetstream::Context,
+    bucket: &kv::Store,
+    writes: &[&Write],
+) -> QueueResult<Option<Vec<u64>>> {
+    let pool = SessionPool::new(context.client());
+    atomic_with_pool(&pool, context, bucket, writes).await
 }
 async fn execute_groups<'a, F, Fut>(
     groups: &'a [Group],
@@ -412,7 +432,6 @@ where
     Ok(outcomes)
 }
 
-
 async fn atomic_with_pool(
     pool: &SessionPool,
     context: &jetstream::Context,
@@ -476,7 +495,11 @@ async fn atomic_with_pool(
     let result = loop {
         let response = match session.replies.next().await {
             Some(resp) => resp,
-            None => break Err(error("acknowledgement stream closed; outcome may be unknown")),
+            None => {
+                break Err(error(
+                    "acknowledgement stream closed; outcome may be unknown",
+                ))
+            }
         };
         if response.status.is_some_and(|status| !status.is_success()) {
             break Err(error("server rejected batch request"));
