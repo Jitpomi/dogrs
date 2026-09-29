@@ -59,12 +59,12 @@ impl BatchWriter {
                 std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(32)
+                    .unwrap_or(16)
             } else {
                 std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(64)
+                    .unwrap_or(8)
             };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
@@ -103,11 +103,7 @@ impl BatchWriter {
                     keys.extend(group.writes.iter().map(|w| w.key.clone()));
                     groups.push(group);
                 }
-                if enqueue
-                    && deferred.is_none()
-                    && bytes < TARGET_BATCH_BYTES
-                    && count < MAX_MESSAGES
-                {
+                if bytes < TARGET_BATCH_BYTES && deferred.is_none() && count < MAX_MESSAGES {
                     tokio::task::yield_now().await;
                     while count < MAX_MESSAGES {
                         let Ok(group) = receiver.try_recv() else {
@@ -290,7 +286,7 @@ where
 {
     execute_groups_until(
         groups,
-        tokio::time::Instant::now() + Duration::from_secs(5),
+        tokio::time::Instant::now() + Duration::from_secs(15),
         attempt,
     )
     .await

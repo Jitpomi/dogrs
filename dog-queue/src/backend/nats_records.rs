@@ -193,10 +193,7 @@ impl Index {
             .or_default()
             .value()
             .clone();
-        let changed = self
-            .notifications
-            .get(tenant)
-            .map(|entry| entry.value().clone());
+        let changed = self.notifications.entry(tenant.into()).or_default().clone();
         let runnable = |row: &Result<StoredRecord, String>| {
             row.as_ref().is_ok_and(|row| {
                 let now = Utc::now();
@@ -255,9 +252,7 @@ impl Index {
         // Re-observing a revision or learning that another worker claimed a job
         // must not wake idle claimers into a notification/point-read feedback loop.
         if wake {
-            if let Some(changed) = changed {
-                changed.notify_waiters();
-            }
+            changed.notify_waiters();
         }
     }
 }
