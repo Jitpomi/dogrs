@@ -59,20 +59,12 @@ impl BatchWriter {
                 std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(8)
+                    .unwrap_or(4)
             } else {
                 std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(4)
-            };
-            let target_count = if enqueue {
-                MAX_MESSAGES
-            } else {
-                std::env::var("DOGRS_NATS_UPDATE_BATCH_TARGET")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(4)
+                    .unwrap_or(2)
             };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
@@ -111,13 +103,14 @@ impl BatchWriter {
                     keys.extend(group.writes.iter().map(|w| w.key.clone()));
                     groups.push(group);
                 }
-                if bytes < TARGET_BATCH_BYTES
-                    && deferred.is_none()
-                    && count < target_count
-                    && count < MAX_MESSAGES
-                {
+                let needs_collection = if enqueue {
+                    bytes < TARGET_BATCH_BYTES && count < MAX_MESSAGES
+                } else {
+                    count < 2
+                };
+                if needs_collection && deferred.is_none() {
                     let deadline = tokio::time::Instant::now() + Duration::from_millis(2);
-                    while count < target_count && count < MAX_MESSAGES {
+                    while count < MAX_MESSAGES {
                         match tokio::time::timeout_at(deadline, receiver.recv()).await {
                             Ok(Some(group)) => {
                                 let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
@@ -133,6 +126,9 @@ impl BatchWriter {
                                 count += group.writes.len();
                                 keys.extend(group.writes.iter().map(|w| w.key.clone()));
                                 groups.push(group);
+                                if !enqueue && count >= 2 {
+                                    break;
+                                }
                             }
                             _ => break,
                         }
