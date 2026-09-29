@@ -1,16 +1,17 @@
 //! Matched open-loop admission diagnostics, not production queue acceptance.
 //! Native-layout uses the same durable admission shape but omits queue behavior.
-use crate::app::*;
-use dog_queue::{JobMessage, JobRecord};
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
-    },
-    time::Instant,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use anyhow::{bail, Context, Result};
+use dog_queue::{JobId, JobMessage, JobRecord, QueueBackend, QueueCtx};
+use serde_json::json;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_postgres::types::Type;
+use tokio_postgres::Client;
+
+use crate::runner::{env, tenant};
 
 #[async_trait::async_trait]
 pub trait Admission: Send + Sync {
@@ -260,7 +261,7 @@ pub async fn native() -> Result<()> {
                 } else {
                     js.clone()
                 };
-                let bucket = crate::app::create_fixture_bucket(
+                let bucket = crate::connections::create_fixture_bucket(
                     &js,
                     async_nats::jetstream::kv::Config {
                         bucket: format!("{}_{shard}", env("DOGRS_NATS_BUCKET")?),

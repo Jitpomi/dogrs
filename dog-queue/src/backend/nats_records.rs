@@ -193,10 +193,7 @@ impl Index {
             .or_default()
             .value()
             .clone();
-        let changed = self
-            .notifications
-            .get(tenant)
-            .map(|entry| entry.value().clone());
+        let changed = self.notifications.entry(tenant.into()).or_default().clone();
         let runnable = |row: &Result<StoredRecord, String>| {
             row.as_ref().is_ok_and(|row| {
                 let now = Utc::now();
@@ -255,9 +252,7 @@ impl Index {
         // Re-observing a revision or learning that another worker claimed a job
         // must not wake idle claimers into a notification/point-read feedback loop.
         if wake {
-            if let Some(changed) = changed {
-                changed.notify_waiters();
-            }
+            changed.notify_waiters();
         }
     }
 }
@@ -930,20 +925,20 @@ impl NatsStore {
             } else {
                 None
             };
-            if matches!(op, Operation::Dequeue(..)) {
-                let key = cell(tenant, slot(&id)?);
-                let cached = index.tenant(tenant).and_then(|entries| {
-                    entries.get(&key).and_then(|entry| {
-                        let (revision, row) = entry.value();
-                        row.as_ref()
-                            .ok()
-                            .filter(|row| *revision > 0 && row.record.job_id == id)
-                            .map(|row| (*revision, row.clone()))
-                    })
-                });
-                if let Some((revision, row)) = cached {
-                    let mut state = TenantState::default();
-                    state.jobs.insert(id.clone(), row);
+            let key = cell(tenant, slot(&id)?);
+            let cached = index.tenant(tenant).and_then(|entries| {
+                entries.get(&key).and_then(|entry| {
+                    let (revision, row) = entry.value();
+                    row.as_ref()
+                        .ok()
+                        .filter(|row| *revision > 0 && row.record.job_id == id)
+                        .map(|row| (*revision, row.clone()))
+                })
+            });
+            if let Some((revision, row)) = cached {
+                let mut state = TenantState::default();
+                state.jobs.insert(id.clone(), row);
+                if matches!(op, Operation::Dequeue(..)) {
                     if let Ok(Outcome::Lease(Some(mut job))) =
                         state.apply_at(tenant, op, Utc::now())
                     {
@@ -965,6 +960,17 @@ impl NatsStore {
                         }
                         skipped_hints.insert(id);
                         continue;
+                    }
+                } else if matches!(
+                    op,
+                    Operation::Complete(..) | Operation::Fail(..) | Operation::Heartbeat(..)
+                ) {
+                    if let Ok(outcome) = state.apply_at(tenant, op, Utc::now()) {
+                        let row = &state.jobs[&id];
+                        let value = serde_json::to_vec(row).map_err(error)?;
+                        if self.cas(&key, value, revision).await? {
+                            return Ok(outcome);
+                        }
                     }
                 }
             }

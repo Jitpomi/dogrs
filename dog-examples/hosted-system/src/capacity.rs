@@ -1,15 +1,16 @@
 //! Queue-level open-loop test. This measures real backend persistence and payload
 //! delivery; it is separate from the HTTP/PostgreSQL billing-effect acceptance test.
-use crate::app::*;
-use dog_queue::JobMessage;
-use std::{
-    collections::HashSet,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
-    },
-    time::Instant,
-};
+
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use dog_queue::{JobMessage, QueueBackend, QueueCtx};
+use serde_json::json;
+
+use crate::runner::tenant;
 
 pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     if std::env::var("DOGRS_ADMISSION_MODE").as_deref() == Ok("dogrs-admission") {
@@ -335,5 +336,11 @@ fn latency_summary(values: &Mutex<Vec<f64>>) -> serde_json::Value {
             .get((values.len() * p / 100).min(values.len().saturating_sub(1)))
             .copied()
     };
-    json!({"count":values.len(),"p50":percentile(50),"p95":percentile(95),"max":values.last(),"total":values.iter().sum::<f64>()})
+    json!({
+        "count": values.len(),
+        "p50": percentile(50),
+        "p95": percentile(95),
+        "max": values.last(),
+        "total": values.iter().sum::<f64>(),
+    })
 }

@@ -7,7 +7,7 @@ use std::{collections::HashSet, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
 const MAX_MESSAGES: usize = 128;
-pub(super) const ADMISSION_CAPACITY: usize = 1024;
+pub(super) const ADMISSION_CAPACITY: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 // JetStream closes a Raft append after the entry that crosses 256 KiB,
 // rather than before it. Include the logical operation crossing the target;
@@ -23,6 +23,44 @@ struct Group {
     queued: Option<std::time::Instant>,
     writes: Vec<Write>,
     reply: oneshot::Sender<QueueResult<Option<Vec<u64>>>>,
+}
+struct Session {
+    inbox: String,
+    replies: async_nats::Subscriber,
+}
+struct SessionPool {
+    client: async_nats::Client,
+    sessions: tokio::sync::Mutex<Vec<Session>>,
+}
+impl SessionPool {
+    fn new(client: async_nats::Client) -> Self {
+        Self {
+            client,
+            sessions: tokio::sync::Mutex::new(Vec::new()),
+        }
+    }
+    async fn acquire(&self) -> QueueResult<Session> {
+        let mut guard = self.sessions.lock().await;
+        while let Some(mut session) = guard.pop() {
+            let mut closed = false;
+            while let Ok(res) = tokio::time::timeout(Duration::ZERO, session.replies.next()).await {
+                if res.is_none() {
+                    closed = true;
+                    break;
+                }
+            }
+            if !closed {
+                return Ok(session);
+            }
+        }
+        drop(guard);
+        let inbox = self.client.new_inbox();
+        let replies = self.client.subscribe(inbox.clone()).await.map_err(error)?;
+        Ok(Session { inbox, replies })
+    }
+    async fn release(&self, session: Session) {
+        self.sessions.lock().await.push(session);
+    }
 }
 pub(super) struct BatchWriter {
     updates: mpsc::Sender<Group>,
@@ -43,19 +81,35 @@ impl BatchWriter {
         // Reserve one execution lane for lease/completion metadata. A large
         // producer backlog must not occupy every durable-write slot or put a
         // lease update behind payload staging in the same atomic batch.
+        let pool = std::sync::Arc::new(SessionPool::new(context.client()));
         Self {
-            updates: Self::lane(context.clone(), bucket.clone(), false),
-            enqueues: Self::lane(context, bucket, true),
+            updates: Self::lane(context.clone(), bucket.clone(), pool.clone(), false),
+            enqueues: Self::lane(context, bucket, pool, true),
         }
     }
-    fn lane(context: jetstream::Context, bucket: kv::Store, enqueue: bool) -> mpsc::Sender<Group> {
+    fn lane(
+        context: jetstream::Context,
+        bucket: kv::Store,
+        pool: std::sync::Arc<SessionPool>,
+        enqueue: bool,
+    ) -> mpsc::Sender<Group> {
         let (sender, mut receiver) = mpsc::channel::<Group>(ADMISSION_CAPACITY);
         tokio::spawn(async move {
             // Small atomic batches should overlap their acknowledgement waits.
             // One in-flight 3-job batch at 100 ms caps admission at 30 jobs/s
             // regardless of how much unused capacity the provider has. Retain
             // a separate metadata lane so producer pipelining cannot consume it.
-            let concurrency = if enqueue { 16 } else { 8 };
+            let concurrency = if enqueue {
+                std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(2)
+            } else {
+                std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1)
+            };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
             loop {
@@ -93,40 +147,39 @@ impl BatchWriter {
                     keys.extend(group.writes.iter().map(|w| w.key.clone()));
                     groups.push(group);
                 }
-                if deferred.is_none() {
-                    let target_bytes = if enqueue {
-                        TARGET_BATCH_BYTES
-                    } else {
-                        16 * 1024
-                    };
-                    let target_count = if enqueue { MAX_MESSAGES } else { 8 };
-                    for _ in 0..4 {
-                        if bytes >= target_bytes || count >= target_count {
-                            break;
-                        }
-                        tokio::task::yield_now().await;
-                        let mut received = false;
-                        while count < MAX_MESSAGES {
-                            let Ok(group) = receiver.try_recv() else {
-                                break;
-                            };
-                            let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
-                            if count + group.writes.len() > MAX_MESSAGES
-                                || bytes >= TARGET_BATCH_BYTES
-                                || bytes + size > MAX_BYTES
-                                || group.writes.iter().any(|w| keys.contains(&w.key))
-                            {
-                                deferred = Some(group);
-                                break;
+                let target_reached = if enqueue {
+                    bytes >= TARGET_BATCH_BYTES || count >= MAX_MESSAGES
+                } else {
+                    count >= 2
+                };
+                if !target_reached && deferred.is_none() && count < MAX_MESSAGES {
+                    let deadline = tokio::time::Instant::now() + Duration::from_millis(1);
+                    while count < MAX_MESSAGES {
+                        match tokio::time::timeout_at(deadline, receiver.recv()).await {
+                            Ok(Some(group)) => {
+                                let size: usize = group.writes.iter().map(|w| w.value.len()).sum();
+                                if count + group.writes.len() > MAX_MESSAGES
+                                    || bytes >= TARGET_BATCH_BYTES
+                                    || bytes + size > MAX_BYTES
+                                    || group.writes.iter().any(|w| keys.contains(&w.key))
+                                {
+                                    deferred = Some(group);
+                                    break;
+                                }
+                                bytes += size;
+                                count += group.writes.len();
+                                keys.extend(group.writes.iter().map(|w| w.key.clone()));
+                                groups.push(group);
+                                let reached = if enqueue {
+                                    bytes >= TARGET_BATCH_BYTES
+                                } else {
+                                    count >= 2
+                                };
+                                if reached {
+                                    break;
+                                }
                             }
-                            bytes += size;
-                            count += group.writes.len();
-                            keys.extend(group.writes.iter().map(|w| w.key.clone()));
-                            groups.push(group);
-                            received = true;
-                        }
-                        if !received && running.is_empty() {
-                            break;
+                            _ => break,
                         }
                     }
                 }
@@ -146,13 +199,14 @@ impl BatchWriter {
                 }
                 let context = context.clone();
                 let bucket = bucket.clone();
+                let pool = pool.clone();
                 running.spawn(async move {
                     let _execution = crate::diagnostics::Scope::new(if enqueue {
                         crate::diagnostics::NATS_ENQUEUE_BATCH_EXECUTE
                     } else {
                         crate::diagnostics::NATS_UPDATE_BATCH_EXECUTE
                     });
-                    let outcomes = execute(&context, &bucket, &groups).await;
+                    let outcomes = execute_with_pool(&pool, &context, &bucket, &groups).await;
                     match outcomes {
                         Ok(outcomes) => {
                             for (group, outcome) in groups.into_iter().zip(outcomes) {
@@ -257,6 +311,7 @@ async fn single(bucket: &kv::Store, write: &Write) -> QueueResult<Option<u64>> {
     }
 }
 async fn commit(
+    pool: &SessionPool,
     context: &jetstream::Context,
     bucket: &kv::Store,
     writes: &[&Write],
@@ -268,19 +323,38 @@ async fn commit(
     }
     crate::diagnostics::measure(
         crate::diagnostics::NATS_ATOMIC_COMMIT,
-        atomic(context, bucket, writes),
+        atomic_with_pool(pool, context, bucket, writes),
     )
     .await
 }
-async fn execute(
+async fn execute_with_pool(
+    pool: &SessionPool,
     context: &jetstream::Context,
     bucket: &kv::Store,
     groups: &[Group],
 ) -> QueueResult<Vec<QueueResult<Option<Vec<u64>>>>> {
     execute_groups(groups, |writes| async move {
-        commit(context, bucket, &writes).await
+        commit(pool, context, bucket, &writes).await
     })
     .await
+}
+#[cfg(test)]
+async fn execute(
+    context: &jetstream::Context,
+    bucket: &kv::Store,
+    groups: &[Group],
+) -> QueueResult<Vec<QueueResult<Option<Vec<u64>>>>> {
+    let pool = SessionPool::new(context.client());
+    execute_with_pool(&pool, context, bucket, groups).await
+}
+#[cfg(test)]
+async fn atomic(
+    context: &jetstream::Context,
+    bucket: &kv::Store,
+    writes: &[&Write],
+) -> QueueResult<Option<Vec<u64>>> {
+    let pool = SessionPool::new(context.client());
+    atomic_with_pool(&pool, context, bucket, writes).await
 }
 async fn execute_groups<'a, F, Fut>(
     groups: &'a [Group],
@@ -358,7 +432,8 @@ where
     Ok(outcomes)
 }
 
-async fn atomic(
+async fn atomic_with_pool(
+    pool: &SessionPool,
     context: &jetstream::Context,
     bucket: &kv::Store,
     writes: &[&Write],
@@ -367,8 +442,7 @@ async fn atomic(
         return Err(error("cannot publish an empty atomic batch"));
     }
     let client = context.client();
-    let inbox = client.new_inbox();
-    let mut replies = client.subscribe(inbox.clone()).await.map_err(error)?;
+    let mut session = pool.acquire().await?;
     let id = uuid::Uuid::new_v4().to_string();
     for (i, write) in writes.iter().enumerate() {
         let mut headers = async_nats::HeaderMap::new();
@@ -394,7 +468,7 @@ async fn atomic(
                 .send_request(
                     subject,
                     async_nats::client::Request::new()
-                        .inbox(inbox.clone())
+                        .inbox(session.inbox.clone())
                         .headers(headers)
                         .payload(write.value.clone().into()),
                 )
@@ -404,7 +478,7 @@ async fn atomic(
             client
                 .publish_with_reply_and_headers(
                     subject,
-                    inbox.clone(),
+                    session.inbox.clone(),
                     headers,
                     write.value.clone().into(),
                 )
@@ -418,36 +492,47 @@ async fn atomic(
     // extra staging round trip. (ADR-50 fast-ingest has different rules.)
     // Staging replies are still consumed, but only a final durable ack succeeds.
     let _wait = crate::diagnostics::Scope::new(crate::diagnostics::NATS_ATOMIC_FINAL_WAIT);
-    loop {
-        let response = replies
-            .next()
-            .await
-            .ok_or_else(|| error("acknowledgement stream closed; outcome may be unknown"))?;
+    let result = loop {
+        let response = match session.replies.next().await {
+            Some(resp) => resp,
+            None => {
+                break Err(error(
+                    "acknowledgement stream closed; outcome may be unknown",
+                ))
+            }
+        };
         if response.status.is_some_and(|status| !status.is_success()) {
-            return Err(error("server rejected batch request"));
+            break Err(error("server rejected batch request"));
         }
         if response.payload.is_empty() {
             continue;
         }
-        match serde_json::from_slice::<Response<PublishAck>>(&response.payload).map_err(error)? {
-            Response::Err { error: e } if conflict(&e) => return Ok(None),
-            Response::Err { error: e } => return Err(error(e)),
-            Response::Ok(ack) => {
+        match serde_json::from_slice::<Response<PublishAck>>(&response.payload) {
+            Ok(Response::Err { error: e }) if conflict(&e) => break Ok(None),
+            Ok(Response::Err { error: e }) => break Err(error(e)),
+            Ok(Response::Ok(ack)) => {
+                if ack.batch_id.as_deref() != Some(&id) {
+                    continue;
+                }
                 if ack.stream != bucket.stream_name
-                    || ack.batch_id.as_deref() != Some(&id)
                     || ack.batch_size != Some(writes.len() as u64)
                     || ack.duplicate
                     || ack.sequence < writes.len() as u64
                 {
-                    return Err(error(
+                    break Err(error(
                         "invalid commit acknowledgement; outcome may be unknown",
                     ));
                 }
                 let first = ack.sequence - writes.len() as u64 + 1;
-                return Ok(Some((first..=ack.sequence).collect()));
+                break Ok(Some((first..=ack.sequence).collect()));
             }
+            Err(_) => continue,
         }
+    };
+    if result.is_ok() {
+        pool.release(session).await;
     }
+    result
 }
 
 #[cfg(test)]

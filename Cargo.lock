@@ -3671,6 +3671,7 @@ dependencies = [
  "chrono",
  "dog-core",
  "dog-queue",
+ "dog-schema",
  "dog-transport",
  "futures",
  "google-cloud-pubsub",

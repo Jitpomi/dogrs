@@ -1,14 +1,13 @@
-use crate::app::*;
+//! Application service types shared across services and background workers.
+
+use std::sync::Arc;
+use tokio_postgres::Client;
+
+pub use super::payments::payments_schema::RecordPayment;
+
 #[derive(Clone)]
-pub(crate) struct BillingContext {
-    pub(crate) db: Arc<Client>,
-    pub(crate) tenant: String,
-    pub(crate) crash_after_effect: bool,
-}
-#[derive(Serialize, Deserialize)]
-pub(crate) struct RecordPayment {
-    pub(crate) invoice: String,
-    pub(crate) mode: String,
-    #[serde(default)]
-    padding: String,
+pub struct BillingContext {
+    pub db: Arc<Client>,
+    pub tenant: String,
+    pub crash_after_effect: bool,
 }

@@ -1,4 +1,20 @@
-use crate::app::*;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+#[cfg(any(feature = "sqs", feature = "kafka-rust"))]
+use anyhow::Context;
+use anyhow::{bail, Result};
+#[cfg(feature = "nats")]
+use dog_queue::{QueueBackend, QueueCtx};
+use serde_json::json;
+use tokio_postgres::Client;
+use tokio_postgres_rustls::MakeRustlsConnect;
+
+#[cfg(feature = "nats")]
+use crate::runner::tenant;
+use crate::runner::{env, run, LEASE};
+
 #[cfg(any(
     feature = "rabbitmq",
     feature = "kafka",
@@ -16,8 +32,6 @@ use dog_queue::backend::postgres::{PostgresBackend, PostgresConfig};
 use dog_queue::backend::redis::{RedisBackend, RedisConfig};
 #[cfg(feature = "rabbitmq")]
 use dog_queue::backend::{broker::JobLedger, rabbitmq::RabbitMqBackend};
-use std::path::PathBuf;
-use tokio_postgres_rustls::MakeRustlsConnect;
 
 fn secret(name: &str) -> Result<String> {
     let dir = PathBuf::from(env("DOGRS_SECRETS_DIR")?);
@@ -336,5 +350,329 @@ pub async fn dispatch(role: &str) -> Result<()> {
             run(backend, role).await
         }
         _ => bail!("unknown DOGRS_BACKEND"),
+    }
+}
+
+/// Measures PostgreSQL transport latency across 100 ping tasks.
+pub async fn network_probe() -> Result<()> {
+    let db = Arc::new(postgres_client().await?);
+    for bytes in [1024usize, 16384, 65536] {
+        let payload = Arc::new(vec![42u8; bytes]);
+        let mut tasks = tokio::task::JoinSet::new();
+        let start = std::time::Instant::now();
+        for index in 0..100u32 {
+            tokio::time::sleep_until(tokio::time::Instant::from_std(
+                start + Duration::from_millis(u64::from(index) * 100),
+            ))
+            .await;
+            let db = db.clone();
+            let payload = payload.clone();
+            tasks.spawn(async move {
+                let start = std::time::Instant::now();
+                let row = db
+                    .query_typed_one(
+                        "SELECT octet_length($1::bytea)",
+                        &[(&*payload, tokio_postgres::types::Type::BYTEA)],
+                    )
+                    .await?;
+                anyhow::ensure!(
+                    row.get::<_, i32>(0) == payload.len() as i32,
+                    "unexpected transport echo"
+                );
+                Ok::<_, anyhow::Error>(start.elapsed().as_secs_f64() * 1000.0)
+            });
+        }
+        let mut timings = vec![];
+        while let Some(result) = tasks.join_next().await {
+            timings.push(result??);
+        }
+        timings.sort_by(f64::total_cmp);
+        println!(
+            "{}",
+            json!({"probe":"postgres_transport_only","payload_bytes":bytes,"requests":100,"offered_rps":10,"seconds":start.elapsed().as_secs_f64(),"p50_ms":timings[49],"p95_ms":timings[94]})
+        );
+    }
+    Ok(())
+}
+
+// Cluster discovery can elect a leader before peer placement becomes available.
+// Retry only that structured transient error; quota/auth/config failures stay fatal.
+#[cfg(feature = "nats")]
+pub async fn create_fixture_bucket(
+    js: &async_nats::jetstream::Context,
+    config: async_nats::jetstream::kv::Config,
+) -> Result<async_nats::jetstream::kv::Store> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        match js.create_key_value(config.clone()).await {
+            Ok(bucket) => return Ok(bucket),
+            Err(error) => {
+                let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+                let mut placement_pending = false;
+                while let Some(current) = cause {
+                    if let Some(server) = current.downcast_ref::<async_nats::jetstream::Error>() {
+                        placement_pending = server.error_code()
+                            == async_nats::jetstream::ErrorCode::CLUSTER_NO_PEERS;
+                    }
+                    cause = current.source();
+                }
+                if !placement_pending || tokio::time::Instant::now() >= deadline {
+                    return Err(error.into());
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
+async fn dispatch_backend<B: dog_queue::QueueBackend + 'static>(
+    backend: B,
+    role: &str,
+) -> Result<()> {
+    if role.starts_with("recovery-") {
+        crate::recovery::run(backend, role).await
+    } else {
+        crate::capacity::run(backend).await
+    }
+}
+
+/// Dispatches roles that execute against disposable local loopback backends (PostgreSQL, Redis, NATS).
+pub async fn dispatch_local(role: &str) -> Result<()> {
+    let backend = env("DOGRS_BACKEND")?;
+    match backend.as_str() {
+        "postgres" => {
+            let uri = env("DOGRS_POSTGRES_URL")?;
+            anyhow::ensure!(
+                uri.contains("127.0.0.1") || uri.contains("localhost"),
+                "local capacity requires loopback"
+            );
+            let mut options = dog_queue::backend::postgres::PostgresOptions {
+                payload_storage: match std::env::var("DOGRS_PG_PAYLOAD_STORAGE").as_deref() {
+                    Ok("external") => {
+                        Some(dog_queue::backend::postgres::PostgresPayloadStorage::External)
+                    }
+                    Ok("extended") => {
+                        Some(dog_queue::backend::postgres::PostgresPayloadStorage::Extended)
+                    }
+                    Err(std::env::VarError::NotPresent) => None,
+                    _ => bail!("PostgreSQL payload storage must be external or extended"),
+                },
+                max_connections: std::env::var("DOGRS_PG_POOL_SIZE")
+                    .unwrap_or_else(|_| "64".into())
+                    .parse()?,
+                enqueue_concurrency: std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY")
+                    .ok()
+                    .map(|n| n.parse())
+                    .transpose()?,
+                operation_timeout: Duration::from_secs(10),
+                ..Default::default()
+            };
+            let shards: u32 = std::env::var("DOGRS_CAPACITY_SHARDS")
+                .unwrap_or_else(|_| "1".into())
+                .parse()?;
+            anyhow::ensure!(
+                (1..=16).contains(&shards),
+                "PostgreSQL shards must be 1..=16"
+            );
+            if shards > 1 {
+                anyhow::ensure!(
+                    role == "capacity-local",
+                    "sharded topology is for the capacity fixture"
+                );
+                anyhow::ensure!(
+                    options.max_connections >= shards
+                        && options.max_connections.is_multiple_of(shards),
+                    "total pool size must divide evenly across shards"
+                );
+                options.max_connections /= shards;
+                options.batch_concurrency = Some((4 / shards as usize).max(1));
+                if let Some(cap) = options.enqueue_concurrency {
+                    anyhow::ensure!(
+                        cap >= shards && cap.is_multiple_of(shards),
+                        "producer cap must divide evenly across shards"
+                    );
+                    options.enqueue_concurrency = Some(cap / shards);
+                }
+                let shard_urls: Vec<String> = std::env::var("DOGRS_PG_SHARD_URLS")
+                    .ok()
+                    .map(|value| serde_json::from_str(&value))
+                    .transpose()?
+                    .unwrap_or_else(|| vec![uri.clone(); shards as usize]);
+                anyhow::ensure!(
+                    shard_urls.len() == shards as usize,
+                    "one PostgreSQL URL per fixed shard is required"
+                );
+                for url in &shard_urls {
+                    let config: tokio_postgres::Config = url.parse()?;
+                    anyhow::ensure!(
+                        !config.get_hosts().is_empty()
+                            && config.get_hosts().iter().all(|host| {
+                                matches!(
+                                    host,
+                                    tokio_postgres::config::Host::Tcp(host)
+                                        if host == "localhost"
+                                            || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+                                )
+                            }),
+                        "capacity shard URLs must use loopback hosts"
+                    );
+                }
+                let mut backends = Vec::new();
+                for (shard, connection_string) in shard_urls.into_iter().enumerate() {
+                    options.schema = Some(format!("dogrs_capacity_{shard}"));
+                    backends.push(Arc::new(
+                        dog_queue::backend::postgres::PostgresBackend::new_with_tls_options(
+                            dog_queue::backend::postgres::PostgresConfig { connection_string },
+                            tokio_postgres::NoTls,
+                            options.clone(),
+                        )
+                        .await?,
+                    ));
+                }
+                return dispatch_backend(
+                    dog_queue::backend::sharded::ShardedBackend::new(backends)?,
+                    role,
+                )
+                .await;
+            }
+            let backend = dog_queue::backend::postgres::PostgresBackend::new_with_tls_options(
+                dog_queue::backend::postgres::PostgresConfig {
+                    connection_string: uri,
+                },
+                tokio_postgres::NoTls,
+                options,
+            )
+            .await?;
+            let backend =
+                backend.with_lease_duration(Duration::from_secs(if role == "capacity-local" {
+                    300
+                } else {
+                    2
+                }));
+            dispatch_backend(backend, role).await
+        }
+        #[cfg(feature = "redis")]
+        "redis" => {
+            let uri = env("DOGRS_REDIS_URL")?;
+            anyhow::ensure!(
+                uri.contains("127.0.0.1") || uri.contains("localhost"),
+                "local capacity requires loopback"
+            );
+            let backend =
+                dog_queue::backend::redis::RedisBackend::new(
+                    dog_queue::backend::redis::RedisConfig {
+                        connection_string: uri,
+                    },
+                )
+                .await?
+                .with_lease_duration(Duration::from_secs(
+                    if role == "capacity-local" { 300 } else { 2 },
+                ));
+            if std::env::var("DOGRS_REDIS_REQUIRE_AOF").as_deref() == Ok("1") {
+                backend.verify_persistence().await?;
+            }
+            dispatch_backend(backend, role).await
+        }
+        #[cfg(feature = "nats")]
+        "nats" => {
+            let uri = env("DOGRS_NATS_URL")?;
+            anyhow::ensure!(
+                uri.contains("127.0.0.1") || uri.contains("localhost"),
+                "local recovery requires loopback"
+            );
+            let name = env("DOGRS_NATS_BUCKET")?;
+            let client = async_nats::connect(uri.split(',').collect::<Vec<_>>()).await?;
+            let js = async_nats::jetstream::new(client);
+            let shards: usize = std::env::var("DOGRS_CAPACITY_SHARDS")
+                .unwrap_or_else(|_| "1".into())
+                .parse()?;
+            anyhow::ensure!((1..=32).contains(&shards), "shards must be 1–32");
+            let connections =
+                std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_| "shared".into());
+            anyhow::ensure!(
+                matches!(connections.as_str(), "shared" | "per-shard"),
+                "NATS connections must be shared or per-shard"
+            );
+            if shards > 1 {
+                anyhow::ensure!(
+                    role == "capacity-local",
+                    "sharded topology is for the capacity fixture"
+                );
+                let mut backends = Vec::new();
+                for shard in 0..shards {
+                    let js = if connections == "per-shard" && shard > 0 {
+                        async_nats::jetstream::new(
+                            async_nats::connect(uri.split(',').collect::<Vec<_>>()).await?,
+                        )
+                    } else {
+                        js.clone()
+                    };
+                    let name = format!("{name}_{shard}");
+                    let bucket = create_fixture_bucket(
+                        &js,
+                        async_nats::jetstream::kv::Config {
+                            bucket: name.clone(),
+                            num_replicas: std::env::var("DOGRS_NATS_REPLICAS")
+                                .unwrap_or_else(|_| "3".into())
+                                .parse()?,
+                            storage: async_nats::jetstream::stream::StorageType::File,
+                            history: 1,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                    let mut config = bucket.stream.cached_info().config.clone();
+                    config.allow_direct = false;
+                    config.allow_atomic_publish =
+                        std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
+                    js.update_stream(config).await?;
+                    backends.push(Arc::new(
+                        dog_queue::backend::nats::NatsBackend::from_context(
+                            js.clone(),
+                            &name,
+                            1024 * 1024,
+                        )
+                        .await?
+                        .with_lease_duration(Duration::from_secs(300)),
+                    ));
+                }
+                return crate::capacity::run(dog_queue::backend::sharded::ShardedBackend::new(
+                    backends,
+                )?)
+                .await;
+            }
+            let bucket = match js.get_key_value(&name).await {
+                Ok(bucket) => bucket,
+                Err(_) => {
+                    create_fixture_bucket(
+                        &js,
+                        async_nats::jetstream::kv::Config {
+                            bucket: name.clone(),
+                            num_replicas: std::env::var("DOGRS_NATS_REPLICAS")
+                                .unwrap_or_else(|_| "1".into())
+                                .parse()?,
+                            storage: async_nats::jetstream::stream::StorageType::File,
+                            history: 1,
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+                }
+            };
+            let mut config = bucket.stream.cached_info().config.clone();
+            config.allow_direct = false;
+            config.allow_atomic_publish = std::env::var("DOGRS_NATS_ATOMIC").as_deref() != Ok("0");
+            js.update_stream(config).await?;
+            let backend =
+                dog_queue::backend::nats::NatsBackend::from_context(js.clone(), &name, 1024 * 1024)
+                    .await?
+                    .with_lease_duration(Duration::from_secs(if role == "capacity-local" {
+                        300
+                    } else {
+                        2
+                    }));
+            dispatch_backend(backend, role).await
+        }
+        _ => bail!("unsupported local capacity backend"),
     }
 }
