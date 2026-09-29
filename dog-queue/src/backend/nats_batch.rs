@@ -59,7 +59,7 @@ impl BatchWriter {
                 std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(4)
+                    .unwrap_or(8)
             } else {
                 std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
                     .ok()
@@ -106,10 +106,10 @@ impl BatchWriter {
                 let needs_collection = if enqueue {
                     bytes < TARGET_BATCH_BYTES && count < MAX_MESSAGES
                 } else {
-                    count < 2
+                    count < 4
                 };
                 if needs_collection && deferred.is_none() {
-                    let deadline = tokio::time::Instant::now() + Duration::from_millis(2);
+                    let deadline = tokio::time::Instant::now() + Duration::from_millis(1);
                     while count < MAX_MESSAGES {
                         match tokio::time::timeout_at(deadline, receiver.recv()).await {
                             Ok(Some(group)) => {
@@ -126,7 +126,7 @@ impl BatchWriter {
                                 count += group.writes.len();
                                 keys.extend(group.writes.iter().map(|w| w.key.clone()));
                                 groups.push(group);
-                                if !enqueue && count >= 2 {
+                                if !enqueue && count >= 4 {
                                     break;
                                 }
                             }
