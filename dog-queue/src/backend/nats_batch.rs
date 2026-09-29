@@ -454,7 +454,8 @@ async fn atomic_with_pool(
         );
         headers.insert("Nats-Expected-Stream", bucket.stream_name.as_str());
         headers.insert("Nats-Required-Api-Level", "2");
-        if i + 1 == writes.len() {
+        let is_commit = i + 1 == writes.len();
+        if is_commit {
             headers.insert("Nats-Batch-Commit", "1");
         }
         let subject = format!(
@@ -464,17 +465,17 @@ async fn atomic_with_pool(
         );
         let send_time = crate::diagnostics::start();
         if bucket.use_jetstream_prefix {
+            let mut request = async_nats::client::Request::new()
+                .headers(headers)
+                .payload(write.value.clone().into());
+            if is_commit {
+                request = request.inbox(session.inbox.clone());
+            }
             context
-                .send_request(
-                    subject,
-                    async_nats::client::Request::new()
-                        .inbox(session.inbox.clone())
-                        .headers(headers)
-                        .payload(write.value.clone().into()),
-                )
+                .send_request(subject, request)
                 .await
                 .map_err(error)?;
-        } else {
+        } else if is_commit {
             client
                 .publish_with_reply_and_headers(
                     subject,
@@ -484,13 +485,19 @@ async fn atomic_with_pool(
                 )
                 .await
                 .map_err(error)?;
+        } else {
+            client
+                .publish_with_headers(subject, headers, write.value.clone().into())
+                .await
+                .map_err(error)?;
         }
         crate::diagnostics::elapsed(crate::diagnostics::NATS_ATOMIC_SEND, send_time);
     }
     // Atomic batches have fixed bounds and no negotiated flow window. Every
     // frame requires API level 2; send them in connection order without an
     // extra staging round trip. (ADR-50 fast-ingest has different rules.)
-    // Staging replies are still consumed, but only a final durable ack succeeds.
+    // Only the final commit frame requests a reply inbox; intermediate frames
+    // are staged without generating unnecessary staging reply traffic.
     let _wait = crate::diagnostics::Scope::new(crate::diagnostics::NATS_ATOMIC_FINAL_WAIT);
     let result = loop {
         let response = match session.replies.next().await {
@@ -774,7 +781,13 @@ mod tests {
                 "2"
             );
         }
-        let reply = first.reply.unwrap();
+        assert!(
+            first.reply.is_none(),
+            "intermediate batch frame must not request a staging reply inbox"
+        );
+        let reply = last
+            .reply
+            .expect("final commit frame must supply a reply inbox");
         client
             .publish(reply.clone(), Vec::new().into())
             .await
