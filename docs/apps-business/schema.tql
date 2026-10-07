@@ -1,0 +1,176 @@
+define
+
+# =============================================================================
+# Attributes
+# =============================================================================
+id sub attribute, value string;
+tenant_id sub attribute, value string;
+name sub attribute, value string;
+email sub attribute, value string;
+title sub attribute, value string;
+status sub attribute, value string; # e.g. "active", "suspended", "pending", "approved", "rejected"
+role_name sub attribute, value string; # e.g. "owner", "admin", "manager", "member", "auditor"
+permission_code sub attribute, value string; # e.g. "billing:read", "billing:write", "org:manage"
+amount sub attribute, value double;
+currency sub attribute, value string; # e.g. "USD", "EUR"
+description sub attribute, value string;
+mime_type sub attribute, value string;
+file_size sub attribute, value long;
+blob_key sub attribute, value string;
+created_at sub attribute, value datetime;
+updated_at sub attribute, value datetime;
+
+# =============================================================================
+# Entities
+# =============================================================================
+
+# Abstract root for all organizational actors
+party sub entity,
+    abstract,
+    owns id @key,
+    owns tenant_id,
+    owns name,
+    owns created_at;
+
+# An organization, workspace, or enterprise tenant
+organization sub party,
+    owns status,
+    plays organization_hierarchy:parent_org,
+    plays organization_hierarchy:child_org,
+    plays membership:org,
+    plays billing_profile:org,
+    plays contract_party:party;
+
+# An individual user within the system
+user sub party,
+    owns email @unique,
+    owns status,
+    plays membership:member,
+    plays approval_record:approver,
+    plays task_assignment:assignee,
+    plays audit_event:actor;
+
+# Abstract root for assets and resources
+resource sub entity,
+    abstract,
+    owns id @key,
+    owns tenant_id,
+    owns name,
+    owns created_at;
+
+# Documents, contracts, and uploaded attachments
+document sub resource,
+    owns mime_type,
+    owns file_size,
+    owns blob_key,
+    owns status,
+    plays contract_party:contract_doc,
+    plays approval_record:target_resource;
+
+# Invoices and billing records
+invoice sub resource,
+    owns amount,
+    owns currency,
+    owns status,
+    plays invoice_billing:billed_invoice;
+
+# Workflow tasks and approval gates
+workflow_task sub resource,
+    owns status,
+    owns title,
+    owns description,
+    plays task_assignment:assigned_task,
+    plays approval_record:target_resource;
+
+# =============================================================================
+# Hyper-Relations
+# =============================================================================
+
+# Membership connecting a User to an Organization
+membership sub relation,
+    relates org,
+    relates member,
+    owns status,
+    owns created_at,
+    plays role_assignment:assigned_membership;
+
+# Role assigned to an active membership
+role_assignment sub relation,
+    relates assigned_membership,
+    owns role_name,
+    plays permission_grant:granted_role;
+
+# Granular permission granted to a role
+permission_grant sub relation,
+    relates granted_role,
+    owns permission_code;
+
+# Hierarchy connecting parent and child organizations (e.g. Enterprise -> Subsidiary / Branch)
+organization_hierarchy sub relation,
+    relates parent_org,
+    relates child_org,
+    owns created_at;
+
+# Business contract relating multiple parties, documents, and terms
+contract_party sub relation,
+    relates party,
+    relates contract_doc,
+    owns status,
+    owns created_at;
+
+# Multi-stage approval gate on a document or workflow task
+approval_record sub relation,
+    relates approver,
+    relates target_resource,
+    owns status,
+    owns created_at;
+
+# Task assignment connecting a user to a task
+task_assignment sub relation,
+    relates assignee,
+    relates assigned_task,
+    owns status;
+
+# Connects an invoice to the paying organization
+invoice_billing sub relation,
+    relates billed_invoice,
+    relates paying_org;
+
+# Connects an organization to its payment method / billing profile
+billing_profile sub relation,
+    relates org,
+    owns status;
+
+# Audit log tracking security and administrative operations
+audit_event sub relation,
+    relates actor,
+    owns description,
+    owns created_at;
+
+# =============================================================================
+# Automated Deductive Reasoning & Inference Rules
+# =============================================================================
+
+# Rule 1: Parent Organization Admins automatically inherit Admin role in child organizations
+rule parent-org-admin-inherits-child-membership:
+    when {
+        $parent isa organization;
+        $child isa organization;
+        (parent_org: $parent, child_org: $child) isa organization_hierarchy;
+        $m_parent (org: $parent, member: $u) isa membership;
+        (assigned_membership: $m_parent) isa role_assignment, has role_name "admin";
+    } then {
+        (org: $child, member: $u) isa membership;
+    };
+
+# Rule 2: Inferred Manager approval capability across organizational hierarchy
+rule manager-approval-inference:
+    when {
+        $org isa organization;
+        $m (org: $org, member: $mgr) isa membership;
+        (assigned_membership: $m) isa role_assignment, has role_name "manager";
+        $doc isa document, has tenant_id $t;
+        $org has tenant_id $t;
+    } then {
+        (approver: $mgr, target_resource: $doc) isa approval_record;
+    };

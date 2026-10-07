@@ -69,7 +69,7 @@ iroh = [
 axum = { version = "0.8", features = ["ws"] }
 tokio-tungstenite = "0.29"
 reqwest = { version = "0.12", default-features = false }
-dog-auth = { path = "../dog-auth" }
+dog-auth = { path = "../dog-auth", version = "0.2.0" }
 async-trait = "0.1"
 anyhow = "1"
 tokio-stream = { version = "0.1", features = ["net"] }
