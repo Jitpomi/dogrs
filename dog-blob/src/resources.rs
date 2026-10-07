@@ -176,6 +176,7 @@ pub(crate) struct DiskReservation {
     bytes: u64,
 }
 impl DiskReservation {
+    #[allow(deprecated)]
     pub fn grow(&mut self, bytes: u64) -> BlobResult<()> {
         let state = &self.resources.0;
         let previous = state
