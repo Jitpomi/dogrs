@@ -99,6 +99,16 @@ replication work without changing revision checks or the stored format. See
 ## Capacity, security and migration
 
 PostgreSQL v2 uses indexed job rows, binary payloads and a bounded connection pool.
+Concurrent admissions are coalesced into INSERTs of at most 16 jobs by default.
+Each caller waits for the statement's durable commit; failures are not reported
+as accepted work. Duplicate active idempotency keys are separated into different
+statements. A batch shares its transaction's rollback outcome. Set
+`PostgresOptions::enqueue_batch_size` to 1 for independent admission commits;
+valid batch sizes are 1–64. Existing producer limits still bound pending jobs,
+and the batch dispatcher's statement concurrency is separately bounded.
+Prepared enqueue statements are cached per physical connection and recreated
+after reconnecting. They require a direct/session connection or a pooler that
+supports protocol-level prepared statements.
 Redis uses one multiplexed connection manager per backend instance. The Redis
 client dependency is at least 1.7.1, including the upstream fix for a duplex
 read/write deadlock under backpressure (redis-rs #1955). A deterministic
