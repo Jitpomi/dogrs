@@ -221,6 +221,34 @@ impl RedisStore {
         let _scope = stage.map(crate::diagnostics::Scope::new);
         self.check_legacy(tenant).await?;
         let p = prefix(tenant);
+        if let Operation::Complete(id, token, result) = op {
+            // Completion needs no payload or client-side state transition. Check
+            // ownership and expiry and update metadata in one atomic script.
+            let result = serde_json::to_string(result).map_err(error)?;
+            let status: i32 = redis::Script::new(include_str!("redis_complete.lua"))
+                .key(format!("{p}:meta"))
+                .key(format!("{p}:leases"))
+                .key(format!("{p}:terminal"))
+                .key(format!("{p}:dedupe"))
+                .arg(id.as_str())
+                .arg(token.as_str())
+                .arg(result)
+                .invoke_async(&mut self.manager.clone())
+                .await
+                .map_err(error)?;
+            return match status {
+                0 => Ok(Outcome::Done),
+                1 => Err(QueueError::JobNotFound(id.clone())),
+                2 => Err(QueueError::JobCanceled),
+                3 => Err(QueueError::JobAlreadyTerminal),
+                4 => Err(QueueError::InvalidLeaseToken { job_id: id.clone() }),
+                5 => Err(QueueError::LeaseExpired),
+                6 => Err(QueueError::InvalidConfig(
+                    "Persisted result must fit in 4 KiB; store large results by reference".into(),
+                )),
+                _ => Err(error("Unexpected Redis completion outcome")),
+            };
+        }
         if let Operation::Purge(before) = op {
             let count:usize=redis::Script::new("local ids=redis.call('ZRANGEBYSCORE',KEYS[3],'-inf','('..ARGV[1],'LIMIT',0,1000); for _,id in ipairs(ids) do redis.call('HDEL',KEYS[1],id); redis.call('HDEL',KEYS[2],id); redis.call('ZREM',KEYS[3],id); end; return #ids")
                 .key(format!("{p}:meta")).key(format!("{p}:payload")).key(format!("{p}:terminal")).arg(before.timestamp_millis()).invoke_async(&mut self.manager.clone()).await.map_err(error)?;
