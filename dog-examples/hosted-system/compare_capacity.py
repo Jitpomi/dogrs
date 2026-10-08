@@ -27,7 +27,7 @@ if (root / 'comparison.json').exists():
     parser.error('choose a fresh report directory to preserve prior evidence')
 binary = pathlib.Path(os.environ['DOGRS_SYSTEM_BINARY']).resolve()
 env = dict(os.environ, DOGRS_SYSTEM_BINARY=str(binary), DOGRS_NATS_IMAGE='nats:2.15.0-alpine',
-           DOGRS_CAPACITY_INFLIGHT='32', DOGRS_CAPACITY_COMPARISON_TENANT='dogrs-test-comparison', DOGRS_PG_POOL_SIZE='64', DOGRS_PG_COMMIT_DELAY='0')
+           DOGRS_CAPACITY_INFLIGHT='32', DOGRS_CAPACITY_COMPARISON_TENANT='dogrs-test-comparison', DOGRS_PG_POOL_SIZE='64', DOGRS_PG_COMMIT_DELAY='0', DOGRS_PG_ENQUEUE_BATCH_SIZE='1')
 for key in ['DOGRS_ADMISSION_MODE', 'DOGRS_PG_ENQUEUE_CONCURRENCY', 'DOGRS_NATS_ATOMIC_ENQUEUE']:
     env.pop(key, None)
 digest = hashlib.sha256()
@@ -41,7 +41,8 @@ report = {'production_acceptance': False, 'scope': 'admission diagnostics plus s
           'source_dirty': bool(subprocess.check_output(['git','status','--porcelain'],cwd=repo,text=True)),
           'notes': ['Fresh provider containers per measurement; runs are serial.',
                     'Odd repeats reverse mode order to expose order/host variance.',
-                    'Native-layout shares PostgreSQL schema and admission SQL; it cannot rule out SQL/layout costs.',
+                    'Native-layout shares PostgreSQL schema and single-row admission SQL; PostgreSQL batching is disabled in every mode.',
+                    'This comparison cannot rule out SQL/layout costs or certify the batched configuration.',
                     'Native admission omits discovery, claims, completions, recovery and duplicate-submission races.',
                     'Short-run results do not certify the sustained production target.'], 'runs': []}
 try:
