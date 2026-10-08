@@ -123,16 +123,7 @@ impl NatsBackend {
     /// framing space and future completion metadata before admitting a job.
     pub fn from_store_with_max_payload(bucket: kv::Store, max_payload: usize) -> QueueResult<Self> {
         let config = &bucket.stream.cached_info().config;
-        if config.storage != stream::StorageType::File
-            || !config.max_age.is_zero()
-            || config.allow_direct
-            || config.discard != stream::DiscardPolicy::New
-        {
-            return Err(QueueError::InvalidConfig(
-                "NATS queue requires file storage, max_age=0, allow_direct=false and discard=new"
-                    .into(),
-            ));
-        }
+        validate_ledger_config(config)?;
         let max_state_bytes = state_budget(max_payload, config.max_message_size)?;
         Ok(Self {
             store: NatsStore {
@@ -178,5 +169,40 @@ mod tests {
         assert_eq!(state_budget(8 * 1024 * 1024, 128 * 1024).unwrap(), 126_976);
         assert_eq!(state_budget(1024 * 1024, -1).unwrap(), 900_000);
         assert!(state_budget(4096, -1).is_err());
+    }
+}
+
+fn validate_ledger_config(config: &stream::Config) -> QueueResult<()> {
+    if config.storage != stream::StorageType::File
+        || !config.max_age.is_zero()
+        || config.allow_direct
+        || config.discard != stream::DiscardPolicy::New
+        || config.retention != stream::RetentionPolicy::Limits
+    {
+        return Err(QueueError::InvalidConfig(
+            "NATS queue requires file storage, max_age=0, allow_direct=false, discard=new and limits retention".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+    #[test]
+    fn rejects_consumer_dependent_retention() {
+        let mut config = stream::Config {
+            storage: stream::StorageType::File,
+            discard: stream::DiscardPolicy::New,
+            ..Default::default()
+        };
+        assert!(validate_ledger_config(&config).is_ok());
+        for retention in [
+            stream::RetentionPolicy::Interest,
+            stream::RetentionPolicy::WorkQueue,
+        ] {
+            config.retention = retention;
+            assert!(validate_ledger_config(&config).is_err());
+        }
     }
 }

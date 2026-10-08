@@ -19,6 +19,46 @@ use std::{future::Future, sync::Arc, time::Duration};
 fn error(e: impl std::fmt::Display) -> QueueError {
     QueueError::Internal(e.to_string())
 }
+// A late reply cannot establish that a lease-sensitive write committed in time.
+// Timeout cancels local waiting, not a remotely dispatched commit. Never replay it.
+async fn lease_write<F>(until: Option<chrono::DateTime<Utc>>, write: F) -> QueueResult<bool>
+where
+    F: Future<Output = QueueResult<bool>>,
+{
+    let Some(until) = until else {
+        return write.await;
+    };
+    let remaining = (until - Utc::now())
+        .to_std()
+        .map_err(|_| QueueError::LeaseExpired)?;
+    if remaining.is_zero() {
+        return Err(QueueError::LeaseExpired);
+    }
+    match tokio::time::timeout(remaining, write).await {
+        Ok(Ok(false)) => Ok(false),
+        Ok(Ok(true)) if Utc::now() < until => Ok(true),
+        Ok(Err(err)) => Err(err),
+        _ => Err(error("JetStream lease deadline elapsed while awaiting write; commit outcome may be unknown; reconcile status before retrying")),
+    }
+}
+fn mutation_deadline(row: &StoredRecord, op: &Operation) -> Option<chrono::DateTime<Utc>> {
+    if matches!(
+        op,
+        Operation::Complete(..) | Operation::Fail(..) | Operation::Heartbeat(..)
+    ) {
+        row.record.lease_until()
+    } else {
+        None
+    }
+}
+fn valid_claim(job: &crate::LeasedJob) -> QueueResult<()> {
+    if job.record.lease_expired(Utc::now()) {
+        Err(QueueError::LeaseExpired)
+    } else {
+        Ok(())
+    }
+}
+
 // Immutable payload reads do not grant ownership. Overlap them with the claim,
 // but expose bytes only after the exact metadata revision was durably claimed.
 // A speculative read failure gets one fresh read after ownership is established;
@@ -856,6 +896,7 @@ impl NatsStore {
                 })
             });
             if let Some((revision, row)) = cached {
+                let deadline = mutation_deadline(&row, op);
                 let mut state = TenantState::default();
                 state.jobs.insert(id.clone(), row);
                 // The cache grants no authority. A valid transition must still
@@ -863,13 +904,15 @@ impl NatsStore {
                 // remotely extended lease) and CAS conflicts fall through to
                 // the authoritative read below instead of escaping to callers.
                 if let Ok(Outcome::Done) = state.apply_at(tenant, op, Utc::now()) {
-                    if self
-                        .cas(
+                    if lease_write(
+                        deadline,
+                        self.cas(
                             &key,
                             serde_json::to_vec(&state.jobs[id]).map_err(error)?,
                             revision,
-                        )
-                        .await?
+                        ),
+                    )
+                    .await?
                     {
                         return Ok(Outcome::Done);
                     }
@@ -936,6 +979,7 @@ impl NatsStore {
                 })
             });
             if let Some((revision, row)) = cached {
+                let deadline = mutation_deadline(&row, op);
                 let mut state = TenantState::default();
                 state.jobs.insert(id.clone(), row);
                 if matches!(op, Operation::Dequeue(..)) {
@@ -955,6 +999,7 @@ impl NatsStore {
                             )
                             .await?
                         {
+                            valid_claim(&job)?;
                             job.record.message.payload_bytes = bytes;
                             return Ok(Outcome::Lease(Some(job)));
                         }
@@ -968,7 +1013,7 @@ impl NatsStore {
                     if let Ok(outcome) = state.apply_at(tenant, op, Utc::now()) {
                         let row = &state.jobs[&id];
                         let value = serde_json::to_vec(row).map_err(error)?;
-                        if self.cas(&key, value, revision).await? {
+                        if lease_write(deadline, self.cas(&key, value, revision)).await? {
                             return Ok(outcome);
                         }
                     }
@@ -1014,6 +1059,7 @@ impl NatsStore {
             if key.starts_with("a.") {
                 index.observe(key.clone(), entry.revision, entry.value.to_vec(), false);
             }
+            let deadline = mutation_deadline(&row, op);
             let mut state = TenantState::default();
             state.jobs.insert(id.clone(), row);
             let mut outcome = state.apply_at(tenant, op, Utc::now())?;
@@ -1036,10 +1082,11 @@ impl NatsStore {
                     .claim_bytes(&key, value, entry.revision, tenant, &id)
                     .await?
                 {
+                    valid_claim(job)?;
                     job.record.message.payload_bytes = bytes;
                     return Ok(outcome);
                 }
-            } else if self.cas(&key, value, entry.revision).await? {
+            } else if lease_write(deadline, self.cas(&key, value, entry.revision)).await? {
                 // The terminal CAS is already durable. Retain it in this cell;
                 // enqueue archives it before a future idempotency-key reuse.
                 return Ok(outcome);
@@ -1694,5 +1741,70 @@ mod claim_read_tests {
                     .contains("final read failure"));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod lease_deadline_tests {
+    use super::*;
+    #[tokio::test]
+    async fn payload_delay_cannot_expose_expired_claim() {
+        let mut state = TenantState::default();
+        state
+            .apply_at(
+                "test",
+                &Operation::Enqueue(crate::JobMessage::new("work", vec![], "bytes", "q")),
+                Utc::now(),
+            )
+            .unwrap();
+        let Outcome::Lease(Some(job)) = state
+            .apply_at(
+                "test",
+                &Operation::Dequeue(vec!["q".into()], Duration::from_millis(20)),
+                Utc::now(),
+            )
+            .unwrap()
+        else {
+            panic!("expected claim");
+        };
+        assert!(valid_claim(&job).is_ok());
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(matches!(valid_claim(&job), Err(QueueError::LeaseExpired)));
+    }
+    #[tokio::test]
+    async fn expired_write_is_never_polled() {
+        let result = lease_write(Some(Utc::now() - chrono::Duration::seconds(1)), async {
+            panic!("expired write must not be submitted");
+        })
+        .await;
+        assert!(matches!(result, Err(QueueError::LeaseExpired)));
+    }
+    #[tokio::test]
+    async fn delayed_acknowledgement_is_uncertain_not_success() {
+        let result = lease_write(
+            Some(Utc::now() + chrono::Duration::milliseconds(20)),
+            async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Ok(true)
+            },
+        )
+        .await;
+        assert!(
+            matches!(result, Err(QueueError::Internal(message)) if message.contains("outcome may be unknown"))
+        );
+        assert!(
+            lease_write(Some(Utc::now() + chrono::Duration::seconds(1)), async {
+                Ok(true)
+            })
+            .await
+            .unwrap()
+        );
+        assert!(
+            !lease_write(Some(Utc::now() + chrono::Duration::seconds(1)), async {
+                Ok(false)
+            })
+            .await
+            .unwrap()
+        );
     }
 }

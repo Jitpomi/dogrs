@@ -119,3 +119,25 @@ Revision fencing does not implement a server-time expiry predicate. Lease
 transitions use application wall clocks before CAS; clock skew and delayed commits
 remain deployment/contract limitations described in `KV-STORAGE.md`. Do not infer
 arbitrary-clock-skew safety from a successful normal recovery test.
+
+### Lease response deadlines and stream validation
+
+Existing buckets must use `Limits` retention. `Interest` and `WorkQueue` retention
+are rejected because job records and payloads must survive independently of
+consumer interest and acknowledgement.
+
+Completion, failure and heartbeat writes are locally bounded by the previously
+observed lease deadline. A deadline already passed prevents submission. A timeout
+or successful acknowledgement observed after that deadline returns an uncertain
+outcome error, not success: the remote write may have committed. Reconcile job
+status before deciding whether to retry; do not assume the write was rolled back.
+A dequeue also rechecks expiry after both ownership and payload retrieval finish,
+so a payload delay cannot knowingly hand an already expired lease to a worker.
+The stored lease is left for normal expiry recovery; it is not rolled back over a
+potential concurrent owner.
+
+These guards do not add a server-side time predicate to JetStream CAS. An in-flight
+write can still commit after its application deadline, and clock synchronization
+remains required. Strict server-time commit expiry needs a different coordination
+mechanism; revision fencing alone cannot provide it. The guards do not establish
+an increased capacity limit or remove the cost of KV metadata transitions.
