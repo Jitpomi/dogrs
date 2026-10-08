@@ -151,6 +151,45 @@ cause. Removing batching was slower, while increasing its byte target did not
 reliably improve completion. The traced server persistence cost remains concrete;
 these experiments establish no further safe runtime fix for the full target.
 
+## Reply isolation and optional staging acknowledgements
+
+A subsequent code review found that pooled reply subjects were reused across
+batches. Successful acknowledgements have a batch ID, but errors and empty
+staging replies do not. A deterministic live-server protocol test delivers an
+old conflict reply after the next batch starts: the previous implementation
+returns a conflict for the new batch despite its successful acknowledgement.
+Using a unique per-batch reply subject beneath the pooled wildcard subscription
+fixes the regression while preserving subscription reuse. This fault-injection
+test demonstrates reply isolation; it does not establish that delayed replies
+caused any of the capacity misses above.
+
+The same candidate omits optional intermediate staging reply requests on the
+standard publishing path. First-frame and final-commit replies remain required;
+custom API-prefix routing keeps its existing request path. Expected revisions,
+batch bounds, conflict splitting and final durable acknowledgement validation
+are unchanged. This reduces protocol reply traffic, not durable writes.
+
+ABBA local trials retained 16 buckets, four workers per tenant, R3, always-fsync,
+100 tenants at 10 jobs/second, unique 64 KiB payloads and the 65-second window:
+
+| Order | Path | Accepted / completed / verified | Operation errors |
+|---|---|---:|---:|
+| 1 | Baseline | 50,200 / 50,200 / 50,200 | 0 |
+| 2 | Candidate | 49,562 / 49,562 / 49,562 | 0 |
+| 3 | Candidate | 50,275 / 50,275 / 50,275 | 0 |
+| 4 | Baseline | 47,606 / 47,606 / 47,606 | 0 |
+
+All four failed capacity through overload rejection. The candidate is retained
+for reply isolation and reduced acknowledgement traffic, **not as a demonstrated
+throughput improvement**. All 71 library tests, including live JetStream tests,
+passed; the new delayed-reply test was also confirmed to fail with the old
+reply-subject reuse restored. Clippy with warnings denied and formatting passed.
+A separate 64 KiB, R3, always-fsync recovery fixture passed after killing the
+active stream leader and keeping it down (three-second configured outage).
+This is a colocated local failure test, not provider failure-domain certification.
+Runner scripts, logs and binary hashes are under `dogrs-reply-control` in the
+task workspace. Opt-in diagnostics were disabled for both release binaries.
+
 ## Decision
 
 Retain the validated metadata collection fix and conservative execution defaults.

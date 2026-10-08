@@ -64,6 +64,19 @@ and are not submitted after the deadline. Optional `queue-diagnostics`
 timings distinguish frame submission and final durable acknowledgement waiting;
 only the final acknowledgement establishes success.
 
+Pooled subscriptions use a distinct reply subject for every batch. Replies from
+an earlier batch are ignored before inspecting their status or payload, including
+errors and empty staging replies that have no batch ID. A delayed conflict reply
+therefore cannot reject a later batch using the same subscription.
+For the standard publish path, only the first and final frames request replies;
+intermediate staging replies are optional under
+[ADR-50](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-50.md).
+Custom JetStream API-prefix routing retains its existing per-frame request path.
+Both paths require the same validated final commit acknowledgement. This reduces
+reply traffic on the standard path, not the number of durable writes. Diagnostic
+staging intervals consequently observe fewer replies and must not be compared
+directly with the earlier per-frame-reply measurements.
+
 Local workers reserve advisory candidates while their claim is in flight. This
 avoids redundant local lease races but grants no ownership. The server's exact
 revision check still fences every claim; dropping/canceling the claim releases the

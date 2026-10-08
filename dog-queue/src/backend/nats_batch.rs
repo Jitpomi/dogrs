@@ -55,7 +55,11 @@ impl SessionPool {
         }
         drop(guard);
         let inbox = self.client.new_inbox();
-        let replies = self.client.subscribe(inbox.clone()).await.map_err(error)?;
+        let replies = self
+            .client
+            .subscribe(format!("{inbox}.*"))
+            .await
+            .map_err(error)?;
         Ok(Session { inbox, replies })
     }
     async fn release(&self, session: Session) {
@@ -457,6 +461,9 @@ async fn atomic_with_pool(
     let client = context.client();
     let mut session = pool.acquire().await?;
     let id = uuid::Uuid::new_v4().to_string();
+    // Error and empty staging replies do not carry a batch ID. Correlate every
+    // response through its subject, including delayed replies after pool reuse.
+    let reply_subject = format!("{}.{id}", session.inbox);
     for (i, write) in writes.iter().enumerate() {
         let mut headers = async_nats::HeaderMap::new();
         headers.insert("Nats-Batch-Id", id.as_str());
@@ -481,17 +488,26 @@ async fn atomic_with_pool(
                 .send_request(
                     subject,
                     async_nats::client::Request::new()
-                        .inbox(session.inbox.clone())
+                        .inbox(reply_subject.clone())
                         .headers(headers)
                         .payload(write.value.clone().into()),
                 )
+                .await
+                .map_err(error)?;
+        } else if i > 0 && i + 1 < writes.len() {
+            // ADR-50 makes intermediate staging replies optional. The first
+            // frame establishes support and the last returns the durable ack.
+            // A rejected intermediate frame abandons the batch; its final
+            // frame then fails rather than acknowledging a partial commit.
+            client
+                .publish_with_headers(subject, headers, write.value.clone().into())
                 .await
                 .map_err(error)?;
         } else {
             client
                 .publish_with_reply_and_headers(
                     subject,
-                    session.inbox.clone(),
+                    reply_subject.clone(),
                     headers,
                     write.value.clone().into(),
                 )
@@ -521,6 +537,9 @@ async fn atomic_with_pool(
                 ))
             }
         };
+        if response.subject.as_str() != reply_subject {
+            continue;
+        }
         if response.status.is_some_and(|status| !status.is_success()) {
             break Err(error("server rejected batch request"));
         }
@@ -754,6 +773,7 @@ mod tests {
                 let writes = [
                     write("job", 0, vec![1]),
                     write("payload", 0, vec![2; 65536]),
+                    write("other", 0, vec![3]),
                 ];
                 atomic(&js, &bucket, &writes.iter().collect::<Vec<_>>()).await
             })
@@ -762,6 +782,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        let middle = tokio::time::timeout(Duration::from_secs(2), frames.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            middle.reply.is_none(),
+            "intermediate staging replies are optional"
+        );
         let last = tokio::time::timeout(Duration::from_secs(2), frames.next())
             .await
             .expect("batch waited for staging before sending its remaining frames")
@@ -783,7 +811,7 @@ mod tests {
                 .get("Nats-Batch-Sequence")
                 .unwrap()
                 .as_str(),
-            "2"
+            "3"
         );
         assert_eq!(
             last.headers
@@ -818,7 +846,7 @@ mod tests {
                 .is_err(),
             "staging acknowledgement must not establish a successful commit"
         );
-        let ack = serde_json::json!({"stream":bucket.stream_name,"seq":2,"batch":last.headers.as_ref().unwrap().get("Nats-Batch-Id").unwrap().as_str(),"count":2});
+        let ack = serde_json::json!({"stream":bucket.stream_name,"seq":3,"batch":last.headers.as_ref().unwrap().get("Nats-Batch-Id").unwrap().as_str(),"count":3});
         client
             .publish(reply, serde_json::to_vec(&ack).unwrap().into())
             .await
@@ -829,8 +857,84 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .unwrap(),
-            Some(vec![1, 2])
+            Some(vec![1, 2, 3])
         );
+        js.delete_key_value(&bucket.name).await.unwrap();
+    }
+    #[tokio::test]
+    #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
+    async fn pooled_session_ignores_delayed_replies_from_rejected_batch() {
+        let (js, mut bucket) = fixture().await;
+        let client = js.client();
+        bucket.prefix = format!("dogrs.protocol.{}.", uuid::Uuid::new_v4().simple());
+        bucket.put_prefix = None;
+        bucket.use_jetstream_prefix = false;
+        let mut frames = client
+            .subscribe(format!("{}>", bucket.prefix))
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        let pool = Arc::new(SessionPool::new(client.clone()));
+        let mut previous_reply: Option<async_nats::Subject> = None;
+        for rejected in [true, false] {
+            let task = {
+                let pool = pool.clone();
+                let js = js.clone();
+                let bucket = bucket.clone();
+                tokio::spawn(async move {
+                    let writes = [write("job", 0, vec![1]), write("payload", 0, vec![2])];
+                    atomic_with_pool(&pool, &js, &bucket, &writes.iter().collect::<Vec<_>>()).await
+                })
+            };
+            let first = tokio::time::timeout(Duration::from_secs(2), frames.next())
+                .await
+                .unwrap()
+                .unwrap();
+            let last = tokio::time::timeout(Duration::from_secs(2), frames.next())
+                .await
+                .unwrap()
+                .unwrap();
+            let reply = first.reply.unwrap();
+            let conflict = serde_json::json!({"error":{"code":400,"err_code":10071,"description":"wrong last sequence"}});
+            if rejected {
+                client
+                    .publish(reply.clone(), serde_json::to_vec(&conflict).unwrap().into())
+                    .await
+                    .unwrap();
+            } else {
+                // Deliver stale replies only after the next batch has acquired
+                // the pooled subscription. Draining at acquire cannot fix this.
+                let old = previous_reply.as_ref().unwrap();
+                client
+                    .publish(old.clone(), Vec::new().into())
+                    .await
+                    .unwrap();
+                client
+                    .publish(old.clone(), serde_json::to_vec(&conflict).unwrap().into())
+                    .await
+                    .unwrap();
+                let ack = serde_json::json!({"stream":bucket.stream_name,"seq":2,"batch":last.headers.as_ref().unwrap().get("Nats-Batch-Id").unwrap().as_str(),"count":2});
+                client
+                    .publish(reply.clone(), serde_json::to_vec(&ack).unwrap().into())
+                    .await
+                    .unwrap();
+            }
+            let result = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(result, if rejected { None } else { Some(vec![1, 2]) });
+            if let Some(old) = previous_reply {
+                assert_ne!(reply, old);
+                assert_eq!(
+                    reply.rsplit_once('.').unwrap().0,
+                    old.rsplit_once('.').unwrap().0,
+                    "exercise reuse of the same subscription"
+                );
+            }
+            previous_reply = Some(reply);
+        }
         js.delete_key_value(&bucket.name).await.unwrap();
     }
     #[tokio::test]
