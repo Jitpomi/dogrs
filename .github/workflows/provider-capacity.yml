@@ -7,7 +7,7 @@ on:
       mode:
         description: Attribution profiles are diagnostics, not production acceptance
         type: choice
-        options: [queue, queue-comparison, attribution]
+        options: [queue, queue-comparison, all-backends, attribution]
         default: queue
       repeats:
         description: Attribution repetitions (odd repetitions reverse profile order)
@@ -129,7 +129,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend && format('["{0}"]', inputs.backend) || '["postgres","redis","nats"]') }}
+        backend: ${{ fromJSON(inputs.mode == 'all-backends' && '["all"]' || inputs.backend && format('["{0}"]', inputs.backend) || '["postgres","redis","nats"]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -146,6 +146,29 @@ jobs:
           "$profiler" version
           echo "DOGRS_PERF=$profiler" >> "$GITHUB_ENV"
       - run: |
+          if [ "$CAPACITY_MODE" = all-backends ]; then
+            # One binary and host, fresh durable fixtures, both provider orders.
+            # Keep every failure; later success must not overwrite it.
+            test "$PAYLOAD_BYTES" = 65536
+            test "$WORKER_COMPARISON" = auto
+            test "$NATS_ATOMIC" = on
+            test "$NATS_CONNECTIONS" = shared
+            test "$PG_INSTANCES" = 1
+            test "$PG_SHARDS" = 1
+            test "$DOGRS_PG_FIXTURE_PARTITIONS" = 0
+            test "$PG_WAL_INIT" = on
+            test "$PG_PAYLOAD_STORAGE" = external
+            test "$PRODUCER_CAP" = none
+            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-all-backends
+            status=0
+            for provider in postgres redis nats nats redis postgres; do
+              workers=1; shards=1; storage=extended
+              if [ "$provider" = nats ]; then workers=2; shards=16; fi
+              if [ "$provider" = postgres ]; then storage=external; fi
+              DOGRS_CAPACITY_WORKERS="$workers" DOGRS_CAPACITY_SHARDS="$shards" DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$provider" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
+          fi
           if [ "$CAPACITY_MODE" = queue-comparison ]; then
             test "$PAYLOAD_BYTES" = 65536
             python3 dog-examples/hosted-system/compare_queue_diagnostics.py "$BACKEND" --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --report-dir provider-capacity
@@ -255,7 +278,7 @@ jobs:
           PAYLOAD_BYTES: ${{ inputs.payload_bytes || '65536' }}
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
           DOGRS_CAPACITY_WORKERS: ${{ inputs.workers_per_tenant && inputs.workers_per_tenant != 'auto' && inputs.workers_per_tenant != 'compare' && inputs.workers_per_tenant || (matrix.backend == 'nats' && '2' || '1') }}
-          WORKER_COMPARISON: ${{ inputs.workers_per_tenant }}
+          WORKER_COMPARISON: ${{ inputs.workers_per_tenant || 'auto' }}
           PRODUCER_CAP: ${{ inputs.postgres_enqueue_concurrency || 'none' }}
           DOGRS_CAPACITY_INFLIGHT: 32
           DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
