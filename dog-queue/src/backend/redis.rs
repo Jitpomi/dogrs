@@ -105,9 +105,9 @@ impl RedisBackend {
                     // A single reconnect cycle must fit inside the queue's
                     // 30-second operation budget, even with black-holed TCP.
                     .set_number_of_retries(3)
-                    .set_max_delay(500)
-                    .set_connection_timeout(std::time::Duration::from_secs(5))
-                    .set_response_timeout(std::time::Duration::from_secs(10)),
+                    .set_max_delay(std::time::Duration::from_millis(500))
+                    .set_connection_timeout(Some(std::time::Duration::from_secs(5)))
+                    .set_response_timeout(Some(std::time::Duration::from_secs(10))),
             )
             .await
             .map_err(error)?;
