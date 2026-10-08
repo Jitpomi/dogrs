@@ -27,10 +27,10 @@ on:
         options: ['10', '30', '60', '120']
         default: '60'
       jobs_per_second_per_tenant:
-        description: 5 tests the proposed 500/s operating target; 10 preserves the 1000/s stress target
+        description: 9 is the 900/s target; 5 is the tested local baseline; 10 is the 1000/s stress target
         type: choice
-        options: ['5', '10']
-        default: '10'
+        options: ['5', '9', '10']
+        default: '9'
       nats_atomic:
         description: Conditional atomic writer comparison on the same runner
         type: choice
@@ -229,7 +229,7 @@ jobs:
           python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
         env:
           BACKEND: ${{ matrix.backend }}
-          CAPACITY_RATE: ${{ inputs.jobs_per_second_per_tenant || '10' }}
+          CAPACITY_RATE: ${{ inputs.jobs_per_second_per_tenant || '9' }}
           DURATION_SECONDS: ${{ inputs.seconds || '60' }}
           PAYLOAD_BYTES: ${{ inputs.payload_bytes || '65536' }}
           DOGRS_SYSTEM_BINARY: target/release/hosted-system

@@ -202,3 +202,7 @@ local fixture. All 180,000 jobs completed and verified without errors or overloa
 This is deployment-specific evidence; 1,000/s remains an unmet stress target.
 Enqueue latency varied, and longer soaks and independent provider failures are
 not certified by these capacity runs.
+
+The current [default target is 900/s](../docs/jetstream-target-900.md). Three
+local tests missed that target through overload rejection. This does not replace
+the passing 500/s evidence or make 900/s a supported throughput guarantee.

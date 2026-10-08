@@ -20,7 +20,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
         .unwrap_or_else(|_| "100".into())
         .parse()?;
     let rate: usize = std::env::var("DOGRS_CAPACITY_RATE")
-        .unwrap_or_else(|_| "10".into())
+        .unwrap_or_else(|_| "9".into())
         .parse()?;
     let seconds: usize = std::env::var("DOGRS_CAPACITY_SECONDS")
         .unwrap_or_else(|_| "30".into())

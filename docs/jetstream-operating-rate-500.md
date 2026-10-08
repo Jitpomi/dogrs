@@ -5,6 +5,9 @@ Three fresh-fixture runs passed at 500 jobs/second across 100 tenants, with uniq
 universal adapter limit, an hours-long soak certification, or a fix for the
 unmet 1,000/s stress target. The queue adapter is unchanged from `e77f606`.
 
+The default was subsequently changed to [900/s](jetstream-target-900.md); the
+default-ten statement below describes the harness at the time of this experiment.
+
 ## Configuration and results
 
 Each run offered five jobs/second per tenant for 120 seconds, with five seconds

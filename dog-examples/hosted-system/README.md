@@ -141,8 +141,9 @@ size at 10 requests/second, without queue operations or persistent writes.
 ### Separate operating-rate and stress measurements
 
 The aggregate `run_recovery.py --capacity` workload accepts `--rate` in jobs per
-second **per tenant** (1–10). It always uses 100 tenants. The default remains ten,
-so existing runs still test 1,000 jobs/second. Five tests the proposed 500/s
+second **per tenant** (1–10). It always uses 100 tenants. The default is nine,
+so ordinary runs target 900 jobs/second. Explicit `--rate 10` retains the 1,000/s
+stress benchmark. Five tests the measured 500/s
 operating target without changing payload integrity, durability, zero-error or
 five-second drain requirements:
 
@@ -155,6 +156,5 @@ python3 dog-examples/hosted-system/run_recovery.py nats --capacity \
 
 Repeat on fresh fixtures and inspect every verdict. A lower-rate pass never
 reclassifies a failed 1,000/s run. The Provider capacity manual workflow exposes
-both rates and the 120-second duration; pull requests retain the original stress
-target. Attribution profiles retain their original fixed rate and reject a
+all three rates and the 120-second duration; pull requests target 900/s. Attribution profiles retain their original fixed rate and reject a
 non-default rate in the runner. Capacity results record the actual per-tenant rate.
