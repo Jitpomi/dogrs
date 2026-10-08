@@ -7,7 +7,7 @@ on:
       mode:
         description: Attribution profiles are diagnostics, not production acceptance
         type: choice
-        options: [queue, attribution]
+        options: [queue, queue-comparison, attribution]
         default: queue
       repeats:
         description: Attribution repetitions (odd repetitions reverse profile order)
@@ -135,7 +135,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build -p hosted-system --release --features redis,nats${{ inputs.profile_queue && ',queue-diagnostics' || '' }} --locked
+      - run: cargo build -p hosted-system --release --features redis,nats${{ (inputs.profile_queue || inputs.mode == 'queue-comparison') && ',queue-diagnostics' || '' }} --locked
       - name: Install optional CPU profiler
         if: ${{ inputs.profile_cpu }}
         run: |
@@ -146,6 +146,12 @@ jobs:
           "$profiler" version
           echo "DOGRS_PERF=$profiler" >> "$GITHUB_ENV"
       - run: |
+          if [ "$CAPACITY_MODE" = queue-comparison ]; then
+            test "$PAYLOAD_BYTES" = 65536
+            test "$BACKEND" != postgres
+            python3 dog-examples/hosted-system/compare_queue_diagnostics.py "$BACKEND" --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --report-dir provider-capacity
+            exit $?
+          fi
           if [ "$PRODUCER_CAP" != none ]; then
             export DOGRS_PG_ENQUEUE_CONCURRENCY="$PRODUCER_CAP"
           fi
@@ -228,6 +234,7 @@ jobs:
           fi
           python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
         env:
+          CAPACITY_MODE: ${{ inputs.mode || 'queue' }}
           BACKEND: ${{ matrix.backend }}
           CAPACITY_RATE: ${{ inputs.jobs_per_second_per_tenant || '9' }}
           DURATION_SECONDS: ${{ inputs.seconds || '60' }}
@@ -256,7 +263,7 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import json, os, pathlib
-          logs = list(pathlib.Path("provider-capacity").glob("*/capacity.log"))
+          logs = list(pathlib.Path("provider-capacity").rglob("capacity.log"))
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
               summary.write("## Sustained queue capacity\n\n")
               found = False
