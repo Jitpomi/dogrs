@@ -16,7 +16,9 @@ const MAX_BYTES: usize = 2 * 1024 * 1024;
 const TARGET_BATCH_BYTES: usize = 256 * 1024;
 struct Write {
     key: String,
-    value: Vec<u8>,
+    // Share the owned buffer with async-nats and any definitively rejected
+    // batch's child attempts; cloning a Vec here copies every payload again.
+    value: bytes::Bytes,
     revision: u64,
 }
 struct Group {
@@ -279,7 +281,7 @@ impl BatchWriter {
         Ok(self
             .send(vec![Write {
                 key: key.into(),
-                value,
+                value: value.into(),
                 revision,
             }])
             .await?
@@ -299,12 +301,12 @@ impl BatchWriter {
                 // discoverable until its payload commits in the same batch.
                 Write {
                     key: key.into(),
-                    value: metadata,
+                    value: metadata.into(),
                     revision,
                 },
                 Write {
                     key: payload_key,
-                    value: payload,
+                    value: payload.into(),
                     revision: 0,
                 },
             ])
@@ -314,7 +316,7 @@ impl BatchWriter {
 }
 async fn single(bucket: &kv::Store, write: &Write) -> QueueResult<Option<u64>> {
     match bucket
-        .update(&write.key, write.value.clone().into(), write.revision)
+        .update(&write.key, write.value.clone(), write.revision)
         .await
     {
         Ok(revision) => Ok(Some(revision)),
@@ -490,7 +492,7 @@ async fn atomic_with_pool(
                     async_nats::client::Request::new()
                         .inbox(reply_subject.clone())
                         .headers(headers)
-                        .payload(write.value.clone().into()),
+                        .payload(write.value.clone()),
                 )
                 .await
                 .map_err(error)?;
@@ -500,7 +502,7 @@ async fn atomic_with_pool(
             // A rejected intermediate frame abandons the batch; its final
             // frame then fails rather than acknowledging a partial commit.
             client
-                .publish_with_headers(subject, headers, write.value.clone().into())
+                .publish_with_headers(subject, headers, write.value.clone())
                 .await
                 .map_err(error)?;
         } else {
@@ -509,7 +511,7 @@ async fn atomic_with_pool(
                     subject,
                     reply_subject.clone(),
                     headers,
-                    write.value.clone().into(),
+                    write.value.clone(),
                 )
                 .await
                 .map_err(error)?;
@@ -748,7 +750,7 @@ mod tests {
         Write {
             key: key.into(),
             revision,
-            value: payload,
+            value: payload.into(),
         }
     }
     #[tokio::test]

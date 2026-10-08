@@ -190,6 +190,37 @@ This is a colocated local failure test, not provider failure-domain certificatio
 Runner scripts, logs and binary hashes are under `dogrs-reply-control` in the
 task workspace. Opt-in diagnostics were disabled for both release binaries.
 
+## Shared immutable buffers at the publish boundary
+
+The atomic writer previously owned a `Vec<u8>` but cloned its contents into the
+client's `Bytes` buffer on every publish attempt. It now converts the owned vector
+once and shares its immutable [`Bytes`](https://docs.rs/bytes/1.11.1/bytes/struct.Bytes.html)
+allocation with async-nats. Definitively
+rejected batches can split without copying payload contents on each child attempt.
+Public queue payload types, persisted bytes and replay rules are unchanged. The
+existing optional `bytes` dependency is enabled by the NATS feature.
+
+Four further local trials used the preceding reply-handling implementation as
+baseline and changed only this buffer representation. Workload, four workers,
+16 buckets, R3, always-fsync and the capacity gate were unchanged:
+
+| Order | Buffer | Accepted / completed / verified | Operation errors |
+|---|---|---:|---:|
+| 1 | Baseline | 49,503 / 49,503 / 49,503 | 0 |
+| 2 | Shared | 50,116 / 50,116 / 50,116 | 0 |
+| 3 | Shared | 48,385 / 48,385 / 48,385 | 0 |
+| 4 | Baseline | 50,593 / 50,593 / 50,593 | 0 |
+
+All missed capacity through overload rejection. These results demonstrate no
+throughput improvement; the change is retained for eliminating a payload-content
+copy at publication, not for meeting the capacity target. No reduction in peak
+RSS or CPU use is claimed. The existing 63 unit tests and eight live JetStream
+library tests passed, as did Clippy with warnings denied, formatting and the
+minimal `nats-async` feature build. A separate R3/always-fsync leader-failure test
+with 64 KiB payloads passed (three-second configured outage, colocated replicas).
+Artifacts and binary
+hashes are under `dogrs-buffer-control` in the task workspace.
+
 ## Decision
 
 Retain the validated metadata collection fix and conservative execution defaults.

@@ -94,7 +94,7 @@ kafka-rskafka = ["dep:rskafka"]
 kafka = ["kafka-rdkafka", "kafka-rskafka"]
 aws-sqs = ["dep:aws-sdk-sqs"]
 gcp-pubsub = ["dep:google-cloud-pubsub"]
-nats-async = ["dep:async-nats", "dep:sha2"]
+nats-async = ["dep:async-nats", "dep:sha2", "dep:bytes"]
 nats = ["nats-async"]
 rabbitmq-lapin = ["dep:lapin"]
 
