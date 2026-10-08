@@ -137,3 +137,24 @@ For production-like compilation use `cargo build --release -p hosted-system` and
 set `DOGRS_SYSTEM_BINARY` to the release executable. The `network-probe` role
 separately measures PostgreSQL transport with 100 binary parameters per payload
 size at 10 requests/second, without queue operations or persistent writes.
+
+### Separate operating-rate and stress measurements
+
+The aggregate `run_recovery.py --capacity` workload accepts `--rate` in jobs per
+second **per tenant** (1–10). It always uses 100 tenants. The default remains ten,
+so existing runs still test 1,000 jobs/second. Five tests the proposed 500/s
+operating target without changing payload integrity, durability, zero-error or
+five-second drain requirements:
+
+```sh
+DOGRS_SYSTEM_BINARY=target/release/hosted-system \
+DOGRS_CAPACITY_WORKERS=4 DOGRS_CAPACITY_SHARDS=16 \
+python3 dog-examples/hosted-system/run_recovery.py nats --capacity \
+  --rate 5 --seconds 120 --bytes 65536 --report-dir operating-capacity
+```
+
+Repeat on fresh fixtures and inspect every verdict. A lower-rate pass never
+reclassifies a failed 1,000/s run. The Provider capacity manual workflow exposes
+both rates and the 120-second duration; pull requests retain the original stress
+target. Attribution profiles retain their original fixed rate and reject a
+non-default rate in the runner. Capacity results record the actual per-tenant rate.

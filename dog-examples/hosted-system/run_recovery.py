@@ -5,7 +5,8 @@ Run with DOGRS_SYSTEM_BINARY pointing to a release build with redis,nats feature
 Only containers/network created by this invocation are killed or removed.
 """
 import argparse,json,os,pathlib,platform,re,resource,secrets,socket,subprocess,time,threading,urllib.request
-p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis','nats']);p.add_argument('--report-dir',required=True);p.add_argument('--capacity',action='store_true');p.add_argument('--restore',action='store_true');p.add_argument('--race',action='store_true');p.add_argument('--outage-seconds',type=int,default=3);p.add_argument('--seconds',type=int,default=30);p.add_argument('--bytes',type=int,default=1024);p.add_argument('--admission-mode',choices=['native-payload','native-layout','dogrs-admission']);p.add_argument('--overload-drain-seconds',type=int,choices=[0,30,60,120],default=0);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis','nats']);p.add_argument('--report-dir',required=True);p.add_argument('--capacity',action='store_true');p.add_argument('--restore',action='store_true');p.add_argument('--race',action='store_true');p.add_argument('--outage-seconds',type=int,default=3);p.add_argument('--seconds',type=int,default=30);p.add_argument('--rate',type=int,choices=range(1,11),default=10,help='Jobs/second per tenant; default preserves the 1000/s stress target');p.add_argument('--bytes',type=int,default=1024);p.add_argument('--admission-mode',choices=['native-payload','native-layout','dogrs-admission']);p.add_argument('--overload-drain-seconds',type=int,choices=[0,30,60,120],default=0);a=p.parse_args()
+if a.rate!=10 and (not a.capacity or a.admission_mode):p.error('--rate requires ordinary queue capacity mode')
 if a.admission_mode and not a.capacity:p.error('--admission-mode requires --capacity')
 if a.overload_drain_seconds and (not a.capacity or a.admission_mode):p.error('overload drain requires the full queue capacity mode')
 wal_init_zero=os.environ.get('DOGRS_PG_WAL_INIT_ZERO','on')
@@ -133,7 +134,7 @@ try:
   raise SystemExit(result.returncode)
  if a.capacity:
   if a.admission_mode:env['DOGRS_ADMISSION_MODE']=a.admission_mode
-  env.update(DOGRS_CAPACITY_RECOVERY_SECONDS=str(a.overload_drain_seconds),DOGRS_CAPACITY_TENANTS='100',DOGRS_CAPACITY_SECONDS=str(a.seconds),DOGRS_CAPACITY_BYTES=str(a.bytes))
+  env.update(DOGRS_CAPACITY_RATE=str(a.rate),DOGRS_CAPACITY_RECOVERY_SECONDS=str(a.overload_drain_seconds),DOGRS_CAPACITY_TENANTS='100',DOGRS_CAPACITY_SECONDS=str(a.seconds),DOGRS_CAPACITY_BYTES=str(a.bytes))
   before=resource.getrusage(resource.RUSAGE_CHILDREN)
   with (folder/'container-stats.jsonl').open('w') as stats:
    monitor=subprocess.Popen(['docker','stats','--format','{{json .}}',*containers],stdout=stats,stderr=subprocess.DEVNULL)

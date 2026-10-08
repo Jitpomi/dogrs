@@ -193,3 +193,12 @@ passed the job-rate target while 64 KiB missed it with much longer commit waits.
 A [separate payload-storage prototype](../docs/jetstream-split-storage-experiment.md)
 was tested and rejected: it missed the full target and introduced uncertain
 enqueue timeouts in one run. The existing storage layout remains unchanged.
+
+### Measured operating baseline
+
+[Three two-minute tests at 500 jobs/second](../docs/jetstream-operating-rate-500.md)
+passed with 100 tenants, 64 KiB payloads, R3 and always-fsync on the documented
+local fixture. All 180,000 jobs completed and verified without errors or overload.
+This is deployment-specific evidence; 1,000/s remains an unmet stress target.
+Enqueue latency varied, and longer soaks and independent provider failures are
+not certified by these capacity runs.

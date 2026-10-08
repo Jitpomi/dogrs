@@ -24,8 +24,13 @@ on:
         required: true
       seconds:
         type: choice
-        options: ['10', '30', '60']
+        options: ['10', '30', '60', '120']
         default: '60'
+      jobs_per_second_per_tenant:
+        description: 5 tests the proposed 500/s operating target; 10 preserves the 1000/s stress target
+        type: choice
+        options: ['5', '10']
+        default: '10'
       nats_atomic:
         description: Conditional atomic writer comparison on the same runner
         type: choice
@@ -150,7 +155,7 @@ jobs:
             export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-connections
             status=0
             for connections in shared per-shard per-shard shared; do
-              DOGRS_NATS_CONNECTIONS="$connections" python3 dog-examples/hosted-system/run_recovery.py nats --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+              DOGRS_NATS_CONNECTIONS="$connections" python3 dog-examples/hosted-system/run_recovery.py nats --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
             done
             exit "$status"
           fi
@@ -160,7 +165,7 @@ jobs:
             export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-atomic
             status=0
             for atomic in 0 1 1 0; do
-              DOGRS_NATS_ATOMIC="$atomic" python3 dog-examples/hosted-system/run_recovery.py nats --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+              DOGRS_NATS_ATOMIC="$atomic" python3 dog-examples/hosted-system/run_recovery.py nats --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
             done
             exit "$status"
           fi
@@ -174,7 +179,7 @@ jobs:
             export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-payload-compression
             status=0
             for storage in extended external external extended; do
-              DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+              DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
             done
             exit "$status"
           fi
@@ -186,7 +191,7 @@ jobs:
             export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-wal-allocation
             status=0
             for allocation in on off off on; do
-              DOGRS_PG_WAL_INIT_ZERO="$allocation" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+              DOGRS_PG_WAL_INIT_ZERO="$allocation" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
             done
             exit "$status"
           fi
@@ -200,7 +205,7 @@ jobs:
             export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-independent-stores
             status=0
             for instances in 1 4 4 1; do
-              DOGRS_PG_INSTANCES="$instances" DOGRS_CAPACITY_SHARDS="$instances" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+              DOGRS_PG_INSTANCES="$instances" DOGRS_CAPACITY_SHARDS="$instances" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
             done
             exit "$status"
           fi
@@ -209,7 +214,7 @@ jobs:
             test "$DOGRS_PG_FIXTURE_PARTITIONS" = 0
             status=0
             for shards in 1 4 16 16 4 1; do
-              DOGRS_CAPACITY_SHARDS="$shards" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+              DOGRS_CAPACITY_SHARDS="$shards" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
             done
             exit "$status"
           fi
@@ -217,13 +222,14 @@ jobs:
             test "$BACKEND" = postgres
             status=0
             for partitions in 0 16 16 0; do
-              DOGRS_PG_FIXTURE_PARTITIONS="$partitions" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+              DOGRS_PG_FIXTURE_PARTITIONS="$partitions" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
             done
             exit "$status"
           fi
-          python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
+          python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
         env:
           BACKEND: ${{ matrix.backend }}
+          CAPACITY_RATE: ${{ inputs.jobs_per_second_per_tenant || '10' }}
           DURATION_SECONDS: ${{ inputs.seconds || '60' }}
           PAYLOAD_BYTES: ${{ inputs.payload_bytes || '65536' }}
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
@@ -267,7 +273,7 @@ jobs:
                       found = True
                       summary.write("**" + ("Passed" if result.get("passed") is True else "Failed") + "**\n\n")
                       summary.write("| Measurement | Observed |\n|---|---:|\n")
-                      for key in ("tenants", "seconds", "payload_bytes", "offered", "accepted", "completed", "verified_terminal_once", "overload", "late_offers", "error_count", "elapsed_seconds"):
+                      for key in ("tenants", "jobs_per_second_per_tenant", "seconds", "payload_bytes", "offered", "accepted", "completed", "verified_terminal_once", "overload", "late_offers", "error_count", "elapsed_seconds"):
                           value = result.get(key)
                           if isinstance(value, (int, float)):
                               summary.write(f"| {key} | {value} |\n")

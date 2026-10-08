@@ -19,6 +19,9 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     let tenants: usize = std::env::var("DOGRS_CAPACITY_TENANTS")
         .unwrap_or_else(|_| "100".into())
         .parse()?;
+    let rate: usize = std::env::var("DOGRS_CAPACITY_RATE")
+        .unwrap_or_else(|_| "10".into())
+        .parse()?;
     let seconds: usize = std::env::var("DOGRS_CAPACITY_SECONDS")
         .unwrap_or_else(|_| "30".into())
         .parse()?;
@@ -36,6 +39,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
         .parse()?;
     anyhow::ensure!(
         recovery_seconds <= 120
+            && (1..=10).contains(&rate)
             && (1..=100).contains(&tenants)
             && (1..=120).contains(&seconds)
             && (16..=65536).contains(&bytes)
@@ -150,9 +154,12 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
         producers.spawn(async move {
             let slots = Arc::new(tokio::sync::Semaphore::new(inflight));
             let mut requests = tokio::task::JoinSet::new();
-            for n in 0..seconds * 10 {
+            for n in 0..seconds * rate {
                 let due = started
-                    + Duration::from_millis(n as u64 * 100 + t as u64 * 100 / tenants as u64);
+                    + Duration::from_nanos(
+                        (n as u64 * tenants as u64 + t as u64) * 1_000_000_000
+                            / (rate as u64 * tenants as u64),
+                    );
                 tokio::time::sleep_until(tokio::time::Instant::from_std(due)).await;
                 if Instant::now().saturating_duration_since(due) > Duration::from_millis(100) {
                     late.fetch_add(1, Ordering::SeqCst);
@@ -221,7 +228,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
         accepted.load(Ordering::SeqCst),
         completed.load(Ordering::SeqCst)
     );
-    let offered = tenants * seconds * 10;
+    let offered = tenants * seconds * rate;
     while completed.load(Ordering::SeqCst) < offered && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -310,7 +317,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     };
     println!(
         "{}",
-        json!({"nats_connections":std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_|"shared".into()),"payload_pattern":"unique-per-tenant-and-sequence","stage_timings":stage_timings,"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":10,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed_in_capacity_phase,"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed,"overload_recovery":overload_recovery,"latency_includes_recovery":recovery_seconds>0})
+        json!({"nats_connections":std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_|"shared".into()),"payload_pattern":"unique-per-tenant-and-sequence","stage_timings":stage_timings,"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":rate,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed_in_capacity_phase,"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed,"overload_recovery":overload_recovery,"latency_includes_recovery":recovery_seconds>0})
     );
     anyhow::ensure!(passed, "queue capacity gate failed");
     Ok(())
