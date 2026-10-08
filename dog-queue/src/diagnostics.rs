@@ -89,6 +89,43 @@ const NAMES: &[&str] = &[
     "nats_atomic_first_staging_wait",
     "nats_atomic_after_staging_wait",
 ];
+// Logical publish work, not disk writes or fsync calls. Rejected attempts are
+// counted separately from validated durable acknowledgements.
+const WRITE_NAMES: [&str; 8] = [
+    "attempts",
+    "attempted_messages",
+    "attempted_value_bytes",
+    "acknowledged_commits",
+    "acknowledged_messages",
+    "acknowledged_value_bytes",
+    "conflicts",
+    "errors",
+];
+static WRITES: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+pub(crate) fn publish_attempt(messages: usize, bytes: usize) {
+    if enabled() {
+        for (index, amount) in [(0, 1), (1, messages), (2, bytes)] {
+            WRITES[index].fetch_add(amount as u64, Ordering::Relaxed);
+        }
+    }
+}
+pub(crate) fn publish_result(messages: usize, bytes: usize, committed: Option<bool>) {
+    if enabled() {
+        match committed {
+            Some(true) => {
+                for (index, amount) in [(3, 1), (4, messages), (5, bytes)] {
+                    WRITES[index].fetch_add(amount as u64, Ordering::Relaxed);
+                }
+            }
+            Some(false) => {
+                WRITES[6].fetch_add(1, Ordering::Relaxed);
+            }
+            None => {
+                WRITES[7].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
 struct Metric {
     count: AtomicU64,
     canceled: AtomicU64,
@@ -177,6 +214,21 @@ pub fn snapshot() -> serde_json::Value {
         return serde_json::Value::Null;
     }
     let mut out = serde_json::Map::new();
+    out.insert(
+        "nats_publish_work".into(),
+        serde_json::Value::Object(
+            WRITE_NAMES
+                .iter()
+                .zip(&WRITES)
+                .map(|(name, value)| {
+                    (
+                        (*name).into(),
+                        serde_json::json!(value.load(Ordering::Relaxed)),
+                    )
+                })
+                .collect(),
+        ),
+    );
     for (name, m) in NAMES.iter().zip(&METRICS) {
         let count = m.count.load(Ordering::Relaxed);
         if count == 0 {

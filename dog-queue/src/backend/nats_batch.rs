@@ -335,16 +335,25 @@ async fn commit(
     bucket: &kv::Store,
     writes: &[&Write],
 ) -> QueueResult<Option<Vec<u64>>> {
-    if writes.len() == 1 {
-        return Ok(single(bucket, writes[0])
-            .await?
-            .map(|revision| vec![revision]));
-    }
-    crate::diagnostics::measure(
-        crate::diagnostics::NATS_ATOMIC_COMMIT,
-        atomic_with_pool(pool, context, bucket, writes),
-    )
-    .await
+    let bytes = writes.iter().map(|write| write.value.len()).sum();
+    crate::diagnostics::publish_attempt(writes.len(), bytes);
+    let result = if writes.len() == 1 {
+        single(bucket, writes[0])
+            .await
+            .map(|revision| revision.map(|r| vec![r]))
+    } else {
+        crate::diagnostics::measure(
+            crate::diagnostics::NATS_ATOMIC_COMMIT,
+            atomic_with_pool(pool, context, bucket, writes),
+        )
+        .await
+    };
+    crate::diagnostics::publish_result(
+        writes.len(),
+        bytes,
+        result.as_ref().ok().map(|revisions| revisions.is_some()),
+    );
+    result
 }
 async fn execute_with_pool(
     pool: &SessionPool,

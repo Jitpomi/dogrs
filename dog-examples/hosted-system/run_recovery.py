@@ -187,6 +187,15 @@ try:
   clean=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', stats_path.read_text())
   samples=[json.loads(line) for line in clean.splitlines() if line.strip()]
   stats_path.write_text(''.join(json.dumps(sample)+'\n' for sample in samples))
+  if a.backend=='nats':
+   # After timed work and verification, record each replica independently.
+   # Stream sequences count logical records, not Raft entries or fsyncs.
+   for node_name,monitor_port in monitors.items():
+    try:
+     with urllib.request.urlopen(f'http://127.0.0.1:{monitor_port}/jsz?accounts=true&streams=true&config=true',timeout=5) as response:state=json.load(response)
+     (folder/f'{node_name}-stream-state.json').write_text(json.dumps(state))
+    except (OSError,ValueError) as error:
+     (folder/f'{node_name}-stream-state-error.txt').write_text(str(error))
   if a.backend=='postgres':
    for node_name,node_folder in pg_nodes:
     (node_folder/'durability-settings.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT name,setting FROM pg_settings WHERE name IN ('fsync','synchronous_commit','full_page_writes','wal_init_zero','wal_recycle','wal_sync_method') ORDER BY name"))
