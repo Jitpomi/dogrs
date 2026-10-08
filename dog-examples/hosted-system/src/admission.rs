@@ -284,9 +284,12 @@ pub async fn native() -> Result<()> {
 }
 async fn measure<B: Admission + 'static>(backend: B, mode: &str) -> Result<()> {
     let seconds: usize = env("DOGRS_CAPACITY_SECONDS")?.parse()?;
+    let rate: usize = std::env::var("DOGRS_CAPACITY_RATE")
+        .unwrap_or_else(|_| "9".into())
+        .parse()?;
     let bytes: usize = env("DOGRS_CAPACITY_BYTES")?.parse()?;
     anyhow::ensure!(
-        (1..=60).contains(&seconds) && (16..=65536).contains(&bytes),
+        (1..=60).contains(&seconds) && (16..=65536).contains(&bytes) && (1..=10).contains(&rate),
         "invalid diagnostic bounds"
     );
     let backend = Arc::new(backend);
@@ -314,8 +317,11 @@ async fn measure<B: Admission + 'static>(backend: B, mode: &str) -> Result<()> {
         producers.spawn(async move {
             let slots = Arc::new(Semaphore::new(32));
             let mut requests = tokio::task::JoinSet::new();
-            for n in 0..seconds * 10 {
-                let due = started + Duration::from_millis((n * 100 + t) as u64);
+            for n in 0..seconds * rate {
+                let due = started
+                    + Duration::from_nanos(
+                        (n * 100 + t) as u64 * 1_000_000_000 / (100 * rate) as u64,
+                    );
                 tokio::time::sleep_until(tokio::time::Instant::from_std(due)).await;
                 if Instant::now().saturating_duration_since(due) > Duration::from_millis(100) {
                     late.fetch_add(1, Ordering::Relaxed);
@@ -384,7 +390,7 @@ async fn measure<B: Admission + 'static>(backend: B, mode: &str) -> Result<()> {
     let mut latency = latency.lock().unwrap();
     latency.sort_by(f64::total_cmp);
     let p95 = latency.get(latency.len() * 95 / 100).copied();
-    let offered = seconds * 1000;
+    let offered = seconds * 100 * rate;
     let met = admitted == offered
         && verified == offered
         && errors.is_empty()
@@ -393,7 +399,7 @@ async fn measure<B: Admission + 'static>(backend: B, mode: &str) -> Result<()> {
         && elapsed <= seconds as f64 + 5.0;
     println!(
         "{}",
-        json!({"measurement":"admission diagnostic only; no claims/completions/recovery certification","mode":mode,"backend":env("DOGRS_BACKEND")?,"offered":offered,"accepted":admitted,"verified_payloads":verified,"overload":drops.load(Ordering::Relaxed),"late_offers":late.load(Ordering::Relaxed),"seconds":seconds,"payload_bytes":bytes,"tenants":100,"jobs_per_second_per_tenant":10,"max_inflight_per_tenant":32,"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"error_count":errors.len(),"errors":errors.iter().take(3).collect::<Vec<_>>(),"admission_target_met":met,"production_acceptance":false})
+        json!({"measurement":"admission diagnostic only; no claims/completions/recovery certification","mode":mode,"backend":env("DOGRS_BACKEND")?,"offered":offered,"accepted":admitted,"verified_payloads":verified,"overload":drops.load(Ordering::Relaxed),"late_offers":late.load(Ordering::Relaxed),"seconds":seconds,"payload_bytes":bytes,"tenants":100,"jobs_per_second_per_tenant":rate,"max_inflight_per_tenant":32,"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"error_count":errors.len(),"errors":errors.iter().take(3).collect::<Vec<_>>(),"admission_target_met":met,"production_acceptance":false})
     );
     // A diagnostic target miss remains a failing process; it is never a queue pass.
     anyhow::ensure!(met, "admission diagnostic target missed");
