@@ -255,6 +255,11 @@ impl BatchWriter {
             ));
         }
 
+        let _pending = crate::diagnostics::Scope::new(if writes.len() == 1 {
+            crate::diagnostics::NATS_UPDATE_PENDING
+        } else {
+            crate::diagnostics::NATS_ENQUEUE_PENDING
+        });
         let (reply, receiver) = oneshot::channel();
         let lane = if writes.len() == 1 {
             &self.updates

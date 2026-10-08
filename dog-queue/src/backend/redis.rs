@@ -172,6 +172,11 @@ impl RedisStore {
         } else {
             "ready"
         };
+        let _write = crate::diagnostics::Scope::new(if enqueue {
+            crate::diagnostics::REDIS_ENQUEUE_WRITE
+        } else {
+            crate::diagnostics::REDIS_UPDATE_WRITE
+        });
         let mut connection = self.manager.clone();
         redis::Script::new(include_str!("redis_write.lua"))
             .key(format!("{p}:meta"))
@@ -207,6 +212,13 @@ impl RedisStore {
 }
 impl RedisStore {
     async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        let stage = match op {
+            Operation::Enqueue(_) => Some(crate::diagnostics::REDIS_ENQUEUE_TOTAL),
+            Operation::Dequeue(..) => Some(crate::diagnostics::REDIS_CLAIM_TOTAL),
+            Operation::Complete(..) => Some(crate::diagnostics::REDIS_COMPLETE_TOTAL),
+            _ => None,
+        };
+        let _scope = stage.map(crate::diagnostics::Scope::new);
         self.check_legacy(tenant).await?;
         let p = prefix(tenant);
         if let Operation::Purge(before) = op {
@@ -252,10 +264,12 @@ impl RedisStore {
             let (now, values) = if matches!(op, Operation::Enqueue(_)) {
                 (Utc::now(), Vec::new())
             } else {
-                let mut values: Vec<String> = read
-                    .invoke_async(&mut self.manager.clone())
-                    .await
-                    .map_err(error)?;
+                let mut values: Vec<String> = crate::diagnostics::measure(
+                    crate::diagnostics::REDIS_READ,
+                    read.invoke_async(&mut self.manager.clone()),
+                )
+                .await
+                .map_err(error)?;
                 let now = DateTime::from_timestamp_millis(values.remove(0).parse().map_err(error)?)
                     .ok_or_else(|| error("Invalid Redis clock"))?;
                 (now, values)
