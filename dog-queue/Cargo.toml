@@ -1,6 +1,6 @@
 [package]
 name = "dog-queue"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["DogRS Team"]
 description = "Tenant-scoped jobs with durable ledgers, lease-based processing, and broker integrations"

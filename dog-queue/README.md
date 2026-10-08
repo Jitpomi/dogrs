@@ -21,12 +21,25 @@ Redis, or JetStream. This is an intentional API change from the old prototypes,
 which kept job status in process memory and could acknowledge jobs before work
 finished. The broker now carries only an opaque wakeup; the ledger owns the job.
 
-An enqueue commits to the ledger before publishing. A crash or broker outage
+An enqueue commits to the ledger before scheduling a background wakeup.
+Successful enqueue does not wait for broker publication. A crash or broker outage
 between those steps cannot lose the job because workers also poll the ledger.
 Broker acknowledgement removes a wakeup; **only `ack_complete` completes a job**.
 Notifications may be lost, duplicated, or received by a worker for another tenant.
 They never grant ownership or carry customer payloads. Monitor
-`notification_failures()` to detect degraded broker connectivity.
+`notification_failures()` to detect degraded broker connectivity. These counters
+update asynchronously. Idle receive deadlines are counted separately by
+`notification_receive_timeouts()` and do not alone establish a broker failure.
+
+Custom `Notifications` implementations must own their data (`'static`); use an
+owned SDK client or `Arc` instead of borrowing a stack-local client. Construction
+does not start tasks. Enqueue/dequeue starts background tasks on the active Tokio
+runtime, which must remain alive while the backend is in use. After stopping
+workers and producers, call `shutdown_notifications(&mut self).await` to stop
+wrapper tasks and release adapter receive resources. Dropping the backend aborts
+wrapper tasks but cannot await asynchronous cleanup. A later enqueue/dequeue
+restarts the tasks; shutdown is not a permanent admission barrier. The ledger's
+jobs remain independent of notification task lifetime.
 
 All durable ledgers support tenant-scoped active-job idempotency, scheduled jobs,
 priority, cancellation, lease extension and retry recovery. They retain terminal
@@ -95,6 +108,23 @@ now names that KV bucket, not a Core NATS subject. For NATS 2.12+ concurrent wor
 `from_context` can use the stream’s atomic-publish capability to share durable
 replication work without changing revision checks or the stored format. See
 [JetStream write batching](NATS.md).
+
+## 0.3.0 release capacity limitation
+
+The earlier 900 jobs/s test (100 tenants, 64 KiB payloads) passed PostgreSQL and
+Redis but failed JetStream: 29,172 accepted and 19,916 completed within the deadline,
+with overload and a submission timeout. Correctness/recovery CI passed separately.
+Earlier passing runs do not establish consistent capacity across deployments.
+Validate your own workload before rollout; 900/s is not a throughput guarantee.
+See [the recorded run](https://github.com/Jitpomi/dogrs/actions/runs/37790630091).
+
+
+A subsequent release-candidate run on `708c9a9` also missed the gate for all three:
+PostgreSQL accepted/completed 46,182/44,959; Redis 52,900/42,393; JetStream
+32,109/21,831. PostgreSQL and Redis recorded zero operation errors; JetStream
+recorded a submission deadline with unknown unfinished commit outcomes. These
+results reinforce that the gate is deployment-dependent and not a release throughput
+guarantee. [Release-candidate capacity run](https://github.com/Jitpomi/dogrs/actions/runs/37792769166).
 
 ## Capacity, security and migration
 

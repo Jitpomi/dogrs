@@ -5,6 +5,13 @@ All notable changes to the `dog-core` crate will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Expose returned listener failures through `DogApp::event_listener_failures()` and
+  `DogEventHub::listener_failures()` without storing event payloads or error text.
+- Preserve sequential delivery and existing mutation/direct-emission error behavior.
+- Correct README service and tenant examples and compile them as crate documentation.
+
 ## [0.1.8] — 2026-06-07
 
 > **Also in this release:** All ecosystem crates upgraded to latest dependency versions.
