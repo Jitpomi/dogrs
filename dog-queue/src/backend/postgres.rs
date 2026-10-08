@@ -74,20 +74,40 @@ type Connector =
     Arc<dyn Fn() -> futures::future::BoxFuture<'static, QueueResult<Client>> + Send + Sync>;
 #[derive(Clone)]
 struct Manager(Connector);
-impl bb8::ManageConnection for Manager {
-    type Connection = Client;
-    type Error = QueueError;
-    async fn connect(&self) -> QueueResult<Client> {
-        (self.0)().await
+// Statements belong to a physical connection, so cache them with that client
+// rather than preparing on every admission or sharing across pooled clients.
+struct Connection {
+    client: Client,
+    enqueue: tokio::sync::OnceCell<tokio_postgres::Statement>,
+}
+impl std::ops::Deref for Connection {
+    type Target = Client;
+    fn deref(&self) -> &Client {
+        &self.client
     }
-    async fn is_valid(&self, client: &mut Client) -> QueueResult<()> {
+}
+impl std::ops::DerefMut for Connection {
+    fn deref_mut(&mut self) -> &mut Client {
+        &mut self.client
+    }
+}
+impl bb8::ManageConnection for Manager {
+    type Connection = Connection;
+    type Error = QueueError;
+    async fn connect(&self) -> QueueResult<Connection> {
+        Ok(Connection {
+            client: (self.0)().await?,
+            enqueue: tokio::sync::OnceCell::new(),
+        })
+    }
+    async fn is_valid(&self, client: &mut Connection) -> QueueResult<()> {
         if client.is_closed() {
             Err(error("PostgreSQL connection closed"))
         } else {
             Ok(())
         }
     }
-    fn has_broken(&self, client: &mut Client) -> bool {
+    fn has_broken(&self, client: &mut Connection) -> bool {
         client.is_closed()
     }
 }
@@ -315,7 +335,7 @@ impl PostgresStore {
         let mut client = crate::diagnostics::measure(crate::diagnostics::PG_POOL, self.pool.get())
             .await
             .map_err(error)?;
-        if storage.is_none() && schema_ready(&*client).await? {
+        if storage.is_none() && schema_ready(&client.client).await? {
             return Ok(());
         }
         let tx = client.transaction().await.map_err(error)?;
@@ -467,20 +487,42 @@ impl PostgresStore {
             let value = metadata(stored)?;
             // One atomic statement: database timestamps replace temporary local
             // constructor timestamps before anything becomes visible.
+            let statement = client
+                .enqueue
+                .get_or_try_init(|| async {
+                    client
+                        .prepare_typed(
+                            include_str!("postgres_enqueue.sql"),
+                            &[
+                                Type::TEXT,
+                                Type::TEXT,
+                                Type::JSONB,
+                                Type::TEXT,
+                                Type::TEXT,
+                                Type::TEXT,
+                                Type::INT4,
+                                Type::TIMESTAMPTZ,
+                                Type::BYTEA,
+                            ],
+                        )
+                        .await
+                })
+                .await
+                .map_err(error)?;
             let row = crate::diagnostics::measure(
                 crate::diagnostics::PG_INSERT,
-                client.query_typed_one(
-                    include_str!("postgres_enqueue.sql"),
+                client.query_one(
+                    statement,
                     &[
-                        (&tenant, Type::TEXT),
-                        (&r.job_id.as_str(), Type::TEXT),
-                        (&value, Type::JSONB),
-                        (&message.queue, Type::TEXT),
-                        (&message.job_type, Type::TEXT),
-                        (&message.idempotency_key, Type::TEXT),
-                        (&i32::from(message.priority.as_u8()), Type::INT4),
-                        (&message.run_at, Type::TIMESTAMPTZ),
-                        (&message.payload_bytes, Type::BYTEA),
+                        &tenant,
+                        &r.job_id.as_str(),
+                        &value,
+                        &message.queue,
+                        &message.job_type,
+                        &message.idempotency_key,
+                        &i32::from(message.priority.as_u8()),
+                        &message.run_at,
+                        &message.payload_bytes,
                     ],
                 ),
             )

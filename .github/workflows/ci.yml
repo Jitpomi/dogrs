@@ -98,6 +98,9 @@ jobs:
         env:
           DOGRS_REDIS_URL: redis://127.0.0.1:6379
           DOGRS_NATS_URL: nats://127.0.0.1:4222
+      - run: cargo test -p dog-queue --features redis --test redis_completion --locked -- --ignored
+        env:
+          DOGRS_REDIS_URL: redis://127.0.0.1:6379
       - run: cargo test -p dog-queue --features nats --lib --locked claim_read_tests
       - run: cargo test -p dog-queue --features nats --lib --locked -- --ignored --skip nats_batch
         env:

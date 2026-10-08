@@ -47,6 +47,16 @@ pub(crate) const NATS_UPDATE_BATCH_EXECUTE: usize = 32;
 pub(crate) const NATS_ATOMIC_FINAL_WAIT: usize = 33;
 pub(crate) const NATS_ATOMIC_SEND: usize = 34;
 pub(crate) const NATS_BATCH_REJECTED: usize = 35;
+pub(crate) const NATS_ATOMIC_FIRST_STAGING_WAIT: usize = 36;
+pub(crate) const NATS_ATOMIC_AFTER_STAGING_WAIT: usize = 37;
+pub(crate) const REDIS_ENQUEUE_TOTAL: usize = 38;
+pub(crate) const REDIS_CLAIM_TOTAL: usize = 39;
+pub(crate) const REDIS_COMPLETE_TOTAL: usize = 40;
+pub(crate) const REDIS_ENQUEUE_WRITE: usize = 41;
+pub(crate) const REDIS_UPDATE_WRITE: usize = 42;
+pub(crate) const REDIS_READ: usize = 43;
+pub(crate) const NATS_ENQUEUE_PENDING: usize = 44;
+pub(crate) const NATS_UPDATE_PENDING: usize = 45;
 const NAMES: &[&str] = &[
     "pg_enqueue_total",
     "pg_claim_total",
@@ -84,8 +94,57 @@ const NAMES: &[&str] = &[
     "nats_atomic_final_wait",
     "nats_atomic_send",
     "nats_batch_rejected",
+    "nats_atomic_first_staging_wait",
+    "nats_atomic_after_staging_wait",
+    "redis_enqueue_total",
+    "redis_claim_total",
+    "redis_complete_total",
+    "redis_enqueue_write",
+    "redis_update_write",
+    "redis_read",
+    "nats_enqueue_pending",
+    "nats_update_pending",
 ];
+// Logical publish work, not disk writes or fsync calls. Rejected attempts are
+// counted separately from validated durable acknowledgements.
+const WRITE_NAMES: [&str; 8] = [
+    "attempts",
+    "attempted_messages",
+    "attempted_value_bytes",
+    "acknowledged_commits",
+    "acknowledged_messages",
+    "acknowledged_value_bytes",
+    "conflicts",
+    "errors",
+];
+static WRITES: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+pub(crate) fn publish_attempt(messages: usize, bytes: usize) {
+    if enabled() {
+        for (index, amount) in [(0, 1), (1, messages), (2, bytes)] {
+            WRITES[index].fetch_add(amount as u64, Ordering::Relaxed);
+        }
+    }
+}
+pub(crate) fn publish_result(messages: usize, bytes: usize, committed: Option<bool>) {
+    if enabled() {
+        match committed {
+            Some(true) => {
+                for (index, amount) in [(3, 1), (4, messages), (5, bytes)] {
+                    WRITES[index].fetch_add(amount as u64, Ordering::Relaxed);
+                }
+            }
+            Some(false) => {
+                WRITES[6].fetch_add(1, Ordering::Relaxed);
+            }
+            None => {
+                WRITES[7].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
 struct Metric {
+    active: AtomicU64,
+    peak_active: AtomicU64,
     count: AtomicU64,
     canceled: AtomicU64,
     nanos: AtomicU64,
@@ -95,6 +154,8 @@ struct Metric {
 impl Metric {
     const fn new() -> Self {
         Self {
+            active: AtomicU64::new(0),
+            peak_active: AtomicU64::new(0),
             count: AtomicU64::new(0),
             canceled: AtomicU64::new(0),
             nanos: AtomicU64::new(0),
@@ -128,13 +189,35 @@ fn record(stage: usize, start: Option<Instant>, canceled: bool) {
 pub(crate) fn elapsed(stage: usize, start: Option<Instant>) {
     record(stage, start, false);
 }
+// Counts polled scopes/futures, not requests known to have reached the server.
+// Dropping a future removes it even when a remote commit outcome is uncertain.
+struct Active(Option<usize>);
+impl Active {
+    fn new(stage: usize, on: bool) -> Self {
+        if on {
+            let m = &METRICS[stage];
+            let active = m.active.fetch_add(1, Ordering::Relaxed) + 1;
+            m.peak_active.fetch_max(active, Ordering::Relaxed);
+        }
+        Self(on.then_some(stage))
+    }
+}
+impl Drop for Active {
+    fn drop(&mut self) {
+        if let Some(stage) = self.0 {
+            METRICS[stage].active.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
 pub(crate) struct Scope {
+    _active: Active,
     stage: usize,
     start: Option<Instant>,
 }
 impl Scope {
     pub(crate) fn new(stage: usize) -> Self {
         Self {
+            _active: Active::new(stage, enabled()),
             stage,
             start: start(),
         }
@@ -146,6 +229,7 @@ impl Drop for Scope {
     }
 }
 struct AwaitTimer {
+    _active: Active,
     stage: usize,
     start: Option<Instant>,
     done: bool,
@@ -157,6 +241,7 @@ impl Drop for AwaitTimer {
 }
 pub(crate) async fn measure<F: Future>(stage: usize, future: F) -> F::Output {
     let mut timer = AwaitTimer {
+        _active: Active::new(stage, enabled()),
         stage,
         start: start(),
         done: false,
@@ -173,9 +258,24 @@ pub fn snapshot() -> serde_json::Value {
         return serde_json::Value::Null;
     }
     let mut out = serde_json::Map::new();
+    out.insert(
+        "nats_publish_work".into(),
+        serde_json::Value::Object(
+            WRITE_NAMES
+                .iter()
+                .zip(&WRITES)
+                .map(|(name, value)| {
+                    (
+                        (*name).into(),
+                        serde_json::json!(value.load(Ordering::Relaxed)),
+                    )
+                })
+                .collect(),
+        ),
+    );
     for (name, m) in NAMES.iter().zip(&METRICS) {
         let count = m.count.load(Ordering::Relaxed);
-        if count == 0 {
+        if count == 0 && m.active.load(Ordering::Relaxed) == 0 {
             continue;
         }
         let ns = m.nanos.load(Ordering::Relaxed);
@@ -188,7 +288,7 @@ pub fn snapshot() -> serde_json::Value {
                 break;
             }
         }
-        out.insert((*name).into(), serde_json::json!({"count":count,"canceled":m.canceled.load(Ordering::Relaxed),"total_ms":ns as f64/1e6,"mean_ms":ns as f64/1e6/count as f64,"max_ms":m.max.load(Ordering::Relaxed) as f64/1e6,"p95_upper_us":p95}));
+        out.insert((*name).into(), serde_json::json!({"active":m.active.load(Ordering::Relaxed),"peak_active":m.peak_active.load(Ordering::Relaxed),"count":count,"canceled":m.canceled.load(Ordering::Relaxed),"total_ms":ns as f64/1e6,"mean_ms":ns as f64/1e6/count.max(1) as f64,"max_ms":m.max.load(Ordering::Relaxed) as f64/1e6,"p95_upper_us":p95}));
     }
     serde_json::Value::Object(out)
 }
@@ -196,6 +296,22 @@ pub fn snapshot() -> serde_json::Value {
 #[cfg(all(test, feature = "queue-diagnostics"))]
 mod tests {
     use super::*;
+    #[test]
+    fn active_counts_release_on_scope_exit_and_unwind() {
+        let stage = REDIS_ENQUEUE_TOTAL;
+        let outer = Active::new(stage, true);
+        assert_eq!(METRICS[stage].active.load(Ordering::Relaxed), 1);
+        let result = std::panic::catch_unwind(|| {
+            let _inner = Active::new(stage, true);
+            assert_eq!(METRICS[stage].active.load(Ordering::Relaxed), 2);
+            panic!("simulated early exit");
+        });
+        assert!(result.is_err());
+        assert_eq!(METRICS[stage].active.load(Ordering::Relaxed), 1);
+        assert_eq!(METRICS[stage].peak_active.load(Ordering::Relaxed), 2);
+        drop(outer);
+        assert_eq!(METRICS[stage].active.load(Ordering::Relaxed), 0);
+    }
     #[tokio::test]
     async fn records_waits_and_cancellation_without_changing_results() {
         // This unit test does not modify process environment shared by other tests.
@@ -206,6 +322,7 @@ mod tests {
         assert_eq!(result, Err("original"));
         assert!(METRICS[PG_ENQUEUE_TOTAL].count.load(Ordering::Relaxed) >= before);
         let timer = AwaitTimer {
+            _active: Active::new(NATS_ENQUEUE_TOTAL, true),
             stage: NATS_ENQUEUE_TOTAL,
             start: Some(Instant::now()),
             done: false,

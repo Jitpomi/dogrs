@@ -93,7 +93,9 @@ reserves framing and completion space before admitting work.
 Aiven Valkey reports `aof_enabled:0`; Aiven does not support AOF. Its successful
 application-process recovery is **not** evidence of lossless recovery after a
 provider server crash. Use a suitably persistent/replicated deployment or another
-ledger for that requirement. Redis and JetStream still serialize tenant state. PostgreSQL v2 uses per-job rows
+ledger for that requirement. Current Redis and JetStream adapters use per-job
+records and separate immutable payloads; see [KV-STORAGE.md](../../dog-queue/KV-STORAGE.md)
+for their layout and migration limits. PostgreSQL v2 uses per-job rows
 and binary payloads; see its explicit offline migration requirements in
 [POSTGRES.md](../../dog-queue/POSTGRES.md). A small hosted run does not establish
 aggregate production capacity.
@@ -137,3 +139,73 @@ For production-like compilation use `cargo build --release -p hosted-system` and
 set `DOGRS_SYSTEM_BINARY` to the release executable. The `network-probe` role
 separately measures PostgreSQL transport with 100 binary parameters per payload
 size at 10 requests/second, without queue operations or persistent writes.
+
+### Separate operating-rate and stress measurements
+
+The aggregate `run_recovery.py --capacity` workload accepts `--rate` in jobs per
+second **per tenant** (1–10). It always uses 100 tenants. The default is nine,
+so ordinary runs target 900 jobs/second. Explicit `--rate 10` retains the 1,000/s
+stress benchmark. Five tests the measured 500/s
+operating target without changing payload integrity, durability, zero-error or
+five-second drain requirements:
+
+```sh
+DOGRS_SYSTEM_BINARY=target/release/hosted-system \
+DOGRS_CAPACITY_WORKERS=4 DOGRS_CAPACITY_SHARDS=16 \
+python3 dog-examples/hosted-system/run_recovery.py nats --capacity \
+  --rate 5 --seconds 120 --bytes 65536 --report-dir operating-capacity
+```
+
+Repeat on fresh fixtures and inspect every verdict. A lower-rate pass never
+reclassifies a failed 1,000/s run. The Provider capacity manual workflow exposes
+all three rates and the 120-second duration; pull requests target 900/s. Attribution profiles use the selected rate too; their
+admission-only cases do not certify full queue execution or recovery. Capacity
+results record the actual per-tenant rate.
+
+### Compare diagnostics on one runner
+
+The Provider capacity workflow's `queue-comparison` mode runs PostgreSQL, Redis or NATS four
+times on the same runner, with fresh storage each time: diagnostics off, on, on,
+off. Select 64 KiB payloads and 60 or 120 seconds. One release binary includes the
+diagnostic feature throughout; the environment toggle changes between trials.
+For NATS, diagnostic mode also enables the fixture's server-stack sampling.
+This compares the entire diagnostic mode, not just one counter's overhead.
+
+`compare_queue_diagnostics.py` saves every measurement and the binary hash in
+`diagnostic-comparison.json`. Any missing measurement or failed trial fails the
+comparison. Individual logs, environment snapshots and server diagnostics remain
+in trial subdirectories. The workflow's summary scans these subdirectories.
+Do not combine this mode with other fixture-comparison settings or profiling
+experiments: use the ordinary atomic/shared-connection defaults. Same-runner
+repeats control machine assignment but do not guarantee constant disk contention.
+
+### Compare all backends on one runner
+
+Select `all-backends` in the Provider capacity manual workflow, 64 KiB payloads,
+60 seconds and rate 9. It builds one release binary, then runs PostgreSQL, Redis,
+NATS, NATS, Redis, PostgreSQL sequentially with fresh fixtures on the same host.
+It retains the ordinary worker counts (1, 1, 2 per tenant), shards (1, 1, 16),
+durability and five-second drain. All six cases must pass; a later passing case
+cannot erase an earlier failure. This complements the ordinary matrix, which
+assigns a separate runner to each backend.
+
+The optional runner choice labels a standard x86 or ARM environment; it does
+not increase resources or promise equivalent disk performance. Artifacts record
+Linux CPU, block-device and filesystem information. Diagnostics additionally
+sample host-wide I/O counters/pressure; those include unrelated host work and
+are not per-operation fsync timings. Keep hardware, diagnostic mode and results
+together when comparing runs. See [observed runner variance](../../docs/capacity-runner-variance.md).
+
+For a bounded worker-concurrency experiment, ordinary `queue` mode with
+`workers_per_tenant=compare` tests NATS 2/8/8/2 or Redis 1/4/4/1 on one runner.
+It changes worker concurrency only, retains all misses and leaves defaults
+unchanged. Do not combine it with other comparison modes.
+
+For an enqueue-pipeline experiment, `nats-pipeline-comparison` runs NATS with
+2/4/4/2 executing enqueue batches per store. It fixes eight workers per tenant,
+one metadata batch per store, 16 stores, atomic writes and a shared connection.
+Select the NATS backend and 64 KiB payloads. The worker input is overridden in
+this mode. Queue admission bounds, durability, workload and drain are unchanged.
+Every trial must pass for the comparison to pass; the mode changes no library
+default. Environment artifacts record both execution limits. Do not combine
+this mode with other comparison settings.

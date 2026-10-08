@@ -81,7 +81,7 @@ async fn rabbitmq_notifications_and_job_completion() {
     .unwrap();
     let channel = connection.create_channel().await.unwrap();
     let queue = format!("dogrs-test-{}", uuid::Uuid::new_v4());
-    let backend = RabbitMqBackend::new(channel.clone(), queue.clone(), ledger().await)
+    let mut backend = RabbitMqBackend::new(channel.clone(), queue.clone(), ledger().await)
         .await
         .unwrap();
     backend.notifications().publish().await.unwrap();
@@ -127,6 +127,28 @@ async fn rabbitmq_notifications_and_job_completion() {
         backend.get_status(tenant, id).await.unwrap(),
         JobStatus::Completed { .. }
     ));
+    backend.shutdown_notifications().await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let state = channel
+                .queue_declare(
+                    &queue,
+                    lapin::options::QueueDeclareOptions {
+                        passive: true,
+                        ..Default::default()
+                    },
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+            if state.consumer_count() == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("shutdown cancels the persistent RabbitMQ consumer");
     channel
         .queue_delete(&queue, Default::default())
         .await
@@ -238,9 +260,14 @@ async fn rdkafka_notifications() {
         .set("enable.auto.commit", "false")
         .create()
         .unwrap();
-    let backend = RdKafkaBackend::new(producer, consumer, topic, ledger().await).unwrap();
+    let mut backend = RdKafkaBackend::new(producer, consumer, topic, ledger().await).unwrap();
     backend.notifications().publish().await.unwrap();
     receive_one(backend.notifications()).await;
+    backend.shutdown_notifications().await;
+    backend.shutdown_notifications().await;
+    backend.notifications().publish().await.unwrap();
+    receive_one(backend.notifications()).await;
+    backend.shutdown_notifications().await;
 }
 
 #[cfg(feature = "kafka-rskafka")]
@@ -317,10 +344,15 @@ async fn pubsub_notifications() {
         .build()
         .await
         .unwrap();
-    let backend =
+    let mut backend =
         GcpPubSubBackend::new(publisher, subscriber, subscription.clone(), ledger().await).unwrap();
     backend.notifications().publish().await.unwrap();
     receive_one(backend.notifications()).await;
+    backend.shutdown_notifications().await;
+    backend.shutdown_notifications().await;
+    backend.notifications().publish().await.unwrap();
+    receive_one(backend.notifications()).await;
+    backend.shutdown_notifications().await;
     drop(backend);
     subscriptions
         .delete_subscription()
@@ -329,4 +361,74 @@ async fn pubsub_notifications() {
         .await
         .unwrap();
     topics.delete_topic().set_topic(topic).send().await.unwrap();
+}
+
+#[cfg(feature = "rabbitmq-lapin")]
+#[tokio::test]
+#[ignore = "requires disposable RabbitMQ and PostgreSQL"]
+async fn rabbitmq_shutdown_settles_prefetch_and_restarts() {
+    use dog_queue::backend::rabbitmq::RabbitMqBackend;
+    use lapin::options::*;
+    let connection = lapin::Connection::connect(
+        &std::env::var("DOGRS_RABBITMQ_URL").unwrap(),
+        lapin::ConnectionProperties::default(),
+    )
+    .await
+    .unwrap();
+    let channel = connection.create_channel().await.unwrap();
+    let queue = format!("dogrs-shutdown-{}", uuid::Uuid::new_v4());
+    let mut backend = RabbitMqBackend::new(channel.clone(), queue.clone(), ledger().await)
+        .await
+        .unwrap();
+    for _ in 0..32 {
+        backend.notifications().publish().await.unwrap();
+    }
+    receive_one(backend.notifications()).await;
+    // Direct notification use never starts the wrapper tasks. Cleanup must still run.
+    backend.shutdown_notifications().await;
+    backend.shutdown_notifications().await;
+    let state = channel
+        .queue_declare(
+            &queue,
+            QueueDeclareOptions {
+                passive: true,
+                ..Default::default()
+            },
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(state.consumer_count(), 0);
+    assert_eq!(state.message_count(), 0);
+    // The same backend can create a fresh consumer after shutdown.
+    backend.notifications().publish().await.unwrap();
+    receive_one(backend.notifications()).await;
+    backend.shutdown_notifications().await;
+    // Closing the channel would requeue any stranded, unacknowledged prefetch.
+    channel
+        .close(200, "verify no outstanding deliveries")
+        .await
+        .unwrap();
+    let observer = connection.create_channel().await.unwrap();
+    let state = observer
+        .queue_declare(
+            &queue,
+            QueueDeclareOptions {
+                passive: true,
+                ..Default::default()
+            },
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        state.message_count(),
+        0,
+        "shutdown stranded unacknowledged deliveries"
+    );
+    assert_eq!(state.consumer_count(), 0);
+    observer
+        .queue_delete(&queue, Default::default())
+        .await
+        .unwrap();
 }

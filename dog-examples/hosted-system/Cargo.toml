@@ -21,7 +21,7 @@ tokio-postgres-rustls = { version = "0.14", features = ["aws-lc-rs"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs", "tls12"] }
 rustls-pemfile = "2"
 async-nats = { version = "0.50", optional = true }
-redis = { version = "0.28", optional = true, features = ["tokio-rustls-comp"] }
+redis = { version = "1.7.1", optional = true, features = ["tokio-rustls-comp"] }
 lapin = { version = "2.4", optional = true }
 rdkafka = { version = "0.36", optional = true, features = ["cmake-build", "ssl"] }
 rskafka = { version = "0.6", optional = true, features = ["transport-tls"] }

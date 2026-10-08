@@ -19,6 +19,7 @@ pub mod rdkafka {
         producer: FutureProducer,
         consumer: StreamConsumer,
         topic: String,
+        subscribed: tokio::sync::Mutex<bool>,
     }
     pub type RdKafkaBackend = BrokerBackend<RdKafkaNotifications>;
     impl RdKafkaBackend {
@@ -39,6 +40,7 @@ pub mod rdkafka {
                     producer,
                     consumer,
                     topic,
+                    subscribed: tokio::sync::Mutex::new(true),
                 },
                 ledger,
             ))
@@ -49,16 +51,24 @@ pub mod rdkafka {
         async fn publish(&self) -> QueueResult<()> {
             self.producer
                 .send(
-                    FutureRecord::to(&self.topic)
-                        .key("dogrs")
-                        .payload("dogrs-wakeup-v1"),
+                    FutureRecord::<(), str>::to(&self.topic).payload("dogrs-wakeup-v1"),
                     std::time::Duration::from_secs(1),
                 )
                 .await
                 .map_err(|(err, _)| error(err))?;
             Ok(())
         }
+        async fn shutdown(&self) {
+            let mut subscribed = self.subscribed.lock().await;
+            self.consumer.unsubscribe();
+            *subscribed = false;
+        }
         async fn receive(&self) -> QueueResult<bool> {
+            let mut subscribed = self.subscribed.lock().await;
+            if !*subscribed {
+                self.consumer.subscribe(&[&self.topic]).map_err(error)?;
+                *subscribed = true;
+            }
             let message = self.consumer.recv().await.map_err(error)?;
             self.consumer
                 .commit_message(&message, CommitMode::Async)
@@ -131,11 +141,23 @@ pub mod rskafka {
                 Err(err) => {
                     // Retention can remove old wakeups. Resuming at the current end
                     // is safe because every worker also checks persistent job state.
-                    *offset = self
-                        .partition
-                        .get_offset(OffsetAt::Latest)
-                        .await
-                        .map_err(error)?;
+                    if matches!(
+                        &err,
+                        ::rskafka::client::error::Error::ServerError {
+                            protocol_error:
+                                ::rskafka::client::error::ProtocolError::OffsetOutOfRange,
+                            ..
+                        }
+                    ) {
+                        *offset = self
+                            .partition
+                            .get_offset(OffsetAt::Latest)
+                            .await
+                            .map_err(error)?;
+                        tracing::warn!(
+                            "Kafka wakeup offset expired; resuming at latest while polling ledger"
+                        );
+                    }
                     Err(error(err))
                 }
             }

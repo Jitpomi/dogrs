@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use google_cloud_pubsub::{
     client::{Publisher, Subscriber},
     model::Message,
-    subscriber::MessageStream,
+    subscriber::{MessageStream, ShutdownBehavior},
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -13,7 +13,7 @@ pub struct PubSubNotifications {
     publisher: Publisher,
     subscriber: Subscriber,
     subscription: String,
-    session: Mutex<MessageStream>,
+    session: Mutex<Option<MessageStream>>,
 }
 pub type GcpPubSubBackend = BrokerBackend<PubSubNotifications>;
 fn error(e: impl std::fmt::Display) -> QueueError {
@@ -33,13 +33,7 @@ impl GcpPubSubBackend {
                 "Full Pub/Sub subscription resource name is required".into(),
             ));
         }
-        let session = Mutex::new(
-            subscriber
-                .subscribe(&subscription)
-                .set_max_outstanding_messages(32)
-                .set_max_outstanding_bytes(65536)
-                .build(),
-        );
+        let session = Mutex::new(None);
         Ok(Self::with_ledger(
             PubSubNotifications {
                 publisher,
@@ -60,20 +54,38 @@ impl Notifications for PubSubNotifications {
             .map_err(error)?;
         Ok(())
     }
+    async fn shutdown(&self) {
+        let mut session = self.session.lock().await;
+        if let Some(stream) = session.take() {
+            let token = stream.shutdown_token();
+            drop(stream);
+            if tokio::time::timeout(std::time::Duration::from_secs(5), token.shutdown())
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    "Pub/Sub shutdown timed out; acknowledgement outcome may be unknown"
+                );
+            }
+        }
+    }
     async fn receive(&self) -> QueueResult<bool> {
         let mut session = self.session.lock().await;
-        match session.next().await {
+        let stream = session.get_or_insert_with(|| {
+            self.subscriber
+                .subscribe(&self.subscription)
+                .set_max_outstanding_messages(32)
+                .set_max_outstanding_bytes(65536)
+                .set_shutdown_behavior(ShutdownBehavior::NackImmediately)
+                .build()
+        });
+        match stream.next().await {
             Some(Ok((_, handler))) => {
                 handler.ack();
                 Ok(true)
             }
             result => {
-                *session = self
-                    .subscriber
-                    .subscribe(&self.subscription)
-                    .set_max_outstanding_messages(32)
-                    .set_max_outstanding_bytes(65536)
-                    .build();
+                *session = None;
                 match result {
                     Some(Err(err)) => Err(error(err)),
                     _ => Err(error("Pub/Sub notification stream ended")),

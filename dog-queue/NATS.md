@@ -36,14 +36,14 @@ at three or leaving a final metadata entry for another append. Atomic visibility
 prevents discovery of metadata before its payload commits, and enqueue returns
 the metadata revision for subsequent ownership checks. Larger individual logical
 operations remain intact. Separate bounded execution lanes handle
-enqueue pairs and metadata updates: the enqueue lane pipelines up to four
+enqueue pairs and metadata updates: the enqueue lane defaults to two
 batches while the metadata lane has its own execution slot. Each input channel holds at
 most 128 queued requests. Overlapping bounded acknowledgement waits avoids a
 serial round-trip ceiling for small batches. Producer backlog cannot occupy the metadata lane, and lease/completion
 updates never share a staging batch with large payloads. Atomic mode admits up to
 128 concurrent enqueue requests to fill that bounded queue; individual-write mode
 retains its 16-request default. `with_enqueue_concurrency` can override either
-request limit. Request concurrency does not increase the five executing-batch limit;
+request limit. Request concurrency does not increase the configured executing-batch limit;
 the 2 MiB limit continues to bound large-payload batches. A quiet single-key update uses an ordinary write; an enqueue pair still uses one
 atomic commit. Atomic frames are pipelined in connection order without waiting for staging.
 Every frame requires API level 2, and the bounded writer is enabled only when the
@@ -63,6 +63,19 @@ in-flight child is uncertain; children not yet attempted are reported separately
 and are not submitted after the deadline. Optional `queue-diagnostics`
 timings distinguish frame submission and final durable acknowledgement waiting;
 only the final acknowledgement establishes success.
+
+Pooled subscriptions use a distinct reply subject for every batch. Replies from
+an earlier batch are ignored before inspecting their status or payload, including
+errors and empty staging replies that have no batch ID. A delayed conflict reply
+therefore cannot reject a later batch using the same subscription.
+For the standard publish path, only the first and final frames request replies;
+intermediate staging replies are optional under
+[ADR-50](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-50.md).
+Custom JetStream API-prefix routing retains its existing per-frame request path.
+Both paths require the same validated final commit acknowledgement. This reduces
+reply traffic on the standard path, not the number of durable writes. Diagnostic
+staging intervals consequently observe fewer replies and must not be compared
+directly with the earlier per-frame-reply measurements.
 
 Local workers reserve advisory candidates while their claim is in flight. This
 avoids redundant local lease races but grants no ownership. The server's exact
@@ -99,10 +112,97 @@ changing the stored format, or assuming that producers and consumers share a pro
 
 ### Small-batch collection
 
-The atomic writer allows a 2 ms collection window so independently arriving
-operations can share a durable commit. This adds bounded collection latency to
-light traffic. Byte/message bounds, the separate metadata lane, expected-revision
+The atomic writer allows up to 1 ms of collection for enqueue pairs and up to
+8 ms for metadata updates, so independently arriving operations can share a
+durable commit. Collection stops early at the batch bounds or a conflicting key.
+A quiet metadata update can therefore incur the full 8 ms collection delay. Byte/message bounds, the separate metadata lane, expected-revision
 checks and final durable-acknowledgement requirements are unchanged. Increasing
 producer concurrency is not a substitute for measuring durable storage latency;
 it can increase timeouts. Consumer concurrency must also cover the measured
-claim-plus-completion latency at the required arrival rate.
+claim-plus-completion latency at the required arrival rate. As a planning
+estimate, required workers are arrival rate multiplied by mean claim, handler,
+and completion cycle time, plus headroom. At ten jobs/second, two workers can
+sustain only about 200 ms of mean total cycle time. Increasing this application
+worker count is different from increasing the writer's batch execution limits.
+See the [concurrency experiments](../docs/jetstream-batching-experiment-b51fb4f.md)
+for measured improvements and the still-unmet full capacity target.
+
+### Execution limits
+
+`DOGRS_NATS_ENQUEUE_CONCURRENCY` (default 2) and
+`DOGRS_NATS_UPDATE_CONCURRENCY` (default 1) accept integers from 1 through 32.
+Invalid values fail atomic-writer construction before tasks start. Limits are per
+store, not a global limit across shards. These execution limits differ from
+`with_enqueue_concurrency`, which bounds admission requests.
+
+Revision fencing does not implement a server-time expiry predicate. Lease
+transitions use application wall clocks before CAS; clock skew and delayed commits
+remain deployment/contract limitations described in `KV-STORAGE.md`. Do not infer
+arbitrary-clock-skew safety from a successful normal recovery test.
+
+### Lease response deadlines and stream validation
+
+Existing buckets must use `Limits` retention. `Interest` and `WorkQueue` retention
+are rejected because job records and payloads must survive independently of
+consumer interest and acknowledgement.
+
+Completion, failure and heartbeat writes are locally bounded by the previously
+observed lease deadline. A deadline already passed prevents submission. A timeout
+or successful acknowledgement observed after that deadline returns an uncertain
+outcome error, not success: the remote write may have committed. Reconcile job
+status before deciding whether to retry; do not assume the write was rolled back.
+A dequeue also rechecks expiry after both ownership and payload retrieval finish,
+so a payload delay cannot knowingly hand an already expired lease to a worker.
+The stored lease is left for normal expiry recovery; it is not rolled back over a
+potential concurrent owner.
+
+These guards do not add a server-side time predicate to JetStream CAS. An in-flight
+write can still commit after its application deadline, and clock synchronization
+remains required. Strict server-time commit expiry needs a different coordination
+mechanism; revision fencing alone cannot provide it. The guards do not establish
+an increased capacity limit or remove the cost of KV metadata transitions.
+
+### Size bucket count to measured storage capacity
+
+More sharded buckets are not automatically faster: each is an independent
+replicated stream. In a local three-replica, always-fsync comparison, four buckets
+with the pre-window-change writer completed 45,586–48,413 jobs, versus 19,264–24,652 with
+sixteen, under the same 60,000-job workload. Neither met the full gate. Increasing
+the soft enqueue batch target to 1 MiB made completion throughput worse and was
+reverted. See [experiment details](../docs/jetstream-batching-experiment-b51fb4f.md).
+These are deployment-sizing observations, not a universal default or capacity
+promise. Keep shard topology stable for existing data; changing it requires migration.
+
+The metadata-window follow-up in the linked report improved completion counts
+but still missed the 1,000 jobs/second target. Collection changes do not remove a
+job's durable state transitions or establish a capacity guarantee.
+
+### Admission attribution
+
+[Direct-write controls and server traces](../docs/jetstream-admission-attribution-3d1dbd3.md)
+locate significant waiting in JetStream's Raft WAL fsync path. Opt-in queue
+metrics now distinguish observed first-staging and post-staging acknowledgement
+intervals; neither is an isolated disk measurement. Native writes also missed the
+local admission target. This evidence does not certify 1,000 jobs/second, justify
+weaker persistence, or rule out further adapter improvements.
+
+The [matched payload-size comparison](../docs/jetstream-write-cost-c472a04.md)
+cross-checks acknowledged records against all replicas' stream sequences. In those
+runs, both payload sizes wrote four logical records per completed job, but 1 KiB
+passed the job-rate target while 64 KiB missed it with much longer commit waits.
+A [separate payload-storage prototype](../docs/jetstream-split-storage-experiment.md)
+was tested and rejected: it missed the full target and introduced uncertain
+enqueue timeouts in one run. The existing storage layout remains unchanged.
+
+### Measured operating baseline
+
+[Three two-minute tests at 500 jobs/second](../docs/jetstream-operating-rate-500.md)
+passed with 100 tenants, 64 KiB payloads, R3 and always-fsync on the documented
+local fixture. All 180,000 jobs completed and verified without errors or overload.
+This is deployment-specific evidence; 1,000/s remains an unmet stress target.
+Enqueue latency varied, and longer soaks and independent provider failures are
+not certified by these capacity runs.
+
+The current [default target is 900/s](../docs/jetstream-target-900.md). Three
+local tests missed that target through overload rejection. This does not replace
+the passing 500/s evidence or make 900/s a supported throughput guarantee.

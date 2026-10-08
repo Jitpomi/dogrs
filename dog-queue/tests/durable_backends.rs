@@ -98,6 +98,27 @@ async fn postgres_reconnects_after_connection_loss() {
     })
     .await;
     recovered.expect("PostgreSQL backend must reconnect without recreating it");
+    // Prepared statements are connection-local. A replaced pooled connection
+    // must prepare its own enqueue statement instead of reusing the dead one's.
+    let message = dog_queue::JobMessage::new("reconnected", vec![7; 65536], "bytes", "q")
+        .with_idempotency_key("after-reconnect");
+    let next = backend
+        .enqueue(tenant.clone(), message.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        backend.enqueue(tenant.clone(), message).await.unwrap(),
+        next
+    );
+    assert_eq!(
+        backend
+            .get_record(tenant, next)
+            .await
+            .unwrap()
+            .message
+            .payload_bytes,
+        vec![7; 65536]
+    );
     task.abort();
 }
 

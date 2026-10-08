@@ -105,9 +105,9 @@ impl RedisBackend {
                     // A single reconnect cycle must fit inside the queue's
                     // 30-second operation budget, even with black-holed TCP.
                     .set_number_of_retries(3)
-                    .set_max_delay(500)
-                    .set_connection_timeout(std::time::Duration::from_secs(5))
-                    .set_response_timeout(std::time::Duration::from_secs(10)),
+                    .set_max_delay(std::time::Duration::from_millis(500))
+                    .set_connection_timeout(Some(std::time::Duration::from_secs(5)))
+                    .set_response_timeout(Some(std::time::Duration::from_secs(10))),
             )
             .await
             .map_err(error)?;
@@ -172,6 +172,11 @@ impl RedisStore {
         } else {
             "ready"
         };
+        let _write = crate::diagnostics::Scope::new(if enqueue {
+            crate::diagnostics::REDIS_ENQUEUE_WRITE
+        } else {
+            crate::diagnostics::REDIS_UPDATE_WRITE
+        });
         let mut connection = self.manager.clone();
         redis::Script::new(include_str!("redis_write.lua"))
             .key(format!("{p}:meta"))
@@ -207,8 +212,43 @@ impl RedisStore {
 }
 impl RedisStore {
     async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
+        let stage = match op {
+            Operation::Enqueue(_) => Some(crate::diagnostics::REDIS_ENQUEUE_TOTAL),
+            Operation::Dequeue(..) => Some(crate::diagnostics::REDIS_CLAIM_TOTAL),
+            Operation::Complete(..) => Some(crate::diagnostics::REDIS_COMPLETE_TOTAL),
+            _ => None,
+        };
+        let _scope = stage.map(crate::diagnostics::Scope::new);
         self.check_legacy(tenant).await?;
         let p = prefix(tenant);
+        if let Operation::Complete(id, token, result) = op {
+            // Completion needs no payload or client-side state transition. Check
+            // ownership and expiry and update metadata in one atomic script.
+            let result = serde_json::to_string(result).map_err(error)?;
+            let status: i32 = redis::Script::new(include_str!("redis_complete.lua"))
+                .key(format!("{p}:meta"))
+                .key(format!("{p}:leases"))
+                .key(format!("{p}:terminal"))
+                .key(format!("{p}:dedupe"))
+                .arg(id.as_str())
+                .arg(token.as_str())
+                .arg(result)
+                .invoke_async(&mut self.manager.clone())
+                .await
+                .map_err(error)?;
+            return match status {
+                0 => Ok(Outcome::Done),
+                1 => Err(QueueError::JobNotFound(id.clone())),
+                2 => Err(QueueError::JobCanceled),
+                3 => Err(QueueError::JobAlreadyTerminal),
+                4 => Err(QueueError::InvalidLeaseToken { job_id: id.clone() }),
+                5 => Err(QueueError::LeaseExpired),
+                6 => Err(QueueError::InvalidConfig(
+                    "Persisted result must fit in 4 KiB; store large results by reference".into(),
+                )),
+                _ => Err(error("Unexpected Redis completion outcome")),
+            };
+        }
         if let Operation::Purge(before) = op {
             let count:usize=redis::Script::new("local ids=redis.call('ZRANGEBYSCORE',KEYS[3],'-inf','('..ARGV[1],'LIMIT',0,1000); for _,id in ipairs(ids) do redis.call('HDEL',KEYS[1],id); redis.call('HDEL',KEYS[2],id); redis.call('ZREM',KEYS[3],id); end; return #ids")
                 .key(format!("{p}:meta")).key(format!("{p}:payload")).key(format!("{p}:terminal")).arg(before.timestamp_millis()).invoke_async(&mut self.manager.clone()).await.map_err(error)?;
@@ -252,10 +292,12 @@ impl RedisStore {
             let (now, values) = if matches!(op, Operation::Enqueue(_)) {
                 (Utc::now(), Vec::new())
             } else {
-                let mut values: Vec<String> = read
-                    .invoke_async(&mut self.manager.clone())
-                    .await
-                    .map_err(error)?;
+                let mut values: Vec<String> = crate::diagnostics::measure(
+                    crate::diagnostics::REDIS_READ,
+                    read.invoke_async(&mut self.manager.clone()),
+                )
+                .await
+                .map_err(error)?;
                 let now = DateTime::from_timestamp_millis(values.remove(0).parse().map_err(error)?)
                     .ok_or_else(|| error("Invalid Redis clock"))?;
                 (now, values)

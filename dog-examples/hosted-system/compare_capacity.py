@@ -14,6 +14,7 @@ import subprocess
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--report-dir', required=True)
+parser.add_argument('--rate', type=int, choices=range(1, 11), default=9)
 parser.add_argument('--seconds', type=int, choices=[10, 30, 60], default=10)
 parser.add_argument('--backends', nargs='+', choices=['postgres', 'nats'], default=['postgres', 'nats'])
 parser.add_argument('--payloads', nargs='+', type=int, choices=[1024, 65536], default=[1024, 65536])
@@ -34,13 +35,14 @@ with binary.open('rb') as source:
     for block in iter(lambda: source.read(1024 * 1024), b''):
         digest.update(block)
 report = {'production_acceptance': False, 'scope': 'admission diagnostics plus separately labelled full-queue measurements',
-          'seconds': args.seconds, 'repeats': args.repeats,
+          'seconds': args.seconds, 'jobs_per_second_per_tenant': args.rate, 'repeats': args.repeats,
           'git_head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip(),
           'binary_sha256': digest.hexdigest(),
           'source_dirty': bool(subprocess.check_output(['git','status','--porcelain'],cwd=repo,text=True)),
           'notes': ['Fresh provider containers per measurement; runs are serial.',
                     'Odd repeats reverse mode order to expose order/host variance.',
-                    'Native-layout shares PostgreSQL schema and admission SQL; it cannot rule out SQL/layout costs.',
+                    'Native-layout shares PostgreSQL schema and single-row admission SQL.',
+                    'This comparison cannot rule out SQL/layout costs.',
                     'Native admission omits discovery, claims, completions, recovery and duplicate-submission races.',
                     'Short-run results do not certify the sustained production target.'], 'runs': []}
 try:
@@ -56,7 +58,7 @@ try:
                     folder = root / f'{repeat}-{backend}-{payload}-{mode}'
                     folder.mkdir(parents=True)
                     command = ['python3', 'dog-examples/hosted-system/run_recovery.py', backend,
-                               '--capacity', '--seconds', str(args.seconds), '--bytes', str(payload), '--report-dir', str(folder)]
+                               '--capacity', '--rate', str(args.rate), '--seconds', str(args.seconds), '--bytes', str(payload), '--report-dir', str(folder)]
                     if mode != 'queue':
                         command += ['--admission-mode', mode]
                     outcome = subprocess.run(command, cwd=repo, env=env, capture_output=True, text=True, timeout=420)
@@ -80,7 +82,11 @@ try:
                                       'completed': result.get('completed') if result else None}), flush=True)
                     if result is None:
                         raise RuntimeError('measurement absent; inspect controller/setup logs')
-                    if result.get('offered') != args.seconds * 1000 or result.get('payload_bytes') != payload:
+                    if (result.get('offered') != args.seconds * 100 * args.rate
+                            or result.get('jobs_per_second_per_tenant') != args.rate
+                            or result.get('seconds') != args.seconds
+                            or result.get('tenants') != 100
+                            or result.get('payload_bytes') != payload):
                         raise RuntimeError('measurement does not match requested workload')
                     if mode != 'queue' and (result.get('mode') != mode or result.get('production_acceptance') is not False):
                         raise RuntimeError('diagnostic scope mismatch')

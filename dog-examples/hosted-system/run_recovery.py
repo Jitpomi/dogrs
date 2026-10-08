@@ -5,7 +5,9 @@ Run with DOGRS_SYSTEM_BINARY pointing to a release build with redis,nats feature
 Only containers/network created by this invocation are killed or removed.
 """
 import argparse,json,os,pathlib,platform,re,resource,secrets,socket,subprocess,time,threading,urllib.request
-p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis','nats']);p.add_argument('--report-dir',required=True);p.add_argument('--capacity',action='store_true');p.add_argument('--restore',action='store_true');p.add_argument('--race',action='store_true');p.add_argument('--outage-seconds',type=int,default=3);p.add_argument('--seconds',type=int,default=30);p.add_argument('--bytes',type=int,default=1024);p.add_argument('--admission-mode',choices=['native-payload','native-layout','dogrs-admission']);p.add_argument('--overload-drain-seconds',type=int,choices=[0,30,60,120],default=0);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('backend',choices=['postgres','redis','nats']);p.add_argument('--report-dir',required=True);p.add_argument('--capacity',action='store_true');p.add_argument('--restore',action='store_true');p.add_argument('--race',action='store_true');p.add_argument('--outage-seconds',type=int,default=3);p.add_argument('--seconds',type=int,default=30);p.add_argument('--rate',type=int,choices=range(1,11),default=None,help='Jobs/second per tenant; capacity default 9 (900/s)');p.add_argument('--bytes',type=int,default=1024);p.add_argument('--admission-mode',choices=['native-payload','native-layout','dogrs-admission']);p.add_argument('--overload-drain-seconds',type=int,choices=[0,30,60,120],default=0);a=p.parse_args()
+if a.rate is None:a.rate=9 if a.capacity else 10
+if a.rate!=10 and not a.capacity:p.error('--rate requires capacity mode')
 if a.admission_mode and not a.capacity:p.error('--admission-mode requires --capacity')
 if a.overload_drain_seconds and (not a.capacity or a.admission_mode):p.error('overload drain requires the full queue capacity mode')
 wal_init_zero=os.environ.get('DOGRS_PG_WAL_INIT_ZERO','on')
@@ -40,6 +42,7 @@ def wait_port(number):
    time.sleep(.2)
 try:
  (folder/'environment.json').write_text(json.dumps({
+  'backend':a.backend,
   'host_architecture':platform.machine(),'host_logical_cpus':os.cpu_count(),
   'docker':json.loads(command('docker','info','--format','{"cpus":{{.NCPU}},"memory_bytes":{{.MemTotal}},"architecture":"{{.Architecture}}"}')),
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
@@ -59,9 +62,25 @@ try:
   'comparison_tenant':os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT') if a.capacity else None,
   'nats_connections':os.environ.get('DOGRS_NATS_CONNECTIONS','shared'),
   'nats_atomic':os.environ.get('DOGRS_NATS_ATOMIC')!='0',
+  'nats_enqueue_concurrency':int(os.environ.get('DOGRS_NATS_ENQUEUE_CONCURRENCY','2')),
+  'nats_update_concurrency':int(os.environ.get('DOGRS_NATS_UPDATE_CONCURRENCY','1')),
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),
   'nats_storage':'anonymous Docker volume at /data',
  },indent=2))
+ if a.capacity and platform.system()=='Linux':
+  hardware={}
+  for key,args in {
+   'cpu':['lscpu','--json'],
+   'block_devices':['lsblk','--json','-o','NAME,TYPE,SIZE,MOUNTPOINTS,PKNAME'],
+   'filesystems':['df','-hT'],
+   'mounts':['findmnt','--json'],
+   'docker_root':['docker','info','--format','{{.DockerRootDir}}'],
+  }.items():
+   try:
+    result=subprocess.run(args,capture_output=True,text=True,timeout=20)
+    hardware[key]={'returncode':result.returncode,'stdout':result.stdout,'stderr':result.stderr}
+   except (OSError,subprocess.TimeoutExpired) as err:hardware[key]={'error':str(err)}
+  (folder/'hardware.json').write_text(json.dumps(hardware,indent=2))
  env={**os.environ,'DOGRS_BACKEND':a.backend,'DOGRS_TEST_TENANT':run.replace('dogrs-fault-','dogrs-test-fault-'),'DOGRS_RECOVERY_MANIFEST':str(folder/'manifest.json')}
  env.pop('DOGRS_ADMISSION_MODE',None)
  if a.capacity and os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT'):
@@ -95,7 +114,7 @@ try:
    command('docker','exec',name,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-c',create)
  elif a.backend=='redis':
   number=port();name=run+'-redis'
-  launch(name,'-p',f'127.0.0.1:{number}:6379','redis:7.4-alpine','redis-server','--appendonly','yes','--appendfsync','always','--maxmemory-policy','noeviction')
+  launch(name,'-p',f'127.0.0.1:{number}:6379','redis:7.4-alpine','redis-server','--appendonly','yes','--appendfsync','always','--maxmemory-policy','noeviction','--latency-monitor-threshold','1')
   env['DOGRS_REDIS_URL']=f'redis://127.0.0.1:{number}/';env['DOGRS_REDIS_REQUIRE_AOF']='1';wait_port(number)
  else:
   network=run;command('docker','network','create',network)
@@ -133,11 +152,23 @@ try:
   raise SystemExit(result.returncode)
  if a.capacity:
   if a.admission_mode:env['DOGRS_ADMISSION_MODE']=a.admission_mode
-  env.update(DOGRS_CAPACITY_RECOVERY_SECONDS=str(a.overload_drain_seconds),DOGRS_CAPACITY_TENANTS='100',DOGRS_CAPACITY_SECONDS=str(a.seconds),DOGRS_CAPACITY_BYTES=str(a.bytes))
+  env.update(DOGRS_CAPACITY_RATE=str(a.rate),DOGRS_CAPACITY_RECOVERY_SECONDS=str(a.overload_drain_seconds),DOGRS_CAPACITY_TENANTS='100',DOGRS_CAPACITY_SECONDS=str(a.seconds),DOGRS_CAPACITY_BYTES=str(a.bytes))
   before=resource.getrusage(resource.RUSAGE_CHILDREN)
   with (folder/'container-stats.jsonl').open('w') as stats:
    monitor=subprocess.Popen(['docker','stats','--format','{{json .}}',*containers],stdout=stats,stderr=subprocess.DEVNULL)
    samplers=[];profile_stop=threading.Event();profile_thread=None
+   host_io_thread=None
+   def sample_host_io():
+    # Read-only, host-wide counters: correlate with container and adapter timings;
+    # they cannot attribute all host I/O to this process or establish causality.
+    with (folder/'host-io.jsonl').open('w') as output:
+     while not profile_stop.is_set():
+      row={'monotonic':time.monotonic()}
+      for source in ['/proc/diskstats','/proc/stat','/proc/pressure/io','/proc/pressure/cpu']:
+       try:row[source]=pathlib.Path(source).read_text()
+       except OSError as err:row[source]={'error':str(err)}
+      output.write(json.dumps(row)+'\n');output.flush()
+      profile_stop.wait(1)
    def sample_nats_stacks():
     sample=0
     while not profile_stop.is_set():
@@ -150,6 +181,8 @@ try:
      sample+=1
      profile_stop.wait(5)
    try:
+    if (os.environ.get('DOGRS_QUEUE_TIMINGS')=='1' or os.environ.get('DOGRS_HOST_IO_PROFILE')=='1') and platform.system()=='Linux':
+     host_io_thread=threading.Thread(target=sample_host_io,daemon=True);host_io_thread.start()
     if profile_ports:
      profile_thread=threading.Thread(target=sample_nats_stacks,daemon=True);profile_thread.start()
     if a.backend=='postgres' and os.environ.get('DOGRS_PG_PROFILE')=='1':
@@ -174,6 +207,7 @@ try:
     (folder/'client-cpu.json').write_text(json.dumps({'user_seconds':after.ru_utime-before.ru_utime,'system_seconds':after.ru_stime-before.ru_stime}))
    finally:
     profile_stop.set()
+    if host_io_thread:host_io_thread.join(timeout=5)
     if profile_thread:profile_thread.join(timeout=10)
     for sampler,sample_output in samplers:
      sampler.terminate()
@@ -187,6 +221,15 @@ try:
   clean=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', stats_path.read_text())
   samples=[json.loads(line) for line in clean.splitlines() if line.strip()]
   stats_path.write_text(''.join(json.dumps(sample)+'\n' for sample in samples))
+  if a.backend=='nats':
+   # After timed work and verification, record each replica independently.
+   # Stream sequences count logical records, not Raft entries or fsyncs.
+   for node_name,monitor_port in monitors.items():
+    try:
+     with urllib.request.urlopen(f'http://127.0.0.1:{monitor_port}/jsz?accounts=true&streams=true&config=true',timeout=5) as response:state=json.load(response)
+     (folder/f'{node_name}-stream-state.json').write_text(json.dumps(state))
+    except (OSError,ValueError) as error:
+     (folder/f'{node_name}-stream-state-error.txt').write_text(str(error))
   if a.backend=='postgres':
    for node_name,node_folder in pg_nodes:
     (node_folder/'durability-settings.txt').write_text(command('docker','exec',node_name,'psql','-U','postgres','-c',"SELECT name,setting FROM pg_settings WHERE name IN ('fsync','synchronous_commit','full_page_writes','wal_init_zero','wal_recycle','wal_sync_method') ORDER BY name"))
@@ -197,6 +240,12 @@ try:
    # Collect provider costs without changing its persistence or rewrite policy.
    for section in ('persistence','stats','memory','commandstats','latencystats'):
     (folder/f'redis-{section}.txt').write_text(command('docker','exec',name,'redis-cli','INFO',section))
+   # Server-side events separate persistence stalls from command execution.
+   # Do not capture SLOWLOG arguments: queue payloads can contain private data.
+   events=json.loads(command('docker','exec',name,'redis-cli','--json','LATENCY','LATEST'))
+   (folder/'redis-latency-events.json').write_text(json.dumps(events,indent=2))
+   histories={event[0]:json.loads(command('docker','exec',name,'redis-cli','--json','LATENCY','HISTORY',event[0])) for event in events}
+   (folder/'redis-latency-history.json').write_text(json.dumps(histories,indent=2))
    (folder/'redis-durability-settings.txt').write_text(command('docker','exec',name,'redis-cli','CONFIG','GET','appendfsync','appendonly','auto-aof-rewrite-percentage','auto-aof-rewrite-min-size','no-appendfsync-on-rewrite','maxmemory-policy'))
   print(json.dumps({'backend':a.backend,'restored_to_fresh_container':a.restore,'outage_seconds':a.outage_seconds,'replicas':3 if a.backend=='nats' else 1,'sync_policy':'always' if a.backend in ('redis','nats') else 'PostgreSQL default fsync/synchronous_commit','measurement':a.admission_mode or 'queue-capacity','passed':result.returncode==0,'capacity_log':str(folder/'capacity.log')}))
   raise SystemExit(result.returncode)

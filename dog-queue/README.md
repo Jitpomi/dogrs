@@ -99,10 +99,17 @@ replication work without changing revision checks or the stored format. See
 ## Capacity, security and migration
 
 PostgreSQL v2 uses indexed job rows, binary payloads and a bounded connection pool.
-Redis uses two connections per backend instance: one for payload admission and
-one for worker/control operations. Tenant registration and the authoritative
-server-clock read are pipelined; a registration error still prevents the job write.
-Both connections retain the same reconnect and response deadlines.
+Prepared enqueue statements are cached per physical connection and recreated
+after reconnecting. They require a direct/session connection or a pooler that
+supports protocol-level prepared statements.
+Redis uses one multiplexed connection manager per backend instance. The Redis
+client dependency is at least 1.7.1, including the upstream fix for a duplex
+read/write deadlock under backpressure (redis-rs #1955). A deterministic
+request/reply pressure test guards this behavior. This fixes a transport defect,
+not a universal throughput guarantee. Tenant
+registration and the legacy check run once per tenant per instance. Enqueue
+metadata is constructed with client time; Lua checks eligibility using Redis TIME,
+and acknowledgement scripts recheck lease expiry on the server at commit.
 
 Redis v2 uses indexed per-job metadata and separate binary payloads. JetStream
 uses independent active idempotency cells, immutable payloads and separate terminal
@@ -145,3 +152,44 @@ The optional PostgreSQL adapter now uses indexed per-job rows and a bounded pool
 See [storage, clock, and offline migration requirements](POSTGRES.md) before
 upgrading an existing v1 ledger. Custom durable ledgers can implement the public
 `JobLedger` trait; PostgreSQL is not required by the portable queue API.
+
+### Broker notification lifecycle
+
+Broker wrappers start two bounded background tasks lazily on enqueue/dequeue.
+Publication coalesces hints (one pending plus one in flight); notification failures
+never delay committed admission or ready-job claims. Workers must keep polling the
+ledger, including when notifications are lost. `notification_failures()` reports
+explicit receive errors and failed/timed-out publications. Idle streaming receive
+deadlines are counted separately by `notification_receive_timeouts()`.
+
+Call `shutdown_notifications(&mut self).await` to abort and join wrapper tasks
+and release receive resources, including resources initialized through the direct
+notification accessor. Repeated shutdown is supported; subsequent queue use
+restarts tasks and subscriptions. Pub/Sub creates its stream lazily and requests
+immediate redelivery of outstanding hints on shutdown. Kafka unsubscribes on
+shutdown and resubscribes on receive. Client connections remain available for
+restart; already queued producer requests can still finish in the SDK. Shutdown
+is not a delivery flush or a guarantee that all client network I/O has stopped.
+
+RabbitMQ waits for consumer cancellation, acknowledges its remaining prefetched
+hints, and performs a channel round trip before returning. It preserves the
+caller's channel and other consumers. RabbitMQ and Pub/Sub cleanup wait up to five
+seconds for protocol completion and log incomplete cleanup. If RabbitMQ cleanup
+fails, close the supplied channel to release outstanding deliveries before retiring
+the backend. Dropping the wrapper only aborts tasks; use explicit shutdown for
+receive-resource cleanup when retaining the caller's RabbitMQ channel.
+Custom `Notifications` implementations must be owned (`'static`) and cancellation
+safe. The notification accessor is for configuration/testing; direct receive calls
+compete with background consumption once queue use has started.
+
+RabbitMQ uses a persistent consumer with prefetch 32. SQS uses 20-second long
+polls, batches up to ten receipts, and independent FIFO notification groups (job
+ordering belongs to the ledger). Kafka rdkafka wakeups have no fixed key, allowing
+caller-configured partitioning to distribute them. Rskafka remains an explicit
+single-partition client; only offset-out-of-range errors reset its cursor.
+
+Sharded recovery attempts every shard with concurrency eight and a 30-second
+per-shard deadline. `reclaim_expired_leases_report()` returns both successful
+outcomes and indexed errors. The common trait returns successful outcomes when
+available, logs partial failures, and returns an error when failures occur without
+any outcomes; use the report API when monitoring partial recovery directly.

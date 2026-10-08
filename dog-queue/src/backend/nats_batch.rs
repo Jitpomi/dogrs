@@ -16,7 +16,9 @@ const MAX_BYTES: usize = 2 * 1024 * 1024;
 const TARGET_BATCH_BYTES: usize = 256 * 1024;
 struct Write {
     key: String,
-    value: Vec<u8>,
+    // Share the owned buffer with async-nats and any definitively rejected
+    // batch's child attempts; cloning a Vec here copies every payload again.
+    value: bytes::Bytes,
     revision: u64,
 }
 struct Group {
@@ -55,7 +57,11 @@ impl SessionPool {
         }
         drop(guard);
         let inbox = self.client.new_inbox();
-        let replies = self.client.subscribe(inbox.clone()).await.map_err(error)?;
+        let replies = self
+            .client
+            .subscribe(format!("{inbox}.*"))
+            .await
+            .map_err(error)?;
         Ok(Session { inbox, replies })
     }
     async fn release(&self, session: Session) {
@@ -77,21 +83,42 @@ fn conflict(e: &jetstream::Error) -> bool {
     )
 }
 impl BatchWriter {
-    pub(super) fn start(context: jetstream::Context, bucket: kv::Store) -> Self {
+    pub(super) fn start(context: jetstream::Context, bucket: kv::Store) -> QueueResult<Self> {
+        let enqueues = execution_limit(
+            "DOGRS_NATS_ENQUEUE_CONCURRENCY",
+            std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
+                .ok()
+                .as_deref(),
+            2,
+        )?;
+        let updates = execution_limit(
+            "DOGRS_NATS_UPDATE_CONCURRENCY",
+            std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
+                .ok()
+                .as_deref(),
+            1,
+        )?;
         // Reserve one execution lane for lease/completion metadata. A large
         // producer backlog must not occupy every durable-write slot or put a
         // lease update behind payload staging in the same atomic batch.
         let pool = std::sync::Arc::new(SessionPool::new(context.client()));
-        Self {
-            updates: Self::lane(context.clone(), bucket.clone(), pool.clone(), false),
-            enqueues: Self::lane(context, bucket, pool, true),
-        }
+        Ok(Self {
+            updates: Self::lane(
+                context.clone(),
+                bucket.clone(),
+                pool.clone(),
+                false,
+                updates,
+            ),
+            enqueues: Self::lane(context, bucket, pool, true, enqueues),
+        })
     }
     fn lane(
         context: jetstream::Context,
         bucket: kv::Store,
         pool: std::sync::Arc<SessionPool>,
         enqueue: bool,
+        concurrency: usize,
     ) -> mpsc::Sender<Group> {
         let (sender, mut receiver) = mpsc::channel::<Group>(ADMISSION_CAPACITY);
         tokio::spawn(async move {
@@ -99,17 +126,6 @@ impl BatchWriter {
             // One in-flight 3-job batch at 100 ms caps admission at 30 jobs/s
             // regardless of how much unused capacity the provider has. Retain
             // a separate metadata lane so producer pipelining cannot consume it.
-            let concurrency = if enqueue {
-                std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(2)
-            } else {
-                std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(1)
-            };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
             loop {
@@ -150,10 +166,13 @@ impl BatchWriter {
                 let target_reached = if enqueue {
                     bytes >= TARGET_BATCH_BYTES || count >= MAX_MESSAGES
                 } else {
-                    count >= 2
+                    count >= MAX_MESSAGES
                 };
                 if !target_reached && deferred.is_none() && count < MAX_MESSAGES {
-                    let deadline = tokio::time::Instant::now() + Duration::from_millis(1);
+                    // Collect metadata transitions for a bounded window so claim and
+                    // completion writes can amortize a durable commit across jobs.
+                    let window = if enqueue { 1 } else { 8 };
+                    let deadline = tokio::time::Instant::now() + Duration::from_millis(window);
                     while count < MAX_MESSAGES {
                         match tokio::time::timeout_at(deadline, receiver.recv()).await {
                             Ok(Some(group)) => {
@@ -173,7 +192,7 @@ impl BatchWriter {
                                 let reached = if enqueue {
                                     bytes >= TARGET_BATCH_BYTES
                                 } else {
-                                    count >= 2
+                                    count >= MAX_MESSAGES
                                 };
                                 if reached {
                                     break;
@@ -236,6 +255,11 @@ impl BatchWriter {
             ));
         }
 
+        let _pending = crate::diagnostics::Scope::new(if writes.len() == 1 {
+            crate::diagnostics::NATS_UPDATE_PENDING
+        } else {
+            crate::diagnostics::NATS_ENQUEUE_PENDING
+        });
         let (reply, receiver) = oneshot::channel();
         let lane = if writes.len() == 1 {
             &self.updates
@@ -262,7 +286,7 @@ impl BatchWriter {
         Ok(self
             .send(vec![Write {
                 key: key.into(),
-                value,
+                value: value.into(),
                 revision,
             }])
             .await?
@@ -282,12 +306,12 @@ impl BatchWriter {
                 // discoverable until its payload commits in the same batch.
                 Write {
                     key: key.into(),
-                    value: metadata,
+                    value: metadata.into(),
                     revision,
                 },
                 Write {
                     key: payload_key,
-                    value: payload,
+                    value: payload.into(),
                     revision: 0,
                 },
             ])
@@ -297,7 +321,7 @@ impl BatchWriter {
 }
 async fn single(bucket: &kv::Store, write: &Write) -> QueueResult<Option<u64>> {
     match bucket
-        .update(&write.key, write.value.clone().into(), write.revision)
+        .update(&write.key, write.value.clone(), write.revision)
         .await
     {
         Ok(revision) => Ok(Some(revision)),
@@ -316,16 +340,25 @@ async fn commit(
     bucket: &kv::Store,
     writes: &[&Write],
 ) -> QueueResult<Option<Vec<u64>>> {
-    if writes.len() == 1 {
-        return Ok(single(bucket, writes[0])
-            .await?
-            .map(|revision| vec![revision]));
-    }
-    crate::diagnostics::measure(
-        crate::diagnostics::NATS_ATOMIC_COMMIT,
-        atomic_with_pool(pool, context, bucket, writes),
-    )
-    .await
+    let bytes = writes.iter().map(|write| write.value.len()).sum();
+    crate::diagnostics::publish_attempt(writes.len(), bytes);
+    let result = if writes.len() == 1 {
+        single(bucket, writes[0])
+            .await
+            .map(|revision| revision.map(|r| vec![r]))
+    } else {
+        crate::diagnostics::measure(
+            crate::diagnostics::NATS_ATOMIC_COMMIT,
+            atomic_with_pool(pool, context, bucket, writes),
+        )
+        .await
+    };
+    crate::diagnostics::publish_result(
+        writes.len(),
+        bytes,
+        result.as_ref().ok().map(|revisions| revisions.is_some()),
+    );
+    result
 }
 async fn execute_with_pool(
     pool: &SessionPool,
@@ -444,6 +477,9 @@ async fn atomic_with_pool(
     let client = context.client();
     let mut session = pool.acquire().await?;
     let id = uuid::Uuid::new_v4().to_string();
+    // Error and empty staging replies do not carry a batch ID. Correlate every
+    // response through its subject, including delayed replies after pool reuse.
+    let reply_subject = format!("{}.{id}", session.inbox);
     for (i, write) in writes.iter().enumerate() {
         let mut headers = async_nats::HeaderMap::new();
         headers.insert("Nats-Batch-Id", id.as_str());
@@ -468,19 +504,28 @@ async fn atomic_with_pool(
                 .send_request(
                     subject,
                     async_nats::client::Request::new()
-                        .inbox(session.inbox.clone())
+                        .inbox(reply_subject.clone())
                         .headers(headers)
-                        .payload(write.value.clone().into()),
+                        .payload(write.value.clone()),
                 )
+                .await
+                .map_err(error)?;
+        } else if i > 0 && i + 1 < writes.len() {
+            // ADR-50 makes intermediate staging replies optional. The first
+            // frame establishes support and the last returns the durable ack.
+            // A rejected intermediate frame abandons the batch; its final
+            // frame then fails rather than acknowledging a partial commit.
+            client
+                .publish_with_headers(subject, headers, write.value.clone())
                 .await
                 .map_err(error)?;
         } else {
             client
                 .publish_with_reply_and_headers(
                     subject,
-                    session.inbox.clone(),
+                    reply_subject.clone(),
                     headers,
-                    write.value.clone().into(),
+                    write.value.clone(),
                 )
                 .await
                 .map_err(error)?;
@@ -492,6 +537,13 @@ async fn atomic_with_pool(
     // extra staging round trip. (ADR-50 fast-ingest has different rules.)
     // Staging replies are still consumed, but only a final durable ack succeeds.
     let _wait = crate::diagnostics::Scope::new(crate::diagnostics::NATS_ATOMIC_FINAL_WAIT);
+    // Observe existing replies only: a publish() timer measures client queue
+    // admission, not delivery to the server. These probes do not add a flush or
+    // change which acknowledgement establishes success. They are client-observed
+    // intervals, not an isolated measurement of server disk time.
+    let first_staging_started = crate::diagnostics::start();
+    let mut first_staging = true;
+    let mut last_staging = None;
     let result = loop {
         let response = match session.replies.next().await {
             Some(resp) => resp,
@@ -501,10 +553,21 @@ async fn atomic_with_pool(
                 ))
             }
         };
+        if response.subject.as_str() != reply_subject {
+            continue;
+        }
         if response.status.is_some_and(|status| !status.is_success()) {
             break Err(error("server rejected batch request"));
         }
         if response.payload.is_empty() {
+            if first_staging {
+                crate::diagnostics::elapsed(
+                    crate::diagnostics::NATS_ATOMIC_FIRST_STAGING_WAIT,
+                    first_staging_started,
+                );
+                first_staging = false;
+            }
+            last_staging = crate::diagnostics::start();
             continue;
         }
         match serde_json::from_slice::<Response<PublishAck>>(&response.payload) {
@@ -523,6 +586,10 @@ async fn atomic_with_pool(
                         "invalid commit acknowledgement; outcome may be unknown",
                     ));
                 }
+                crate::diagnostics::elapsed(
+                    crate::diagnostics::NATS_ATOMIC_AFTER_STAGING_WAIT,
+                    last_staging,
+                );
                 let first = ack.sequence - writes.len() as u64 + 1;
                 break Ok(Some((first..=ack.sequence).collect()));
             }
@@ -697,7 +764,7 @@ mod tests {
         Write {
             key: key.into(),
             revision,
-            value: payload,
+            value: payload.into(),
         }
     }
     #[tokio::test]
@@ -722,6 +789,7 @@ mod tests {
                 let writes = [
                     write("job", 0, vec![1]),
                     write("payload", 0, vec![2; 65536]),
+                    write("other", 0, vec![3]),
                 ];
                 atomic(&js, &bucket, &writes.iter().collect::<Vec<_>>()).await
             })
@@ -730,6 +798,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        let middle = tokio::time::timeout(Duration::from_secs(2), frames.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            middle.reply.is_none(),
+            "intermediate staging replies are optional"
+        );
         let last = tokio::time::timeout(Duration::from_secs(2), frames.next())
             .await
             .expect("batch waited for staging before sending its remaining frames")
@@ -751,7 +827,7 @@ mod tests {
                 .get("Nats-Batch-Sequence")
                 .unwrap()
                 .as_str(),
-            "2"
+            "3"
         );
         assert_eq!(
             last.headers
@@ -786,7 +862,7 @@ mod tests {
                 .is_err(),
             "staging acknowledgement must not establish a successful commit"
         );
-        let ack = serde_json::json!({"stream":bucket.stream_name,"seq":2,"batch":last.headers.as_ref().unwrap().get("Nats-Batch-Id").unwrap().as_str(),"count":2});
+        let ack = serde_json::json!({"stream":bucket.stream_name,"seq":3,"batch":last.headers.as_ref().unwrap().get("Nats-Batch-Id").unwrap().as_str(),"count":3});
         client
             .publish(reply, serde_json::to_vec(&ack).unwrap().into())
             .await
@@ -797,8 +873,84 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .unwrap(),
-            Some(vec![1, 2])
+            Some(vec![1, 2, 3])
         );
+        js.delete_key_value(&bucket.name).await.unwrap();
+    }
+    #[tokio::test]
+    #[ignore = "requires disposable NATS 2.12+ with atomic publishing"]
+    async fn pooled_session_ignores_delayed_replies_from_rejected_batch() {
+        let (js, mut bucket) = fixture().await;
+        let client = js.client();
+        bucket.prefix = format!("dogrs.protocol.{}.", uuid::Uuid::new_v4().simple());
+        bucket.put_prefix = None;
+        bucket.use_jetstream_prefix = false;
+        let mut frames = client
+            .subscribe(format!("{}>", bucket.prefix))
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        let pool = Arc::new(SessionPool::new(client.clone()));
+        let mut previous_reply: Option<async_nats::Subject> = None;
+        for rejected in [true, false] {
+            let task = {
+                let pool = pool.clone();
+                let js = js.clone();
+                let bucket = bucket.clone();
+                tokio::spawn(async move {
+                    let writes = [write("job", 0, vec![1]), write("payload", 0, vec![2])];
+                    atomic_with_pool(&pool, &js, &bucket, &writes.iter().collect::<Vec<_>>()).await
+                })
+            };
+            let first = tokio::time::timeout(Duration::from_secs(2), frames.next())
+                .await
+                .unwrap()
+                .unwrap();
+            let last = tokio::time::timeout(Duration::from_secs(2), frames.next())
+                .await
+                .unwrap()
+                .unwrap();
+            let reply = first.reply.unwrap();
+            let conflict = serde_json::json!({"error":{"code":400,"err_code":10071,"description":"wrong last sequence"}});
+            if rejected {
+                client
+                    .publish(reply.clone(), serde_json::to_vec(&conflict).unwrap().into())
+                    .await
+                    .unwrap();
+            } else {
+                // Deliver stale replies only after the next batch has acquired
+                // the pooled subscription. Draining at acquire cannot fix this.
+                let old = previous_reply.as_ref().unwrap();
+                client
+                    .publish(old.clone(), Vec::new().into())
+                    .await
+                    .unwrap();
+                client
+                    .publish(old.clone(), serde_json::to_vec(&conflict).unwrap().into())
+                    .await
+                    .unwrap();
+                let ack = serde_json::json!({"stream":bucket.stream_name,"seq":2,"batch":last.headers.as_ref().unwrap().get("Nats-Batch-Id").unwrap().as_str(),"count":2});
+                client
+                    .publish(reply.clone(), serde_json::to_vec(&ack).unwrap().into())
+                    .await
+                    .unwrap();
+            }
+            let result = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(result, if rejected { None } else { Some(vec![1, 2]) });
+            if let Some(old) = previous_reply {
+                assert_ne!(reply, old);
+                assert_eq!(
+                    reply.rsplit_once('.').unwrap().0,
+                    old.rsplit_once('.').unwrap().0,
+                    "exercise reuse of the same subscription"
+                );
+            }
+            previous_reply = Some(reply);
+        }
         js.delete_key_value(&bucket.name).await.unwrap();
     }
     #[tokio::test]
@@ -862,7 +1014,7 @@ mod tests {
         assert!(outcomes[1].as_ref().unwrap().is_some());
         assert!(bucket.get("orphan").await.unwrap().is_none());
         // The coalescing target must not reject or split a valid large job.
-        let writer = BatchWriter::start(js.clone(), bucket.clone());
+        let writer = BatchWriter::start(js.clone(), bucket.clone()).unwrap();
         let metadata_revision = writer
             .enqueue(
                 "large-payload".into(),
@@ -913,7 +1065,7 @@ mod tests {
     async fn saturated_admission_cannot_block_metadata_progress() {
         let (js, bucket) = fixture().await;
         let revision = bucket.create("owned", vec![1].into()).await.unwrap();
-        let writer = Arc::new(BatchWriter::start(js.clone(), bucket.clone()));
+        let writer = Arc::new(BatchWriter::start(js.clone(), bucket.clone()).unwrap());
         // Hold every admission slot without publishing. This models an enqueue
         // backlog independently of network speed and makes the regression
         // deterministic: metadata must still reach the live server.
@@ -1088,5 +1240,31 @@ mod tests {
                 .is_terminal());
         }
         js.delete_key_value(&bucket.name).await.unwrap();
+    }
+}
+
+fn execution_limit(name: &str, value: Option<&str>, default: usize) -> QueueResult<usize> {
+    match value {
+        None => Ok(default),
+        Some(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|n| (1..=32).contains(n))
+            .ok_or_else(|| {
+                crate::QueueError::InvalidConfig(format!("{name} must be an integer in 1..=32"))
+            }),
+    }
+}
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+    #[test]
+    fn execution_limits_reject_stalls_and_unbounded_work() {
+        for value in ["0", "33", "-1", "", "garbage", "99999999999999999999999999"] {
+            assert!(execution_limit("test", Some(value), 2).is_err());
+        }
+        assert_eq!(execution_limit("test", None, 2).unwrap(), 2);
+        assert_eq!(execution_limit("test", Some("1"), 2).unwrap(), 1);
+        assert_eq!(execution_limit("test", Some("32"), 2).unwrap(), 32);
     }
 }
