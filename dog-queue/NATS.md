@@ -99,13 +99,20 @@ changing the stored format, or assuming that producers and consumers share a pro
 
 ### Small-batch collection
 
-The atomic writer allows a conditional 1 ms collection window so independently arriving
-operations can share a durable commit. This adds bounded collection latency to
-light traffic. Byte/message bounds, the separate metadata lane, expected-revision
+The atomic writer allows up to 1 ms of collection for enqueue pairs and up to
+8 ms for metadata updates, so independently arriving operations can share a
+durable commit. Collection stops early at the batch bounds or a conflicting key.
+A quiet metadata update can therefore incur the full 8 ms collection delay. Byte/message bounds, the separate metadata lane, expected-revision
 checks and final durable-acknowledgement requirements are unchanged. Increasing
 producer concurrency is not a substitute for measuring durable storage latency;
 it can increase timeouts. Consumer concurrency must also cover the measured
-claim-plus-completion latency at the required arrival rate.
+claim-plus-completion latency at the required arrival rate. As a planning
+estimate, required workers are arrival rate multiplied by mean claim, handler,
+and completion cycle time, plus headroom. At ten jobs/second, two workers can
+sustain only about 200 ms of mean total cycle time. Increasing this application
+worker count is different from increasing the writer's batch execution limits.
+See the [concurrency experiments](../docs/jetstream-batching-experiment-b51fb4f.md)
+for measured improvements and the still-unmet full capacity target.
 
 ### Execution limits
 
@@ -153,9 +160,6 @@ reverted. See [experiment details](../docs/jetstream-batching-experiment-b51fb4f
 These are deployment-sizing observations, not a universal default or capacity
 promise. Keep shard topology stable for existing data; changing it requires migration.
 
-Metadata writes use a bounded eight-millisecond collection window to combine
-independent claims and completions into atomic commits. Every operation retains
-its expected revision and waits for the final acknowledgement. This can improve
-throughput at the cost of collection latency; it does not remove durable state
-transitions or guarantee the 1,000 jobs/second target. The follow-up experiment in
-the linked report improved completion counts but still missed that target.
+The metadata-window follow-up in the linked report improved completion counts
+but still missed the 1,000 jobs/second target. Collection changes do not remove a
+job's durable state transitions or establish a capacity guarantee.

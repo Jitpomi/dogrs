@@ -89,3 +89,68 @@ and Clippy with warnings denied passed. A separate three-replica, always-fsync
 64 KiB recovery fixture passed after killing the active stream leader and keeping
 it down (three-second configured outage). This is not certification of a long
 partition, independent provider failure domains, or the failed capacity target.
+
+## Follow-up on `07fb432`: CI and concurrency attribution
+
+[Full correctness/recovery CI](https://github.com/Jitpomi/dogrs/actions/runs/37716665765)
+passed all 11 jobs. The separate
+[ordinary capacity run](https://github.com/Jitpomi/dogrs/actions/runs/37716665742)
+reported:
+
+| Backend | Accepted | Completed in window | Seconds | Recorded errors | Gate |
+|---|---:|---:|---:|---:|---|
+| PostgreSQL | 60,000 | 60,000 | 63.072 | 0 | Pass |
+| Redis | 55,784 | 55,784 | 65.005 | 0 | Fail |
+| JetStream | 57,274 | 41,208 | 65.008 | 0 | Fail |
+
+Redis rejected 4,216 offers under load; it verified every accepted job. JetStream
+rejected 2,726 offers and had unfinished work at the capacity deadline. Neither
+failure should be described as an operation-error or data-loss result. The
+JetStream-only source change does not establish the cause of Redis's variation.
+
+A [separate instrumented run](https://github.com/Jitpomi/dogrs/actions/runs/37716870315)
+accepted 56,938 and completed 48,761, with zero errors, still failing the target.
+Mean metadata queue wait was 10.50 ms and execution was 112.18 ms. Across atomic
+commits, mean final acknowledgement wait was 111.51 ms of 115.09 ms total. Candidate
+selection averaged 0.096 ms; payload reads averaged 24.09 ms and overlap claims.
+These are inclusive timings, not additive CPU costs, and this separate runner is
+not a controlled before/after comparison. The dominant measured wait remains
+final acknowledgement; it does not identify an exclusively infrastructure cause.
+
+Further local trials used the same `07fb432` binary, 16 fresh buckets, shared
+connections, unique 64 KiB payloads, 100 tenants at 10 offers/second, 60 seconds
+plus five-second drain, R3 and always-fsync. No code/default changes were made.
+
+| Order | Workers/tenant | Enqueue batches/store | Metadata batches/store | Accepted | Completed | Errors |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 2 | 1 | 47,180 | 32,383 | 0 |
+| 2 | 2 | 2 | 2 | 50,921 | 39,534 | 0 |
+| 3 | 2 | 2 | 2 | 49,131 | 34,004 | 4 |
+| 4 | 2 | 2 | 1 | 47,685 | 32,833 | 0 |
+| 5 | 4 | 2 | 1 | 50,186 | 50,186 | 0 |
+| 6 | 4 | 2 | 1 | 50,970 | 50,970 | 0 |
+| 7 | 4 | 4 | 1 | 54,762 | 53,510 | 1 |
+| 8 | 4 | 4 | 1 | 49,810 | 45,220 | 0 |
+
+All eight failed the 60,000-job target. Trial 3 reported an uncertain submission
+deadline, two snapshot read timeouts and overall verification timeout. Trial 7
+reported an overall verification timeout. Trials 5 and 6 verified every accepted
+job, but rejected 9,814 and 9,030 offers respectively.
+
+Trials 1–4 used ABBA ordering. Trials 5–8 were sequential configuration probes,
+not randomized controlled measurements. They support worker concurrency as a
+contributor to the unfinished backlog on this host, without proving causality
+for every timing difference. Increasing execution concurrency did not produce a
+reliable full-target pass, so defaults remain two enqueue batches and one metadata
+batch per store. Snapshot timeout limits and the capacity gate were not relaxed.
+
+A worker waits for both durable claim and completion. At ten jobs/second per
+tenant, two workers allow roughly 200 ms of total mean cycle time before backlog
+grows, even before handler time. Size application worker count to measured cycle
+latency with headroom. This is separate from the adapter's batch execution limits.
+More workers can expose, rather than eliminate, the enqueue/storage bottleneck.
+
+The complete reports and binary hashes are retained in the task workspace under
+`dogrs-metadata-concurrency-comparison`, `dogrs-worker-concurrency-comparison`,
+and `dogrs-admission-concurrency-comparison`. The 1,000 jobs/second target remains
+unproven for JetStream; no native-consumer redesign or weaker durability is implied.
