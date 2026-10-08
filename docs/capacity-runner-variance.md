@@ -252,3 +252,33 @@ latency event peaked at 3 ms. Four AOF rewrites ran, and an RDB background save
 was still active at collection. These observations locate substantial persistence
 stalls; they do not isolate background maintenance as the sole cause or establish
 that every timeout has the same cause. The failure remains a failed capacity run.
+
+
+## Same-runner 1,000 jobs/second test on `411f3b6`
+
+At the user's request, [run 37784423042](https://github.com/Jitpomi/dogrs/actions/runs/37784423042)
+raised only the arrival rate to ten jobs/second per tenant: 100 tenants, 60,000
+unique 64 KiB jobs over 60 seconds, plus the unchanged five-second drain. One
+ordinary release binary, without queue diagnostics or CPU profiling, ran all six
+trials on a four-vCPU AMD EPYC 7763 runner. Each trial used fresh storage. Worker
+counts remained PostgreSQL/Redis/NATS 1/1/2 per tenant; shard counts 1/1/16.
+Redis always-fsync, PostgreSQL durable commits, and NATS R3/always-fsync stayed
+unchanged. This is a higher-load experiment, not a change to the 900/s default.
+
+| Order | Backend | Accepted | Completed within deadline | Seconds | Gate |
+|---|---|---:|---:|---:|---|
+| 1 | PostgreSQL | 60,000 | 60,000 | 61.755 | Pass |
+| 2 | Redis | 60,000 | 60,000 | 60.090 | Pass |
+| 3 | NATS | 57,062 | 49,116 | 65.006 | Fail |
+| 4 | NATS | 57,392 | 51,257 | 65.007 | Fail |
+| 5 | Redis | 60,000 | 60,000 | 60.069 | Pass |
+| 6 | PostgreSQL | 60,000 | 60,000 | 61.738 | Pass |
+
+All six reported zero operation errors and zero late offers. PostgreSQL and
+Redis also verified all 60,000 terminal jobs and payloads in both trials. NATS
+rejected 2,938 and 2,608 offers under overload and retained unfinished work at
+the deadline. Later verification observed 49,202 and 51,318 terminal jobs;
+those later observations must not be substituted for on-time completions.
+The aggregate run correctly failed. All three have not passed the 1,000/s target
+in this comparison. Matching the earlier passing runner's CPU model does not
+establish identical storage performance or an isolated cause for the misses.
