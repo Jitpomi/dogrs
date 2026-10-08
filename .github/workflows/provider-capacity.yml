@@ -93,11 +93,6 @@ on:
         type: choice
         options: ['auto', '1', '2', '4', '8', '16']
         default: 'auto'
-      postgres_enqueue_batch_size:
-        description: PostgreSQL admission batch size (compare runs 1/16/16/1 on one runner)
-        type: choice
-        options: ['1', '16', 'compare']
-        default: '16'
       postgres_enqueue_concurrency:
         description: Producer connection cap (none preserves the baseline)
         type: choice
@@ -151,24 +146,6 @@ jobs:
           "$profiler" version
           echo "DOGRS_PERF=$profiler" >> "$GITHUB_ENV"
       - run: |
-          if [ "$PG_ENQUEUE_BATCH_SIZE" = compare ]; then
-            test "$CAPACITY_MODE" = queue
-            test "$BACKEND" = postgres
-            test "$PAYLOAD_BYTES" = 65536
-            test "$PG_INSTANCES" = 1
-            test "$PG_SHARDS" = 1
-            test "$PRODUCER_CAP" = none
-            test "$PG_PAYLOAD_STORAGE" = external
-            test "$PG_WAL_INIT" = on
-            test "$DOGRS_PG_FIXTURE_PARTITIONS" = 0
-            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-admission-batching
-            status=0
-            for batch_size in 1 16 16 1; do
-              DOGRS_PG_ENQUEUE_BATCH_SIZE="$batch_size" python3 dog-examples/hosted-system/run_recovery.py postgres --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
-            done
-            exit "$status"
-          fi
-          export DOGRS_PG_ENQUEUE_BATCH_SIZE="$PG_ENQUEUE_BATCH_SIZE"
           if [ "$CAPACITY_MODE" = queue-comparison ]; then
             test "$PAYLOAD_BYTES" = 65536
             python3 dog-examples/hosted-system/compare_queue_diagnostics.py "$BACKEND" --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --report-dir provider-capacity
@@ -263,7 +240,6 @@ jobs:
           PAYLOAD_BYTES: ${{ inputs.payload_bytes || '65536' }}
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
           DOGRS_CAPACITY_WORKERS: ${{ inputs.workers_per_tenant && inputs.workers_per_tenant != 'auto' && inputs.workers_per_tenant || (matrix.backend == 'nats' && '2' || '1') }}
-          PG_ENQUEUE_BATCH_SIZE: ${{ inputs.postgres_enqueue_batch_size || '16' }}
           PRODUCER_CAP: ${{ inputs.postgres_enqueue_concurrency || 'none' }}
           DOGRS_CAPACITY_INFLIGHT: 32
           DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
@@ -293,7 +269,6 @@ jobs:
               for log in logs:
                   environment = json.loads((log.parent / 'environment.json').read_text())
                   summary.write(f"\nFixture partitions: {environment.get('postgres_fixture_partitions', 0)}\n\n")
-                  summary.write(f"Admission batch size: {environment.get('postgres_enqueue_batch_size', 'default')}\n\n")
                   for line in log.read_text().splitlines():
                       try:
                           result = json.loads(line)

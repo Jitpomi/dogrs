@@ -17,14 +17,6 @@ async fn backend() -> PostgresBackend {
 async fn schema_and_dispatch_bounds_are_validated_before_connecting() {
     for options in [
         PostgresOptions {
-            enqueue_batch_size: 0,
-            ..Default::default()
-        },
-        PostgresOptions {
-            enqueue_batch_size: 65,
-            ..Default::default()
-        },
-        PostgresOptions {
             schema: Some(String::new()),
             ..Default::default()
         },
@@ -790,24 +782,7 @@ async fn completion_waiting_on_row_lock_cannot_cross_lease_deadline() {
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
 async fn blocked_producers_do_not_starve_completion_on_default_pool() {
-    blocked_producer_contract(1, 3).await;
-    blocked_producer_contract(16, 1).await;
-}
-async fn blocked_producer_contract(batch_size: usize, blocked_statements: i64) {
-    let backend = Arc::new(
-        PostgresBackend::new_with_tls_options(
-            PostgresConfig {
-                connection_string: std::env::var("DOGRS_POSTGRES_URL").unwrap(),
-            },
-            tokio_postgres::NoTls,
-            PostgresOptions {
-                enqueue_batch_size: batch_size,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap(),
-    );
+    let backend = Arc::new(backend().await);
     let ctx = QueueCtx::new(format!("admission-{}", uuid::Uuid::new_v4()));
     let mut submissions = Vec::new();
     for n in 0..12 {
@@ -866,9 +841,7 @@ async fn blocked_producer_contract(batch_size: usize, blocked_statements: i64) {
                 .await
                 .unwrap()
                 .get(0);
-            // Independent admissions saturate three producer connections;
-            // the default batch dispatcher saturates its one execution slot.
-            if blocked >= blocked_statements {
+            if blocked >= 3 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1158,65 +1131,4 @@ async fn invalid_postgres_text_does_not_poison_other_completions() {
             .as_deref(),
         Some("good")
     );
-}
-
-#[tokio::test]
-#[ignore = "requires disposable PostgreSQL"]
-async fn batched_admissions_preserve_dedupe_payloads_and_individual_validation() {
-    let uri = std::env::var("DOGRS_POSTGRES_URL").unwrap();
-    for batch_size in [1, 16] {
-        let backend = Arc::new(
-            PostgresBackend::new_with_tls_options(
-                PostgresConfig {
-                    connection_string: uri.clone(),
-                },
-                tokio_postgres::NoTls,
-                PostgresOptions {
-                    max_connections: 16,
-                    enqueue_batch_size: batch_size,
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap(),
-        );
-        let ctx = QueueCtx::new(format!("admission-batch-{}", uuid::Uuid::new_v4()));
-        let barrier = Arc::new(tokio::sync::Barrier::new(129));
-        let mut tasks = tokio::task::JoinSet::new();
-        for n in 0..128 {
-            let backend = backend.clone();
-            let ctx = ctx.clone();
-            let barrier = barrier.clone();
-            tasks.spawn(async move {
-                let key = n % 32;
-                let message = JobMessage::new("batch", vec![key as u8; 65536], "bytes", "q")
-                    .with_idempotency_key(key.to_string());
-                barrier.wait().await;
-                (key, backend.enqueue(ctx, message).await.unwrap())
-            });
-        }
-        barrier.wait().await;
-        assert!(matches!(
-            backend
-                .enqueue(
-                    ctx.clone(),
-                    JobMessage::new("bad\0kind", vec![], "bytes", "q")
-                )
-                .await,
-            Err(dog_queue::QueueError::InvalidConfig(_))
-        ));
-        let mut ids = std::collections::HashMap::new();
-        while let Some(result) = tasks.join_next().await {
-            let (key, id) = result.unwrap();
-            if let Some(previous) = ids.insert(key, id.clone()) {
-                assert_eq!(previous, id);
-            }
-        }
-        assert_eq!(ids.len(), 32);
-        for (key, id) in ids {
-            let record = backend.get_record(ctx.clone(), id).await.unwrap();
-            assert_eq!(record.message.payload_bytes, vec![key as u8; 65536]);
-            assert_eq!(record.message.idempotency_key, Some(key.to_string()));
-        }
-    }
 }

@@ -9,8 +9,6 @@ use tokio_postgres::{types::Type, Client, NoTls, Transaction};
 mod claims;
 #[path = "postgres_completions.rs"]
 mod completions;
-#[path = "postgres_enqueues.rs"]
-mod enqueues;
 
 #[derive(Clone)]
 pub struct PostgresConfig {
@@ -47,15 +45,11 @@ pub struct PostgresOptions {
     /// Maximum acknowledgments coalesced into one durable SQL statement (1..=64).
     /// Set to 1 for independent commits without cross-job row-lock coupling.
     pub completion_batch_size: usize,
-    /// Maximum distinct admissions sharing one durable INSERT (1..=64).
-    /// Duplicate idempotency keys are separated. Set to 1 for independent commits.
-    pub enqueue_batch_size: usize,
     /// Maximum distinct-tenant claims per durable statement (1..=64).
     /// Set to 1 for independent claims. Same-tenant calls are always separated.
     pub claim_batch_size: usize,
-    /// Executing statements per enqueue/claim/completion dispatcher. None uses one
-    /// quarter of the pool, capped at eight for admissions and four for workers.
-    /// An explicit limit lets fixed shards
+    /// Executing statements per claim/completion dispatcher. None uses one
+    /// quarter of the pool, capped at four. An explicit limit lets fixed shards
     /// share an application-wide statement budget without multiplying it.
     pub batch_concurrency: Option<usize>,
     /// Explicit offline v1 -> v2 migration. Stop every old worker/API first.
@@ -70,7 +64,6 @@ impl Default for PostgresOptions {
             operation_timeout: Duration::from_secs(10),
             enqueue_concurrency: None,
             completion_batch_size: 64,
-            enqueue_batch_size: 16,
             claim_batch_size: 16,
             batch_concurrency: None,
             migrate_legacy: false,
@@ -86,7 +79,6 @@ struct Manager(Connector);
 struct Connection {
     client: Client,
     enqueue: tokio::sync::OnceCell<tokio_postgres::Statement>,
-    enqueue_batch: tokio::sync::OnceCell<tokio_postgres::Statement>,
 }
 impl std::ops::Deref for Connection {
     type Target = Client;
@@ -106,7 +98,6 @@ impl bb8::ManageConnection for Manager {
         Ok(Connection {
             client: (self.0)().await?,
             enqueue: tokio::sync::OnceCell::new(),
-            enqueue_batch: tokio::sync::OnceCell::new(),
         })
     }
     async fn is_valid(&self, client: &mut Connection) -> QueueResult<()> {
@@ -125,7 +116,6 @@ pub struct PostgresStore {
     timeout: Duration,
     enqueue_slots: tokio::sync::Semaphore,
     completions: Option<completions::Completions>,
-    enqueues: Option<enqueues::Enqueues>,
     claims: Option<claims::Claims>,
 }
 pub type PostgresBackend = DurableBackend<PostgresStore>;
@@ -186,7 +176,6 @@ impl PostgresBackend {
         if options.max_connections == 0
             || options.operation_timeout.is_zero()
             || !(1..=64).contains(&options.completion_batch_size)
-            || !(1..=64).contains(&options.enqueue_batch_size)
             || !(1..=64).contains(&options.claim_batch_size)
             || options
                 .batch_concurrency
@@ -265,20 +254,9 @@ impl PostgresBackend {
                 options.operation_timeout,
             )
         });
-        let enqueues = (options.enqueue_batch_size > 1).then(|| {
-            enqueues::Enqueues::start(
-                pool.clone(),
-                options
-                    .batch_concurrency
-                    .unwrap_or_else(|| ((options.max_connections as usize) / 4).clamp(1, 8)),
-                options.enqueue_batch_size,
-                options.operation_timeout,
-            )
-        });
         let store = PostgresStore {
             pool,
             completions,
-            enqueues,
             claims,
             timeout: options.operation_timeout,
             enqueue_slots: tokio::sync::Semaphore::new(options.enqueue_concurrency.unwrap_or_else(
@@ -494,21 +472,6 @@ impl PostgresStore {
             ),
             _ => None,
         };
-        if let (Operation::Enqueue(message), Some(enqueues)) = (op, &self.enqueues) {
-            let mut state = TenantState::default();
-            state.apply_at(
-                tenant,
-                &Operation::Enqueue(super::durable::metadata_message(message)),
-                Utc::now(),
-            )?;
-            let stored = state.jobs.values().next().unwrap();
-            let value = metadata(stored)?;
-            return Ok(Outcome::Id(
-                enqueues
-                    .submit(tenant, stored.record.job_id.clone(), value, message)
-                    .await?,
-            ));
-        }
         let mut client = crate::diagnostics::measure(crate::diagnostics::PG_POOL, self.pool.get())
             .await
             .map_err(error)?;

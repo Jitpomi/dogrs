@@ -460,9 +460,6 @@ pub async fn dispatch_local(role: &str) -> Result<()> {
                 max_connections: std::env::var("DOGRS_PG_POOL_SIZE")
                     .unwrap_or_else(|_| "64".into())
                     .parse()?,
-                enqueue_batch_size: std::env::var("DOGRS_PG_ENQUEUE_BATCH_SIZE")
-                    .unwrap_or_else(|_| "16".into())
-                    .parse()?,
                 enqueue_concurrency: std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY")
                     .ok()
                     .map(|n| n.parse())
