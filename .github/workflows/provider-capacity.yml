@@ -89,9 +89,9 @@ on:
         options: ['1', '4', '16', 'compare']
         default: '1'
       workers_per_tenant:
-        description: Worker concurrency (auto preserves the baseline)
+        description: Worker concurrency (auto preserves baseline; compare tests NATS 2/8/8/2 on one runner)
         type: choice
-        options: ['auto', '1', '2', '4', '8', '16']
+        options: ['auto', '1', '2', '4', '8', '16', 'compare']
         default: 'auto'
       postgres_enqueue_concurrency:
         description: Producer connection cap (none preserves the baseline)
@@ -150,6 +150,17 @@ jobs:
             test "$PAYLOAD_BYTES" = 65536
             python3 dog-examples/hosted-system/compare_queue_diagnostics.py "$BACKEND" --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --report-dir provider-capacity
             exit $?
+          fi
+          if [ "$WORKER_COMPARISON" = compare ]; then
+            test "$BACKEND" = nats
+            test "$NATS_ATOMIC" = on
+            test "$NATS_CONNECTIONS" = shared
+            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-workers
+            status=0
+            for workers in 2 8 8 2; do
+              DOGRS_CAPACITY_WORKERS="$workers" python3 dog-examples/hosted-system/run_recovery.py nats --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
           fi
           if [ "$PRODUCER_CAP" != none ]; then
             export DOGRS_PG_ENQUEUE_CONCURRENCY="$PRODUCER_CAP"
@@ -239,7 +250,8 @@ jobs:
           DURATION_SECONDS: ${{ inputs.seconds || '60' }}
           PAYLOAD_BYTES: ${{ inputs.payload_bytes || '65536' }}
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
-          DOGRS_CAPACITY_WORKERS: ${{ inputs.workers_per_tenant && inputs.workers_per_tenant != 'auto' && inputs.workers_per_tenant || (matrix.backend == 'nats' && '2' || '1') }}
+          DOGRS_CAPACITY_WORKERS: ${{ inputs.workers_per_tenant && inputs.workers_per_tenant != 'auto' && inputs.workers_per_tenant != 'compare' && inputs.workers_per_tenant || (matrix.backend == 'nats' && '2' || '1') }}
+          WORKER_COMPARISON: ${{ inputs.workers_per_tenant }}
           PRODUCER_CAP: ${{ inputs.postgres_enqueue_concurrency || 'none' }}
           DOGRS_CAPACITY_INFLIGHT: 32
           DOGRS_PG_COMMIT_DELAY: ${{ matrix.backend == 'postgres' && (inputs.postgres_commit_delay_us || '0') || '0' }}
