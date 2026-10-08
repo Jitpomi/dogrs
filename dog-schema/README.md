@@ -7,7 +7,7 @@ attribute, `SchemaHooksExt`, `Rules`, and structured `SchemaErrors`.
 It does **not** generate JSON Schema documents or provide a `Schema` derive,
 `json_schema()`, or `from_json()` API. Earlier README examples claiming those
 APIs were incorrect. For JSON Schema generation, use a separate library in your
-application. The implementation described here is the repository's 0.2.0 API;
+application. The implementation described here is the repository's 0.3.0 API;
 check the published version before selecting a registry dependency.
 
 ## A service schema

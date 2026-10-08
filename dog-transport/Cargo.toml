@@ -1,6 +1,6 @@
 [package]
 name = "dog-transport"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "HTTP, gRPC, CLI and Iroh transports for DogRS"
 license = "MIT OR Apache-2.0"
@@ -9,7 +9,7 @@ documentation = "https://docs.rs/dog-transport"
 readme = "README.md"
 
 [dependencies]
-dog-core = { path = "../dog-core", version = "0.2.0", features = ["json"] }
+dog-core = { path = "../dog-core", version = "0.3.0", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1.44"
@@ -69,7 +69,7 @@ iroh = [
 axum = { version = "0.8", features = ["ws"] }
 tokio-tungstenite = "0.29"
 reqwest = { version = "0.12", default-features = false }
-dog-auth = { path = "../dog-auth", version = "0.2.0" }
+dog-auth = { path = "../dog-auth", version = "0.3.0" }
 async-trait = "0.1"
 anyhow = "1"
 tokio-stream = { version = "0.1", features = ["net"] }

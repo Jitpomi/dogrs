@@ -3,9 +3,9 @@
 A modular Rust framework for services, hooks, tenant context and pluggable transports.
 Write a service once and expose it through HTTP, gRPC, a CLI or Iroh.
 
-This checkout prepares the **0.2.0 API**. It includes breaking changes from the
+This checkout prepares the **0.3.0 API**. It includes breaking changes from the
 published 0.1.x crates; changing this repository does not publish new crates.io
-versions. Read the [migration notes](docs/release-0.2.md) before updating an app.
+versions. Read the [0.3.0 release notes](docs/release-after-0.2.md) and [earlier migration notes](docs/release-0.2.md) before updating an app.
 
 ## Start here
 

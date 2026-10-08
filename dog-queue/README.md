@@ -109,6 +109,15 @@ now names that KV bucket, not a Core NATS subject. For NATS 2.12+ concurrent wor
 replication work without changing revision checks or the stored format. See
 [JetStream write batching](NATS.md).
 
+## 0.3.0 release capacity limitation
+
+The latest 900 jobs/s test (100 tenants, 64 KiB payloads) passed PostgreSQL and
+Redis but failed JetStream: 29,172 accepted and 19,916 completed within the deadline,
+with overload and a submission timeout. Correctness/recovery CI passed separately.
+Earlier passing runs do not establish consistent capacity across deployments.
+Validate your own workload before rollout; 900/s is not a throughput guarantee.
+See [the recorded run](https://github.com/Jitpomi/dogrs/actions/runs/37790630091).
+
 ## Capacity, security and migration
 
 PostgreSQL v2 uses indexed job rows, binary payloads and a bounded connection pool.

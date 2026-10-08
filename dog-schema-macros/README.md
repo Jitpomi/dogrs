@@ -6,4 +6,4 @@ registration examples, and migration notes.
 
 This crate provides an attribute macro, not a `Schema` derive or a JSON Schema
 generator. Invalid declarations produce compiler errors rather than silently
-omitting validation. The documented source API is 0.2.0.
+omitting validation. The documented source API is 0.3.0.

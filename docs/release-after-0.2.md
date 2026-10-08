@@ -1,17 +1,18 @@
 # Next release after 0.2.0
 
-Reviewed October 8, 2026, against published source commit `46f17ed` and merged
-source `f069c0e`. This is a release proposal, not a publication announcement.
-Manifests still declare 0.2.0. No versions have been reserved or uploaded.
+All twelve library crates are prepared as **0.3.0**, with internal dependencies
+updated together. This coordinated version lets applications adopt one framework
+release. Cargo requires an explicit upgrade from 0.2; it does not mean every crate
+has breaking source changes. Publication status must be verified in crates.io.
 
-## Proposed versions
+## Changes since 0.2.0
 
-| Package | Proposed version | Reason |
-|---|---|---|
-| dog-core | 0.2.1 | Additive listener failure counters and corrected compiling documentation. |
-| dog-auth-local | 0.2.1 | Fix configured secret protection on paginated response envelopes. |
-| dog-queue | 0.3.0 | Background notification ownership tightens the public generic bound to `Notifications + 'static`. |
-| Other nine library crates | Keep current versions | No new runtime fix requiring their republication was identified in this audit. |
+- `dog-core`: additive event listener failure counters and corrected compiling documentation.
+- `dog-auth-local`: fix configured secret protection on paginated response envelopes.
+- `dog-queue`: durable-write and recovery fixes; background notifications now require
+  `Notifications + 'static`.
+- Other nine libraries: coordinated dependency/version updates; `dog-axum` remains
+  deprecated in favor of `dog-transport`.
 
 Cargo treats tightening a generic bound as incompatible; before 1.0, changing the
 second version component expresses that boundary. See the
@@ -45,20 +46,15 @@ cancellation or panic, and is not a durable audit log.
 
 ## Release procedure
 
-1. Apply the proposed versions to the three package manifests and refresh Cargo.lock.
-   Existing compatible internal 0.2.0 requirements can accept core 0.2.1; consumers
-   using the new counter API should require at least core 0.2.1 explicitly.
-2. Run correctness/recovery CI on that exact commit and verify package archives,
-   including optional feature builds. Workspace path builds alone do not validate
-   resolution against the registry. Update any example that consumes the registry
-   queue version when it needs the new behavior.
-3. Publish core first, then local auth; queue has no dependency on another DogRS
-   crate and can be released independently. Confirm each registry checksum and
-   source commit before announcing availability. Publishing requires a separate
-   explicit release instruction.
-4. Smoke-test fresh consumer projects against the registry releases, not local
-   path overrides. Retain the previous lockfile and backend backups for rollout;
-   do not infer rolling storage compatibility from a successful Rust compile.
+1. Verify package archives and correctness/recovery CI. Workspace path builds alone
+   do not validate registry resolution. All internal library requirements are 0.3.0.
+2. Publish in dependency order: core and schema macros before their dependents;
+   auth before local/OAuth/transport; transport before axum; schema before validator.
+   Queue and blob can publish independently.
+3. Confirm registry checksums and source commits before announcing availability.
+   Smoke-test registry packages without local path overrides. Retain the previous
+   lockfile and backend backups for rollout; compilation does not prove rolling
+   storage compatibility.
 
 ## Evidence and limits
 

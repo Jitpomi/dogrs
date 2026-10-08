@@ -65,5 +65,5 @@ field rules are rejected with this backend to prevent silently ignored checks.
 
 This adapter does not generate JSON Schema, perform authorization, query databases,
 or guarantee business invariants. Applications can use other validation libraries
-through `dog-schema`'s closure hooks instead. The documented source API is 0.2.0;
+through `dog-schema`'s closure hooks instead. The documented source API is 0.3.0;
 verify publication before choosing a registry version.
