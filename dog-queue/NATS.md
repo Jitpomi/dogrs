@@ -36,14 +36,14 @@ at three or leaving a final metadata entry for another append. Atomic visibility
 prevents discovery of metadata before its payload commits, and enqueue returns
 the metadata revision for subsequent ownership checks. Larger individual logical
 operations remain intact. Separate bounded execution lanes handle
-enqueue pairs and metadata updates: the enqueue lane pipelines up to four
+enqueue pairs and metadata updates: the enqueue lane defaults to two
 batches while the metadata lane has its own execution slot. Each input channel holds at
 most 128 queued requests. Overlapping bounded acknowledgement waits avoids a
 serial round-trip ceiling for small batches. Producer backlog cannot occupy the metadata lane, and lease/completion
 updates never share a staging batch with large payloads. Atomic mode admits up to
 128 concurrent enqueue requests to fill that bounded queue; individual-write mode
 retains its 16-request default. `with_enqueue_concurrency` can override either
-request limit. Request concurrency does not increase the five executing-batch limit;
+request limit. Request concurrency does not increase the configured executing-batch limit;
 the 2 MiB limit continues to bound large-payload batches. A quiet single-key update uses an ordinary write; an enqueue pair still uses one
 atomic commit. Atomic frames are pipelined in connection order without waiting for staging.
 Every frame requires API level 2, and the bounded writer is enabled only when the
@@ -99,10 +99,23 @@ changing the stored format, or assuming that producers and consumers share a pro
 
 ### Small-batch collection
 
-The atomic writer allows a 2 ms collection window so independently arriving
+The atomic writer allows a conditional 1 ms collection window so independently arriving
 operations can share a durable commit. This adds bounded collection latency to
 light traffic. Byte/message bounds, the separate metadata lane, expected-revision
 checks and final durable-acknowledgement requirements are unchanged. Increasing
 producer concurrency is not a substitute for measuring durable storage latency;
 it can increase timeouts. Consumer concurrency must also cover the measured
 claim-plus-completion latency at the required arrival rate.
+
+### Execution limits
+
+`DOGRS_NATS_ENQUEUE_CONCURRENCY` (default 2) and
+`DOGRS_NATS_UPDATE_CONCURRENCY` (default 1) accept integers from 1 through 32.
+Invalid values fail atomic-writer construction before tasks start. Limits are per
+store, not a global limit across shards. These execution limits differ from
+`with_enqueue_concurrency`, which bounds admission requests.
+
+Revision fencing does not implement a server-time expiry predicate. Lease
+transitions use application wall clocks before CAS; clock skew and delayed commits
+remain deployment/contract limitations described in `KV-STORAGE.md`. Do not infer
+arbitrary-clock-skew safety from a successful normal recovery test.

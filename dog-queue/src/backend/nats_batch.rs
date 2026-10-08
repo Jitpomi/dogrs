@@ -77,21 +77,42 @@ fn conflict(e: &jetstream::Error) -> bool {
     )
 }
 impl BatchWriter {
-    pub(super) fn start(context: jetstream::Context, bucket: kv::Store) -> Self {
+    pub(super) fn start(context: jetstream::Context, bucket: kv::Store) -> QueueResult<Self> {
+        let enqueues = execution_limit(
+            "DOGRS_NATS_ENQUEUE_CONCURRENCY",
+            std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
+                .ok()
+                .as_deref(),
+            2,
+        )?;
+        let updates = execution_limit(
+            "DOGRS_NATS_UPDATE_CONCURRENCY",
+            std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
+                .ok()
+                .as_deref(),
+            1,
+        )?;
         // Reserve one execution lane for lease/completion metadata. A large
         // producer backlog must not occupy every durable-write slot or put a
         // lease update behind payload staging in the same atomic batch.
         let pool = std::sync::Arc::new(SessionPool::new(context.client()));
-        Self {
-            updates: Self::lane(context.clone(), bucket.clone(), pool.clone(), false),
-            enqueues: Self::lane(context, bucket, pool, true),
-        }
+        Ok(Self {
+            updates: Self::lane(
+                context.clone(),
+                bucket.clone(),
+                pool.clone(),
+                false,
+                updates,
+            ),
+            enqueues: Self::lane(context, bucket, pool, true, enqueues),
+        })
     }
     fn lane(
         context: jetstream::Context,
         bucket: kv::Store,
         pool: std::sync::Arc<SessionPool>,
         enqueue: bool,
+        concurrency: usize,
     ) -> mpsc::Sender<Group> {
         let (sender, mut receiver) = mpsc::channel::<Group>(ADMISSION_CAPACITY);
         tokio::spawn(async move {
@@ -99,17 +120,6 @@ impl BatchWriter {
             // One in-flight 3-job batch at 100 ms caps admission at 30 jobs/s
             // regardless of how much unused capacity the provider has. Retain
             // a separate metadata lane so producer pipelining cannot consume it.
-            let concurrency = if enqueue {
-                std::env::var("DOGRS_NATS_ENQUEUE_CONCURRENCY")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(2)
-            } else {
-                std::env::var("DOGRS_NATS_UPDATE_CONCURRENCY")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(1)
-            };
             let mut running = tokio::task::JoinSet::new();
             let mut deferred = None;
             loop {
@@ -862,7 +872,7 @@ mod tests {
         assert!(outcomes[1].as_ref().unwrap().is_some());
         assert!(bucket.get("orphan").await.unwrap().is_none());
         // The coalescing target must not reject or split a valid large job.
-        let writer = BatchWriter::start(js.clone(), bucket.clone());
+        let writer = BatchWriter::start(js.clone(), bucket.clone()).unwrap();
         let metadata_revision = writer
             .enqueue(
                 "large-payload".into(),
@@ -913,7 +923,7 @@ mod tests {
     async fn saturated_admission_cannot_block_metadata_progress() {
         let (js, bucket) = fixture().await;
         let revision = bucket.create("owned", vec![1].into()).await.unwrap();
-        let writer = Arc::new(BatchWriter::start(js.clone(), bucket.clone()));
+        let writer = Arc::new(BatchWriter::start(js.clone(), bucket.clone()).unwrap());
         // Hold every admission slot without publishing. This models an enqueue
         // backlog independently of network speed and makes the regression
         // deterministic: metadata must still reach the live server.
@@ -1088,5 +1098,31 @@ mod tests {
                 .is_terminal());
         }
         js.delete_key_value(&bucket.name).await.unwrap();
+    }
+}
+
+fn execution_limit(name: &str, value: Option<&str>, default: usize) -> QueueResult<usize> {
+    match value {
+        None => Ok(default),
+        Some(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|n| (1..=32).contains(n))
+            .ok_or_else(|| {
+                crate::QueueError::InvalidConfig(format!("{name} must be an integer in 1..=32"))
+            }),
+    }
+}
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+    #[test]
+    fn execution_limits_reject_stalls_and_unbounded_work() {
+        for value in ["0", "33", "-1", "", "garbage", "99999999999999999999999999"] {
+            assert!(execution_limit("test", Some(value), 2).is_err());
+        }
+        assert_eq!(execution_limit("test", None, 2).unwrap(), 2);
+        assert_eq!(execution_limit("test", Some("1"), 2).unwrap(), 1);
+        assert_eq!(execution_limit("test", Some("32"), 2).unwrap(), 32);
     }
 }

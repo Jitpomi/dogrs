@@ -81,7 +81,7 @@ async fn rabbitmq_notifications_and_job_completion() {
     .unwrap();
     let channel = connection.create_channel().await.unwrap();
     let queue = format!("dogrs-test-{}", uuid::Uuid::new_v4());
-    let backend = RabbitMqBackend::new(channel.clone(), queue.clone(), ledger().await)
+    let mut backend = RabbitMqBackend::new(channel.clone(), queue.clone(), ledger().await)
         .await
         .unwrap();
     backend.notifications().publish().await.unwrap();
@@ -127,6 +127,28 @@ async fn rabbitmq_notifications_and_job_completion() {
         backend.get_status(tenant, id).await.unwrap(),
         JobStatus::Completed { .. }
     ));
+    backend.shutdown_notifications().await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let state = channel
+                .queue_declare(
+                    &queue,
+                    lapin::options::QueueDeclareOptions {
+                        passive: true,
+                        ..Default::default()
+                    },
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+            if state.consumer_count() == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("shutdown cancels the persistent RabbitMQ consumer");
     channel
         .queue_delete(&queue, Default::default())
         .await

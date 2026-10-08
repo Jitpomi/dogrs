@@ -113,7 +113,7 @@ impl NatsBackend {
             // filling a byte-bounded batch while awaiting durable replies.
             backend.store.enqueue_slots =
                 tokio::sync::Semaphore::new(super::nats_batch::ADMISSION_CAPACITY);
-            backend.store.writer = Some(super::nats_batch::BatchWriter::start(context, bucket));
+            backend.store.writer = Some(super::nats_batch::BatchWriter::start(context, bucket)?);
         }
         Ok(backend)
     }

@@ -3,11 +3,14 @@
 use super::broker::{BrokerBackend, JobLedger, Notifications};
 use crate::{QueueError, QueueResult};
 use async_trait::async_trait;
+use futures::StreamExt;
 use lapin::{options::*, types::FieldTable, BasicProperties, Channel};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 pub struct RabbitNotifications {
     channel: Channel,
     queue: String,
+    consumer: Mutex<Option<lapin::Consumer>>,
 }
 pub type RabbitMqBackend = BrokerBackend<RabbitNotifications>;
 fn error(e: impl std::fmt::Display) -> QueueError {
@@ -42,7 +45,11 @@ impl RabbitMqBackend {
             .await
             .map_err(error)?;
         Ok(Self::with_ledger(
-            RabbitNotifications { channel, queue },
+            RabbitNotifications {
+                channel,
+                queue,
+                consumer: Mutex::new(None),
+            },
             ledger,
         ))
     }
@@ -71,19 +78,44 @@ impl Notifications for RabbitNotifications {
             _ => Err(error("RabbitMQ rejected or returned the notification")),
         }
     }
+    async fn shutdown(&self) {
+        // Dropping lapin Consumer cancels only this subscription, not the caller's channel.
+        self.consumer.lock().await.take();
+    }
     async fn receive(&self) -> QueueResult<bool> {
-        if let Some(message) = self
-            .channel
-            .basic_get(&self.queue, BasicGetOptions { no_ack: false })
-            .await
-            .map_err(error)?
-        {
-            message
-                .delivery
-                .ack(BasicAckOptions::default())
+        let mut consumer = self.consumer.lock().await;
+        if consumer.is_none() {
+            self.channel
+                .basic_qos(32, BasicQosOptions::default())
                 .await
                 .map_err(error)?;
-            return Ok(true);
+            *consumer = Some(
+                self.channel
+                    .basic_consume(
+                        &self.queue,
+                        "",
+                        BasicConsumeOptions::default(),
+                        FieldTable::default(),
+                    )
+                    .await
+                    .map_err(error)?,
+            );
+        }
+        match consumer.as_mut().unwrap().next().await {
+            Some(Ok(delivery)) => {
+                delivery
+                    .ack(BasicAckOptions::default())
+                    .await
+                    .map_err(error)?;
+                return Ok(true);
+            }
+            Some(Err(err)) => {
+                *consumer = None;
+                return Err(error(err));
+            }
+            None => {
+                *consumer = None;
+            }
         }
         Ok(false)
     }

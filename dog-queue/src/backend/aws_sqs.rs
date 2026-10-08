@@ -36,7 +36,7 @@ impl Notifications for SqsNotifications {
             .message_body("dogrs-wakeup-v1");
         if self.queue_url.ends_with(".fifo") {
             request = request
-                .message_group_id("dogrs-wakeups")
+                .message_group_id(uuid::Uuid::new_v4().to_string())
                 .message_deduplication_id(uuid::Uuid::new_v4().to_string());
         }
         request.send().await.map_err(error)?;
@@ -47,22 +47,39 @@ impl Notifications for SqsNotifications {
             .client
             .receive_message()
             .queue_url(&self.queue_url)
-            .max_number_of_messages(1)
-            .wait_time_seconds(0)
+            .max_number_of_messages(10)
+            .wait_time_seconds(20)
             .send()
             .await
             .map_err(error)?;
         let received = !response.messages().is_empty();
-        for message in response.messages() {
-            if let Some(receipt) = message.receipt_handle() {
-                // This removes only a wakeup. The durable job remains until completion.
-                self.client
-                    .delete_message()
-                    .queue_url(&self.queue_url)
-                    .receipt_handle(receipt)
-                    .send()
-                    .await
-                    .map_err(error)?;
+        let entries: Vec<_> = response
+            .messages()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, message)| {
+                message.receipt_handle().map(|receipt| {
+                    aws_sdk_sqs::types::DeleteMessageBatchRequestEntry::builder()
+                        .id(index.to_string())
+                        .receipt_handle(receipt)
+                        .build()
+                        .map_err(error)
+                })
+            })
+            .collect::<QueueResult<_>>()?;
+        if !entries.is_empty() {
+            let result = self
+                .client
+                .delete_message_batch()
+                .queue_url(&self.queue_url)
+                .set_entries(Some(entries))
+                .send()
+                .await
+                .map_err(error)?;
+            if !result.failed().is_empty() {
+                return Err(error(
+                    "SQS failed to acknowledge some wakeups; ledger jobs remain available",
+                ));
             }
         }
         Ok(received)

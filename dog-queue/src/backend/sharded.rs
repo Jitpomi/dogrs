@@ -1,7 +1,60 @@
 //! Stable tenant routing over caller-provisioned backends, without choosing a
 //! database or broker. Keep shard count/order fixed for the life of stored jobs.
 use super::*;
+use futures::StreamExt;
 use std::sync::Arc;
+
+/// Successful recovery is retained even when another shard is unavailable.
+#[derive(Debug, Default)]
+pub struct ShardRecoveryReport {
+    pub outcomes: Vec<ReapOutcome>,
+    pub failures: Vec<(usize, QueueError)>,
+}
+
+async fn collect_recovery<F: std::future::Future<Output = QueueResult<Vec<ReapOutcome>>>>(
+    operations: impl IntoIterator<Item = F>,
+) -> ShardRecoveryReport {
+    let mut operations = operations.into_iter().enumerate();
+    let mut pending = futures::stream::FuturesUnordered::new();
+    let mut report = ShardRecoveryReport::default();
+    loop {
+        while pending.len() < 8 {
+            let Some((index, operation)) = operations.next() else {
+                break;
+            };
+            pending.push(async move {
+                let result = tokio::time::timeout(Duration::from_secs(30), operation)
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(QueueError::Internal(
+                            "Shard recovery timed out; outcome may be unknown".into(),
+                        ))
+                    });
+                (index, result)
+            });
+        }
+        let Some((index, result)) = pending.next().await else {
+            break;
+        };
+        match result {
+            Ok(rows) => report.outcomes.extend(rows),
+            Err(error) => report.failures.push((index, error)),
+        }
+    }
+    report.failures.sort_by_key(|(index, _)| *index);
+    report
+}
+
+impl<B: QueueBackend + ?Sized> ShardedBackend<B> {
+    /// Attempts every shard with bounded concurrency and a per-shard deadline.
+    pub async fn reclaim_expired_leases_report(&self) -> ShardRecoveryReport {
+        let mut operations = Vec::with_capacity(self.shards.len());
+        for shard in &self.shards {
+            operations.push(shard.reclaim_expired_leases());
+        }
+        collect_recovery(operations).await
+    }
+}
 
 pub struct ShardedBackend<B: ?Sized> {
     shards: Vec<Arc<B>>,
@@ -98,12 +151,21 @@ impl<B: QueueBackend + ?Sized> QueueBackend for ShardedBackend<B> {
         self.backend_for(&ctx.tenant_id).event_stream(ctx)
     }
     async fn reclaim_expired_leases(&self) -> QueueResult<Vec<ReapOutcome>> {
-        let mut result = Vec::new();
-        for shard in &self.shards {
-            result.extend(shard.reclaim_expired_leases().await?);
+        let report = self.reclaim_expired_leases_report().await;
+        for (shard, error) in &report.failures {
+            tracing::warn!(shard, %error, "Shard recovery failed; other shards were attempted");
         }
-        Ok(result)
+        if report.outcomes.is_empty() && !report.failures.is_empty() {
+            return Err(QueueError::Internal(format!(
+                "Lease recovery failed on shards {:?}",
+                report.failures.iter().map(|(i, _)| i).collect::<Vec<_>>()
+            )));
+        }
+        // The trait cannot carry both errors and successful outcomes. Preserve
+        // outcomes for hook delivery; callers needing errors use the report API.
+        Ok(report.outcomes)
     }
+
     fn capabilities(&self) -> QueueCapabilities {
         let mut result = self.shards[0].capabilities();
         for shard in &self.shards[1..] {
@@ -154,5 +216,29 @@ mod tests {
             assert!(b.get_status(ctx, id).await.unwrap().is_terminal());
         }
         assert_eq!(used.len(), 16);
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[tokio::test]
+    async fn failed_first_shard_preserves_later_recovery() {
+        let report = collect_recovery((0..3).map(|index| async move {
+            if index == 0 {
+                return Err(QueueError::Internal("offline".into()));
+            }
+            Ok(vec![ReapOutcome {
+                tenant_id: format!("t{index}"),
+                job_id: JobId::new(),
+                job_type: "test".into(),
+                permanently_failed: false,
+                retry_at: None,
+            }])
+        }))
+        .await;
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].0, 0);
+        assert_eq!(report.outcomes.len(), 2);
     }
 }
