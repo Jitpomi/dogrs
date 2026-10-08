@@ -327,9 +327,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build -p hosted-system --release --features redis,nats --locked
       - name: Compare serial fresh-server profiles
-        run: python3 dog-examples/hosted-system/compare_capacity.py --report-dir provider-attribution --seconds "$SECONDS_PER_RUN" --payloads "$PAYLOAD_BYTES" --backends "$BACKEND" --repeats "$REPEATS"
+        run: python3 dog-examples/hosted-system/compare_capacity.py --report-dir provider-attribution --rate "$CAPACITY_RATE" --seconds "$SECONDS_PER_RUN" --payloads "$PAYLOAD_BYTES" --backends "$BACKEND" --repeats "$REPEATS"
         env:
           DOGRS_SYSTEM_BINARY: target/release/hosted-system
+          CAPACITY_RATE: ${{ inputs.jobs_per_second_per_tenant || '9' }}
           SECONDS_PER_RUN: ${{ inputs.seconds }}
           PAYLOAD_BYTES: ${{ inputs.payload_bytes }}
           BACKEND: ${{ inputs.backend }}
