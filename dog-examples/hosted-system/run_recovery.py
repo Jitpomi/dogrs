@@ -44,6 +44,7 @@ try:
  (folder/'environment.json').write_text(json.dumps({
   'host_architecture':platform.machine(),'host_logical_cpus':os.cpu_count(),
   'docker':json.loads(command('docker','info','--format','{"cpus":{{.NCPU}},"memory_bytes":{{.MemTotal}},"architecture":"{{.Architecture}}"}')),
+  'postgres_enqueue_batch_size':int(os.environ.get('DOGRS_PG_ENQUEUE_BATCH_SIZE','16')),
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
   'postgres_capacity_memory':a.backend=='postgres' and a.capacity,
   'postgres_wait_sampling':os.environ.get('DOGRS_PG_PROFILE')=='1',
