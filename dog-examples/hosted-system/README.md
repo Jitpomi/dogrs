@@ -200,3 +200,12 @@ For a bounded worker-concurrency experiment, ordinary `queue` mode with
 `workers_per_tenant=compare` tests NATS 2/8/8/2 or Redis 1/4/4/1 on one runner.
 It changes worker concurrency only, retains all misses and leaves defaults
 unchanged. Do not combine it with other comparison modes.
+
+For an enqueue-pipeline experiment, `nats-pipeline-comparison` runs NATS with
+2/4/4/2 executing enqueue batches per store. It fixes eight workers per tenant,
+one metadata batch per store, 16 stores, atomic writes and a shared connection.
+Select the NATS backend and 64 KiB payloads. The worker input is overridden in
+this mode. Queue admission bounds, durability, workload and drain are unchanged.
+Every trial must pass for the comparison to pass; the mode changes no library
+default. Environment artifacts record both execution limits. Do not combine
+this mode with other comparison settings.

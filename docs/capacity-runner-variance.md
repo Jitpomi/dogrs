@@ -203,3 +203,52 @@ passed all 11 jobs, including live backend checks and the five-minute Redis
 recovery check. The local workflow/controller regression suite passed all 14
 tests, and four existing diagnostic-result tests passed. No queue adapter code
 was changed during this follow-up.
+
+## Enqueue pipeline control on `8aec867`
+
+The [matched ARM pipeline run](https://github.com/Jitpomi/dogrs/actions/runs/37781710373)
+tested two/four/four/two executing enqueue batches per store on one Neoverse-N2
+runner. Eight workers per tenant, one metadata batch per store, 16 stores,
+shared connection, atomic writes, R3/always-fsync, 100 tenants at nine jobs/second,
+64 KiB unique payloads, 60 seconds plus five-second drain were held constant.
+Queue diagnostics were enabled throughout. Each trial used fresh storage and the
+same tenant prefix; this is not an ordinary uninstrumented capacity run.
+
+| Order | Enqueue slots/store | Accepted, completed and verified | Rejected offers | Mean enqueue execution | Mean post-staging ack wait |
+|---|---:|---:|---:|---:|---:|
+| 1 | 2 | 46,338 | 7,662 | 145.4 ms | 137.5 ms |
+| 2 | 4 | 48,472 | 5,528 | 239.0 ms | 228.5 ms |
+| 3 | 4 | 49,180 | 4,820 | 234.3 ms | 224.0 ms |
+| 4 | 2 | 48,423 | 5,577 | 130.4 ms | 123.5 ms |
+
+Every trial failed capacity; all had zero operation errors and zero late offers.
+All accepted jobs completed within the window and passed terminal/payload checks.
+Doubling executing enqueue batches raised peak active batches from 32 to 64 but
+substantially increased durable-ack waits. It did not reach 54,000 admissions.
+The final control also improved versus the first control, so do not attribute
+all admission improvement to concurrency. Reject this as a capacity fix and
+retain two enqueue slots per store. No adapter runtime change was made.
+
+The workload's stable tenant hash places four to nine tenants per store with
+this prefix (36–81 offers/second). Thus an aggregate average of 56.25/store does
+not describe the busiest store. Placement is identical within this comparison;
+it is not identical to other comparison prefixes. Existing data must not be
+resharded in place to improve a test result.
+
+The reusable `nats-pipeline-comparison` workflow mode preserves all failures.
+Environment snapshots now include enqueue and metadata execution limits. Two
+shell regression tests check the fixed controls and that candidate failures do
+not skip or get overwritten by the final control. All 16 workflow tests and
+[full correctness/recovery CI](https://github.com/Jitpomi/dogrs/actions/runs/37781711651)
+passed on this commit.
+
+The separate [ordinary matrix](https://github.com/Jitpomi/dogrs/actions/runs/37781711507)
+passed PostgreSQL (54,000, 60.725 seconds) and NATS (54,000, 61.122 seconds), but
+Redis failed: 41,241 accepted, 3,690 completed, 10,921 rejected offers and 1,350
+recorded errors, with enqueue timeouts among the reported errors. Redis recorded
+always-fsync latency up to 396 ms; the median of its 67 per-second maximum samples
+was 148 ms. This is not a median of individual fsync operations. Its command
+latency event peaked at 3 ms. Four AOF rewrites ran, and an RDB background save
+was still active at collection. These observations locate substantial persistence
+stalls; they do not isolate background maintenance as the sole cause or establish
+that every timeout has the same cause. The failure remains a failed capacity run.
