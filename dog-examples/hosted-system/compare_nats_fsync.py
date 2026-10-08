@@ -44,26 +44,10 @@ report = {
     'description': 'Same binary, fresh R3 providers per case, always/2m/2m/always; buffered cases are NOT production acceptance.',
     'runs': [],
 }
-# Kernel counters are read-only. They include host activity and must be interpreted
-# alongside the per-container counters, not attributed wholly to NATS.
-sampler = '''
-   def sample_host_io():
-    with (folder/'host-io.jsonl').open('w') as output:
-     while not profile_stop.is_set():
-      row={'monotonic':time.monotonic()}
-      for source in ['/proc/diskstats','/proc/stat','/proc/meminfo','/proc/vmstat','/proc/pressure/io','/proc/pressure/cpu','/proc/pressure/memory']:
-       try:row[source]=pathlib.Path(source).read_text()
-       except OSError as err:row[source]={'error':str(err)}
-      output.write(json.dumps(row)+'\\n');output.flush()
-      profile_stop.wait(1)
-   host_io_thread=threading.Thread(target=sample_host_io,daemon=True);host_io_thread.start()
-'''
 try:
     for index, policy in enumerate(['always', '2m', '2m', 'always'], 1):
         text = original.replace('sync_interval:always', 'sync_interval:' + policy)
         text = text.replace("  'nats_storage':'anonymous Docker volume at /data',", "  'nats_storage':'anonymous Docker volume at /data',\n  'production_acceptance':False,\n  'nats_sync_interval':" + repr(policy) + ',')
-        text = text.replace('   def sample_nats_stacks():', sampler + '   def sample_nats_stacks():')
-        text = text.replace('    profile_stop.set()', '    profile_stop.set()\n    host_io_thread.join(timeout=5)')
         text = text.replace("'sync_policy':'always' if a.backend in ('redis','nats') else", "'sync_policy':" + repr(policy) + " if a.backend=='nats' else 'always' if a.backend=='redis' else")
         runner.write_text(text)
         folder = root / f'trial-{index}-{policy}'
@@ -71,7 +55,7 @@ try:
         env = dict(os.environ, DOGRS_SYSTEM_BINARY=str(binary), DOGRS_CAPACITY_SHARDS='16',
                    DOGRS_CAPACITY_WORKERS='8', DOGRS_CAPACITY_INFLIGHT='32',
                    DOGRS_NATS_CONNECTIONS='per-shard', DOGRS_NATS_ATOMIC='1',
-                   DOGRS_QUEUE_TIMINGS=profile, DOGRS_CAPACITY_COMPARISON_TENANT='dogrs-test-fsync-attribution')
+                   DOGRS_QUEUE_TIMINGS=profile, DOGRS_HOST_IO_PROFILE='1', DOGRS_CAPACITY_COMPARISON_TENANT='dogrs-test-fsync-attribution')
         for key in ['DOGRS_ADMISSION_MODE', 'DOGRS_PERF']:
             env.pop(key, None)
         result = subprocess.run([sys.executable, str(runner), 'nats', '--capacity', '--seconds', '60',

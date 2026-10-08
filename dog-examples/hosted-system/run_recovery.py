@@ -64,6 +64,20 @@ try:
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),
   'nats_storage':'anonymous Docker volume at /data',
  },indent=2))
+ if a.capacity and platform.system()=='Linux':
+  hardware={}
+  for key,args in {
+   'cpu':['lscpu','--json'],
+   'block_devices':['lsblk','--json','-o','NAME,TYPE,SIZE,MOUNTPOINTS,PKNAME'],
+   'filesystems':['df','-hT'],
+   'mounts':['findmnt','--json'],
+   'docker_root':['docker','info','--format','{{.DockerRootDir}}'],
+  }.items():
+   try:
+    result=subprocess.run(args,capture_output=True,text=True,timeout=20)
+    hardware[key]={'returncode':result.returncode,'stdout':result.stdout,'stderr':result.stderr}
+   except (OSError,subprocess.TimeoutExpired) as err:hardware[key]={'error':str(err)}
+  (folder/'hardware.json').write_text(json.dumps(hardware,indent=2))
  env={**os.environ,'DOGRS_BACKEND':a.backend,'DOGRS_TEST_TENANT':run.replace('dogrs-fault-','dogrs-test-fault-'),'DOGRS_RECOVERY_MANIFEST':str(folder/'manifest.json')}
  env.pop('DOGRS_ADMISSION_MODE',None)
  if a.capacity and os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT'):
@@ -140,6 +154,18 @@ try:
   with (folder/'container-stats.jsonl').open('w') as stats:
    monitor=subprocess.Popen(['docker','stats','--format','{{json .}}',*containers],stdout=stats,stderr=subprocess.DEVNULL)
    samplers=[];profile_stop=threading.Event();profile_thread=None
+   host_io_thread=None
+   def sample_host_io():
+    # Read-only, host-wide counters: correlate with container and adapter timings;
+    # they cannot attribute all host I/O to this process or establish causality.
+    with (folder/'host-io.jsonl').open('w') as output:
+     while not profile_stop.is_set():
+      row={'monotonic':time.monotonic()}
+      for source in ['/proc/diskstats','/proc/stat','/proc/pressure/io','/proc/pressure/cpu']:
+       try:row[source]=pathlib.Path(source).read_text()
+       except OSError as err:row[source]={'error':str(err)}
+      output.write(json.dumps(row)+'\n');output.flush()
+      profile_stop.wait(1)
    def sample_nats_stacks():
     sample=0
     while not profile_stop.is_set():
@@ -152,6 +178,8 @@ try:
      sample+=1
      profile_stop.wait(5)
    try:
+    if (os.environ.get('DOGRS_QUEUE_TIMINGS')=='1' or os.environ.get('DOGRS_HOST_IO_PROFILE')=='1') and platform.system()=='Linux':
+     host_io_thread=threading.Thread(target=sample_host_io,daemon=True);host_io_thread.start()
     if profile_ports:
      profile_thread=threading.Thread(target=sample_nats_stacks,daemon=True);profile_thread.start()
     if a.backend=='postgres' and os.environ.get('DOGRS_PG_PROFILE')=='1':
@@ -176,6 +204,7 @@ try:
     (folder/'client-cpu.json').write_text(json.dumps({'user_seconds':after.ru_utime-before.ru_utime,'system_seconds':after.ru_stime-before.ru_stime}))
    finally:
     profile_stop.set()
+    if host_io_thread:host_io_thread.join(timeout=5)
     if profile_thread:profile_thread.join(timeout=10)
     for sampler,sample_output in samplers:
      sampler.terminate()
