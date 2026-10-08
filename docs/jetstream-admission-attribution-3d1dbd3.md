@@ -91,6 +91,66 @@ cannot substitute for the Docker or Linux results. The first native setup attemp
 failed before load because its tenant prefix did not meet the fixture guard;
 that setup error was corrected before this recorded run.
 
+## Full-queue individual-write control
+
+A further ABBA comparison used the same runtime binary, 16 fresh buckets, four
+workers per tenant, shared connections, R3 and always-fsync. It changed only the
+fixture's atomic-publishing switch; the adapter consequently used its existing
+individual-write or atomic-batching path and their respective default admission
+limits (16 versus 128). This compares the supported paths, not an isolated
+measurement of protocol overhead with identical concurrency.
+
+| Order | Path | Accepted / completed / verified | Operation errors |
+|---|---|---:|---:|
+| 1 | Individual writes | 43,526 / 43,526 / 43,526 | 0 |
+| 2 | Atomic batching | 50,413 / 50,413 / 50,413 | 0 |
+| 3 | Atomic batching | 49,762 / 49,762 / 49,762 | 0 |
+| 4 | Individual writes | 44,028 / 44,028 / 44,028 | 0 |
+
+All missed the 60,000-job target. Both atomic trials completed more jobs than
+either individual-write trial. Removing batching is not supported as a fix by
+this control. Complete reports and binary hashes are in `dogrs-atomic-control`
+in the task workspace.
+
+On `9146608`, [correctness and recovery CI](https://github.com/Jitpomi/dogrs/actions/runs/37720462574)
+passed all 11 jobs. The separate [capacity run](https://github.com/Jitpomi/dogrs/actions/runs/37720462544)
+passed Redis (60,000 accepted and completed), but failed PostgreSQL (53,111
+accepted and completed, zero operation errors) and JetStream (31,255 accepted,
+21,304 completed, one uncertain submission deadline). These runner results are
+separate from the local controlled comparison and do not establish a source
+regression from the opt-in diagnostic probes.
+
+## Larger enqueue batches after the metadata fix
+
+The earlier 1 MiB experiment predated the metadata collection fix and used two
+workers. To check whether that interaction explained its regression, a new ABBA
+comparison changed only the soft batch target from 256 KiB to 512 KiB in the
+current implementation, with four workers. The hard 2 MiB and 128-message bounds,
+revision fencing, final-acknowledgement requirement and R3/always-fsync fixture
+were unchanged. Release binaries had diagnostics disabled and were built before
+measurement. Each trial used fresh storage; no other capacity test ran locally
+at the same time.
+
+| Order | Soft target | Accepted | Completed within window | Verified terminal afterward | Operation errors |
+|---|---:|---:|---:|---:|---:|
+| 1 | 256 KiB | 49,456 | 49,456 | 49,456 | 0 |
+| 2 | 512 KiB | 50,362 | 37,614 | 37,441 | 2 |
+| 3 | 512 KiB | 51,683 | 50,807 | 50,868 | 0 |
+| 4 | 256 KiB | 48,084 | 48,084 | 48,084 | 0 |
+
+All four missed capacity. Trial 2 reported an uncertain submission deadline and
+a snapshot-read timeout, so verification was incomplete. Trial 3's later terminal
+count includes commits observed after the timed workload ended; those are not
+on-time completions. Neither candidate completed every accepted job in the window.
+The two baselines did, with zero operation errors. The candidate is **rejected and
+reverted**: larger admission counts do not establish reliable completion capacity.
+Reports, runner and binary hashes are retained under `dogrs-half-mib-control`.
+
+These controls narrow the decision without proving an exclusively infrastructure
+cause. Removing batching was slower, while increasing its byte target did not
+reliably improve completion. The traced server persistence cost remains concrete;
+these experiments establish no further safe runtime fix for the full target.
+
 ## Decision
 
 Retain the validated metadata collection fix and conservative execution defaults.
