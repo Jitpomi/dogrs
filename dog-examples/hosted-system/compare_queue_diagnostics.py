@@ -8,7 +8,7 @@ import pathlib
 import subprocess
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('backend', choices=['redis', 'nats'])
+parser.add_argument('backend', choices=['postgres', 'redis', 'nats'])
 parser.add_argument('--report-dir', required=True)
 parser.add_argument('--rate', type=int, choices=range(1, 11), default=9)
 parser.add_argument('--seconds', type=int, choices=[60, 120], default=60)

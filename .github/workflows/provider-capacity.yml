@@ -148,7 +148,6 @@ jobs:
       - run: |
           if [ "$CAPACITY_MODE" = queue-comparison ]; then
             test "$PAYLOAD_BYTES" = 65536
-            test "$BACKEND" != postgres
             python3 dog-examples/hosted-system/compare_queue_diagnostics.py "$BACKEND" --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --report-dir provider-capacity
             exit $?
           fi

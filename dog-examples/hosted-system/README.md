@@ -161,7 +161,7 @@ non-default rate in the runner. Capacity results record the actual per-tenant ra
 
 ### Compare diagnostics on one runner
 
-The Provider capacity workflow's `queue-comparison` mode runs Redis or NATS four
+The Provider capacity workflow's `queue-comparison` mode runs PostgreSQL, Redis or NATS four
 times on the same runner, with fresh storage each time: diagnostics off, on, on,
 off. Select 64 KiB payloads and 60 or 120 seconds. One release binary includes the
 diagnostic feature throughout; the environment toggle changes between trials.
