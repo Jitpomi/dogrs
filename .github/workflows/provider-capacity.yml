@@ -9,6 +9,11 @@ on:
         type: choice
         options: [queue, queue-comparison, all-backends, attribution]
         default: queue
+      runner:
+        description: Standard free public-repository runner for a labelled hardware comparison
+        type: choice
+        options: [ubuntu-latest, ubuntu-24.04-arm]
+        default: ubuntu-latest
       repeats:
         description: Attribution repetitions (odd repetitions reverse profile order)
         type: choice
@@ -130,7 +135,7 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.mode == 'all-backends' && '["all"]' || inputs.backend && format('["{0}"]', inputs.backend) || '["postgres","redis","nats"]') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
