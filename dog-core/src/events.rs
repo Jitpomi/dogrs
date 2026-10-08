@@ -135,6 +135,7 @@ where
     /// Monotonic counter for triggering lazy prune in `snapshot_emit`.
     emit_count: std::sync::atomic::AtomicU32,
     publish: Option<PublishFn<R, P>>,
+    listener_failures: AtomicU64,
 }
 
 impl<R, P> Default for DogEventHub<R, P>
@@ -157,7 +158,18 @@ where
             listeners: std::sync::RwLock::new(Vec::new()),
             emit_count: std::sync::atomic::AtomicU32::new(0),
             publish: None,
+            listener_failures: AtomicU64::new(0),
         }
+    }
+
+    /// Listener futures that returned an error. Does not count cancellation or panic.
+    /// Shared by app clones; no payload or error text is retained.
+    pub fn listener_failures(&self) -> u64 {
+        self.listener_failures.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn record_listener_failure(&self) {
+        self.listener_failures.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn set_publish(&mut self, f: PublishFn<R, P>) {
@@ -299,7 +311,10 @@ where
         let listeners = self.snapshot_emit(path, event, data, ctx);
 
         for f in &listeners {
-            f(data, ctx).await?;
+            if let Err(error) = f(data, ctx).await {
+                self.record_listener_failure();
+                return Err(error);
+            }
         }
 
         Ok(())

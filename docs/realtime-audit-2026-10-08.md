@@ -65,3 +65,11 @@ application/deployment responsibilities, documented in `dog-transport/REALTIME.m
 Next work should address event failure visibility and add the focused core tests
 before selecting a measured realtime concurrency/latency workload. No sustained
 realtime capacity target has been agreed or validated in this audit.
+
+## Follow-up implementation
+
+The package audit adds shared listener-failure counters, six focused event tests
+and documented ordering/cancellation/once-selection semantics. It preserves
+successful mutation responses and runtime-independent sequential dispatch. See
+[package audit](package-audit-2026-10-08.md) for scope and validation; the original
+findings above describe the pre-change baseline.
