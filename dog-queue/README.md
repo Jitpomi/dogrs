@@ -21,12 +21,25 @@ Redis, or JetStream. This is an intentional API change from the old prototypes,
 which kept job status in process memory and could acknowledge jobs before work
 finished. The broker now carries only an opaque wakeup; the ledger owns the job.
 
-An enqueue commits to the ledger before publishing. A crash or broker outage
+An enqueue commits to the ledger before scheduling a background wakeup.
+Successful enqueue does not wait for broker publication. A crash or broker outage
 between those steps cannot lose the job because workers also poll the ledger.
 Broker acknowledgement removes a wakeup; **only `ack_complete` completes a job**.
 Notifications may be lost, duplicated, or received by a worker for another tenant.
 They never grant ownership or carry customer payloads. Monitor
-`notification_failures()` to detect degraded broker connectivity.
+`notification_failures()` to detect degraded broker connectivity. These counters
+update asynchronously. Idle receive deadlines are counted separately by
+`notification_receive_timeouts()` and do not alone establish a broker failure.
+
+Custom `Notifications` implementations must own their data (`'static`); use an
+owned SDK client or `Arc` instead of borrowing a stack-local client. Construction
+does not start tasks. Enqueue/dequeue starts background tasks on the active Tokio
+runtime, which must remain alive while the backend is in use. After stopping
+workers and producers, call `shutdown_notifications(&mut self).await` to stop
+wrapper tasks and release adapter receive resources. Dropping the backend aborts
+wrapper tasks but cannot await asynchronous cleanup. A later enqueue/dequeue
+restarts the tasks; shutdown is not a permanent admission barrier. The ledger's
+jobs remain independent of notification task lifetime.
 
 All durable ledgers support tenant-scoped active-job idempotency, scheduled jobs,
 priority, cancellation, lease extension and retry recovery. They retain terminal

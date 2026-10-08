@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — changes after crates.io 0.2.0
+
+Published 0.2.0 archives identify commit `46f17ed`. The older sections below are
+historical development notes and are not a reliable list of changes still awaiting
+publication. See [the next-release plan](docs/release-after-0.2.md).
+
+- `dog-auth-local`: protect configured fields on pagination envelopes as well as rows.
+- `dog-core`: expose event listener failure counters and compile-check the corrected README.
+- `dog-queue`: harden durable writes, isolate shard recovery failures and move broker
+  wakeups off the job critical path. Custom notification implementations now require
+  owned data (`'static`); plan a compatibility-breaking queue release.
+
+
 ## Unreleased: dog-blob hardening
 
 ### Upload resource management and recovery
