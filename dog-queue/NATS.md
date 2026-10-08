@@ -190,5 +190,6 @@ The [matched payload-size comparison](../docs/jetstream-write-cost-c472a04.md)
 cross-checks acknowledged records against all replicas' stream sequences. In those
 runs, both payload sizes wrote four logical records per completed job, but 1 KiB
 passed the job-rate target while 64 KiB missed it with much longer commit waits.
-The proposed separation of payload and metadata storage remains an experiment
-to implement and validate, not an available or certified capacity fix.
+A [separate payload-storage prototype](../docs/jetstream-split-storage-experiment.md)
+was tested and rejected: it missed the full target and introduced uncertain
+enqueue timeouts in one run. The existing storage layout remains unchanged.

@@ -82,7 +82,9 @@ Do not replace the portable queue state machine or weaken durability. Stop
 adjusting batch sizes in the shared payload/metadata stream as the primary fix.
 The next architectural candidate is **separate immutable payload storage from
 mutable job metadata**, first using separate NATS buckets on the same deployment.
-This is a proposed experiment, not a released feature or a promised capacity fix.
+This candidate was subsequently tested and rejected; see the
+[split-storage results](jetstream-split-storage-experiment.md). The following
+requirements describe the experiment, not a released feature or capacity fix.
 
 - Keep tenant scoping, scheduling, priority, idempotency, cancellation, history,
   lease fencing and the public queue API intact.
