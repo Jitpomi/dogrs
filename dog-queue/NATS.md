@@ -163,3 +163,12 @@ promise. Keep shard topology stable for existing data; changing it requires migr
 The metadata-window follow-up in the linked report improved completion counts
 but still missed the 1,000 jobs/second target. Collection changes do not remove a
 job's durable state transitions or establish a capacity guarantee.
+
+### Admission attribution
+
+[Direct-write controls and server traces](../docs/jetstream-admission-attribution-3d1dbd3.md)
+locate significant waiting in JetStream's Raft WAL fsync path. Opt-in queue
+metrics now distinguish observed first-staging and post-staging acknowledgement
+intervals; neither is an isolated disk measurement. Native writes also missed the
+local admission target. This evidence does not certify 1,000 jobs/second, justify
+weaker persistence, or rule out further adapter improvements.

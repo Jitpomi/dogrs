@@ -505,6 +505,13 @@ async fn atomic_with_pool(
     // extra staging round trip. (ADR-50 fast-ingest has different rules.)
     // Staging replies are still consumed, but only a final durable ack succeeds.
     let _wait = crate::diagnostics::Scope::new(crate::diagnostics::NATS_ATOMIC_FINAL_WAIT);
+    // Observe existing replies only: a publish() timer measures client queue
+    // admission, not delivery to the server. These probes do not add a flush or
+    // change which acknowledgement establishes success. They are client-observed
+    // intervals, not an isolated measurement of server disk time.
+    let first_staging_started = crate::diagnostics::start();
+    let mut first_staging = true;
+    let mut last_staging = None;
     let result = loop {
         let response = match session.replies.next().await {
             Some(resp) => resp,
@@ -518,6 +525,14 @@ async fn atomic_with_pool(
             break Err(error("server rejected batch request"));
         }
         if response.payload.is_empty() {
+            if first_staging {
+                crate::diagnostics::elapsed(
+                    crate::diagnostics::NATS_ATOMIC_FIRST_STAGING_WAIT,
+                    first_staging_started,
+                );
+                first_staging = false;
+            }
+            last_staging = crate::diagnostics::start();
             continue;
         }
         match serde_json::from_slice::<Response<PublishAck>>(&response.payload) {
@@ -536,6 +551,10 @@ async fn atomic_with_pool(
                         "invalid commit acknowledgement; outcome may be unknown",
                     ));
                 }
+                crate::diagnostics::elapsed(
+                    crate::diagnostics::NATS_ATOMIC_AFTER_STAGING_WAIT,
+                    last_staging,
+                );
                 let first = ack.sequence - writes.len() as u64 + 1;
                 break Ok(Some((first..=ack.sequence).collect()));
             }
