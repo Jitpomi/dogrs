@@ -160,10 +160,13 @@ impl BatchWriter {
                 let target_reached = if enqueue {
                     bytes >= TARGET_BATCH_BYTES || count >= MAX_MESSAGES
                 } else {
-                    count >= 2
+                    count >= MAX_MESSAGES
                 };
                 if !target_reached && deferred.is_none() && count < MAX_MESSAGES {
-                    let deadline = tokio::time::Instant::now() + Duration::from_millis(1);
+                    // Collect metadata transitions for a bounded window so claim and
+                    // completion writes can amortize a durable commit across jobs.
+                    let window = if enqueue { 1 } else { 8 };
+                    let deadline = tokio::time::Instant::now() + Duration::from_millis(window);
                     while count < MAX_MESSAGES {
                         match tokio::time::timeout_at(deadline, receiver.recv()).await {
                             Ok(Some(group)) => {
@@ -183,7 +186,7 @@ impl BatchWriter {
                                 let reached = if enqueue {
                                     bytes >= TARGET_BATCH_BYTES
                                 } else {
-                                    count >= 2
+                                    count >= MAX_MESSAGES
                                 };
                                 if reached {
                                     break;

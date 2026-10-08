@@ -141,3 +141,21 @@ write can still commit after its application deadline, and clock synchronization
 remains required. Strict server-time commit expiry needs a different coordination
 mechanism; revision fencing alone cannot provide it. The guards do not establish
 an increased capacity limit or remove the cost of KV metadata transitions.
+
+### Size bucket count to measured storage capacity
+
+More sharded buckets are not automatically faster: each is an independent
+replicated stream. In a local three-replica, always-fsync comparison, four buckets
+with the pre-window-change writer completed 45,586–48,413 jobs, versus 19,264–24,652 with
+sixteen, under the same 60,000-job workload. Neither met the full gate. Increasing
+the soft enqueue batch target to 1 MiB made completion throughput worse and was
+reverted. See [experiment details](../docs/jetstream-batching-experiment-b51fb4f.md).
+These are deployment-sizing observations, not a universal default or capacity
+promise. Keep shard topology stable for existing data; changing it requires migration.
+
+Metadata writes use a bounded eight-millisecond collection window to combine
+independent claims and completions into atomic commits. Every operation retains
+its expected revision and waits for the final acknowledgement. This can improve
+throughput at the cost of collection latency; it does not remove durable state
+transitions or guarantee the 1,000 jobs/second target. The follow-up experiment in
+the linked report improved completion counts but still missed that target.
