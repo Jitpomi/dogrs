@@ -155,8 +155,22 @@ ledger, including when notifications are lost. `notification_failures()` reports
 explicit receive errors and failed/timed-out publications. Idle streaming receive
 deadlines are counted separately by `notification_receive_timeouts()`.
 
-Call `shutdown_notifications(&mut self).await` for deterministic task cancellation;
-subsequent queue use restarts the tasks. Dropping the wrapper aborts its tasks.
+Call `shutdown_notifications(&mut self).await` to abort and join wrapper tasks
+and release receive resources, including resources initialized through the direct
+notification accessor. Repeated shutdown is supported; subsequent queue use
+restarts tasks and subscriptions. Pub/Sub creates its stream lazily and requests
+immediate redelivery of outstanding hints on shutdown. Kafka unsubscribes on
+shutdown and resubscribes on receive. Client connections remain available for
+restart; already queued producer requests can still finish in the SDK. Shutdown
+is not a delivery flush or a guarantee that all client network I/O has stopped.
+
+RabbitMQ waits for consumer cancellation, acknowledges its remaining prefetched
+hints, and performs a channel round trip before returning. It preserves the
+caller's channel and other consumers. RabbitMQ and Pub/Sub cleanup wait up to five
+seconds for protocol completion and log incomplete cleanup. If RabbitMQ cleanup
+fails, close the supplied channel to release outstanding deliveries before retiring
+the backend. Dropping the wrapper only aborts tasks; use explicit shutdown for
+receive-resource cleanup when retaining the caller's RabbitMQ channel.
 Custom `Notifications` implementations must be owned (`'static`) and cancellation
 safe. The notification accessor is for configuration/testing; direct receive calls
 compete with background consumption once queue use has started.

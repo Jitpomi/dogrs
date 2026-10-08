@@ -129,7 +129,8 @@ impl<N: Notifications + 'static> BrokerBackend<N> {
         // At most one pending wakeup, in addition to the in-flight publication.
         self.signal.notify_one();
     }
-    /// Stop notification I/O and wait for cancellation. Durable jobs are unaffected.
+    /// Stop wrapper tasks and release receive resources. Durable jobs are unaffected.
+    /// SDK connections and already queued producer requests may outlive this call.
     /// Subsequent enqueue/dequeue calls restart notification tasks.
     pub async fn shutdown_notifications(&mut self) {
         if let Some(tasks) = self.tasks.take() {
@@ -139,8 +140,8 @@ impl<N: Notifications + 'static> BrokerBackend<N> {
             for task in tasks {
                 let _ = task.await;
             }
-            self.notifications.shutdown().await;
         }
+        self.notifications.shutdown().await;
     }
 }
 impl<N> Drop for BrokerBackend<N> {
@@ -250,6 +251,33 @@ mod tests {
         async fn receive(&self) -> QueueResult<bool> {
             std::future::pending().await
         }
+    }
+    #[tokio::test]
+    async fn shutdown_cleans_up_before_start_and_after_restart() {
+        struct Cleanup(Arc<AtomicU64>);
+        #[async_trait]
+        impl Notifications for Cleanup {
+            async fn publish(&self) -> QueueResult<()> {
+                Ok(())
+            }
+            async fn receive(&self) -> QueueResult<bool> {
+                std::future::pending().await
+            }
+            async fn shutdown(&self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let count = Arc::new(AtomicU64::new(0));
+        let mut backend =
+            BrokerBackend::with_ledger(Cleanup(count.clone()), Arc::new(MemoryBackend::new()));
+        backend.shutdown_notifications().await;
+        backend.shutdown_notifications().await;
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        backend.start_notifications();
+        backend.shutdown_notifications().await;
+        backend.start_notifications();
+        backend.shutdown_notifications().await;
+        assert_eq!(count.load(Ordering::SeqCst), 4);
     }
     #[tokio::test]
     async fn unavailable_notifications_cannot_delay_ready_jobs() {

@@ -19,6 +19,7 @@ pub mod rdkafka {
         producer: FutureProducer,
         consumer: StreamConsumer,
         topic: String,
+        subscribed: tokio::sync::Mutex<bool>,
     }
     pub type RdKafkaBackend = BrokerBackend<RdKafkaNotifications>;
     impl RdKafkaBackend {
@@ -39,6 +40,7 @@ pub mod rdkafka {
                     producer,
                     consumer,
                     topic,
+                    subscribed: tokio::sync::Mutex::new(true),
                 },
                 ledger,
             ))
@@ -56,7 +58,17 @@ pub mod rdkafka {
                 .map_err(|(err, _)| error(err))?;
             Ok(())
         }
+        async fn shutdown(&self) {
+            let mut subscribed = self.subscribed.lock().await;
+            self.consumer.unsubscribe();
+            *subscribed = false;
+        }
         async fn receive(&self) -> QueueResult<bool> {
+            let mut subscribed = self.subscribed.lock().await;
+            if !*subscribed {
+                self.consumer.subscribe(&[&self.topic]).map_err(error)?;
+                *subscribed = true;
+            }
             let message = self.consumer.recv().await.map_err(error)?;
             self.consumer
                 .commit_message(&message, CommitMode::Async)

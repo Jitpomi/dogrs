@@ -79,8 +79,37 @@ impl Notifications for RabbitNotifications {
         }
     }
     async fn shutdown(&self) {
-        // Dropping lapin Consumer cancels only this subscription, not the caller's channel.
-        self.consumer.lock().await.take();
+        let mut slot = self.consumer.lock().await;
+        let Some(consumer) = slot.as_mut() else {
+            return;
+        };
+        // Cancel first, then settle the bounded prefetch backlog. These are only
+        // hints: acknowledging them cannot complete or remove a ledger job.
+        let cleanup = async {
+            self.channel
+                .basic_cancel(consumer.tag().as_str(), BasicCancelOptions::default())
+                .await?;
+            while let Some(delivery) = consumer.next().await {
+                delivery?.ack(BasicAckOptions::default()).await?;
+            }
+            // A round trip on this channel also orders the preceding ack frames.
+            self.channel
+                .queue_declare(
+                    &self.queue,
+                    QueueDeclareOptions {
+                        passive: true,
+                        ..Default::default()
+                    },
+                    FieldTable::default(),
+                )
+                .await?;
+            Ok::<_, lapin::Error>(())
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(5), cleanup).await {
+            Ok(Ok(())) => {},
+            result => tracing::warn!(?result, "RabbitMQ shutdown incomplete; close the supplied channel to release outstanding deliveries"),
+        }
+        *slot = None;
     }
     async fn receive(&self) -> QueueResult<bool> {
         let mut consumer = self.consumer.lock().await;
