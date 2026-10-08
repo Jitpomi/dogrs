@@ -1,4 +1,4 @@
-//! dog-core: framework-agnostic core for DogRS.
+#![doc = include_str!("../README.md")]
 
 pub mod app;
 pub mod config;

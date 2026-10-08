@@ -106,3 +106,36 @@ async fn login_rejects_a_long_password_even_when_its_prefix_matches() {
         .await
         .is_err());
 }
+
+#[tokio::test]
+async fn protect_strips_paginated_envelope_and_rows() {
+    use dog_auth::AuthParams;
+    use dog_auth_local::hooks::protect::ProtectHook;
+    use dog_core::{DogAfterHook, HookResult};
+    type Params = AuthParams<Value>;
+    let app = DogAppBuilder::<Value, Params>::new().build();
+    let mut ctx = HookContext::new(
+        TenantContext::new("audit"),
+        ServiceMethodKind::Find,
+        Params::default(),
+        ServiceCaller::new(app.clone()),
+        app.config_snapshot(),
+    );
+    ctx.result = Some(HookResult::One(json!({
+        "total":1, "password":"envelope-secret",
+        "audit":{"token":"metadata-secret"},
+        "data":[{"id":"user", "password":"row-secret", "nested":{"token":"row-token"}}]
+    })));
+    ProtectHook::<Params>::from_fields(&["password"])
+        .with_deep_fields(&["token"])
+        .run(&mut ctx)
+        .await
+        .unwrap();
+    let Some(HookResult::One(value)) = ctx.result else {
+        panic!("expected page");
+    };
+    assert_eq!(
+        value,
+        json!({"total":1,"audit":{},"data":[{"id":"user","nested":{}}]})
+    );
+}

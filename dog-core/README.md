@@ -1,171 +1,84 @@
-
-
-
-
-
-
-
 # dog-core
 
-[![Crates.io](https://img.shields.io/crates/v/dog-core.svg)](https://crates.io/crates/dog-core)
-[![Documentation](https://docs.rs/dog-core/badge.svg)](https://docs.rs/dog-core)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+DogRS service traits, hook pipelines, tenant context and in-process events.
+The core requires no web server, database or async runtime. `dog-transport`
+provides transport integration; `dog-axum` is a deprecated compatibility layer.
 
-**Core traits and utilities for the DogRS ecosystem - a modular Rust framework for building scalable applications**
-
-dog-core provides the foundational abstractions that power the DogRS framework: services, hooks, tenant contexts, and storage contracts. It's designed to keep your core logic clean and portable across different adapters and environments.
-
-## Features
-
-- **Framework-agnostic core** - No coupling to specific web frameworks or databases
-- **Multi-tenant services** - Built-in tenant context for SaaS applications
-- **Service hooks** - Before/after/around/error pipelines for cross-cutting concerns
-- **Storage contracts** - Pluggable storage backends without vendor lock-in
-- **Async-first design** - Built for modern async Rust applications
-
-## Quick Start
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-dog-core = "0.1.0"
-```
-
-### Basic Service Example
+## Services
 
 ```rust
-use dog_core::{DogService, TenantContext, Result};
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use dog_core::{DogAppBuilder, DogService, TenantContext};
 
-#[derive(Deserialize)]
-struct CreateUserRequest {
-    name: String,
-    email: String,
-}
-
-#[derive(Serialize)]
-struct User {
-    id: u32,
-    name: String,
-    email: String,
-}
-
-struct UserService;
-
-#[async_trait]
-impl DogService<CreateUserRequest, ()> for UserService {
-    type Output = User;
-    
-    async fn create(&self, tenant: TenantContext, data: CreateUserRequest) -> Result<User> {
-        // Your business logic here
-        Ok(User {
-            id: 1,
-            name: data.name,
-            email: data.email,
-        })
+struct Echo;
+#[async_trait::async_trait]
+impl DogService<String, ()> for Echo {
+    async fn create(
+        &self,
+        _tenant: &TenantContext,
+        data: String,
+        _params: (),
+    ) -> anyhow::Result<String> {
+        Ok(data)
     }
 }
+
+# async fn example() -> anyhow::Result<()> {
+let mut builder = DogAppBuilder::<String, ()>::new();
+builder.register_service("echo", Arc::new(Echo));
+let app = builder.build();
+let saved = app.service("echo")?
+    .create(TenantContext::new("tenant-123"), "hello".into(), ())
+    .await?;
+assert_eq!(saved, "hello");
+# Ok(())
+# }
 ```
 
-## Core Concepts
+The service methods are `find`, `get`, `create`, `update`, `patch`, `remove` and
+`custom`; unimplemented methods return errors. `ServiceHandle` runs the configured
+hooks around calls. Tenant context carries a tenant identifier; it does not by
+itself authorize a client or enforce filtering in a custom storage implementation.
+Applications must verify identity, tenant access and data scoping.
 
-### Services
-Services implement your business logic through the `DogService` trait:
+## Events and failure monitoring
 
-```rust
-#[async_trait]
-pub trait DogService<TData, TQuery> {
-    type Output;
-    
-    async fn create(&self, tenant: TenantContext, data: TData) -> Result<Self::Output>;
-    async fn read(&self, tenant: TenantContext, query: TQuery) -> Result<Self::Output>;
-    async fn update(&self, tenant: TenantContext, data: TData) -> Result<Self::Output>;
-    async fn delete(&self, tenant: TenantContext, query: TQuery) -> Result<()>;
-}
-```
+Register listeners with `DogAppBuilder::on` or `on_str`, and optionally configure
+a publish filter with `publish`. Standard mutation events run after successful
+service/after-hook processing. Listeners execute sequentially in the calling
+future; this preserves ordering and creates no detached or unbounded task queue.
 
-### Tenant Context
-Multi-tenant applications get built-in tenant isolation:
+A listener error does not undo a successful mutation. Application dispatch
+continues to later listeners and increments `app.event_listener_failures()`.
+App clones share this counter. Poll it from application monitoring; the core
+retains no error text, credentials or event payload. The count records returned
+errors, not cancellation or panics. Direct `DogEventHub::emit_async` also counts
+errors but returns the first error and stops, preserving its existing contract.
 
-```rust
-let tenant = TenantContext::new("tenant-123")
-    .with_actor("user-456")
-    .with_trace_id("req-789");
+A slow listener delays the response and later listeners. Keep listeners short;
+hand expensive work to an application-owned bounded queue with explicit overload
+handling. Direct internal calls have no automatic deadline. Transport deadlines
+can cancel yielding work, but cannot stop blocking code or undo external effects.
+Avoid automatically retrying a mutation just because notification delivery failed.
 
-let result = service.create(tenant, request_data).await?;
-```
+Once listeners are selected at most once, atomically across concurrent emissions.
+Selection happens before their futures run. Cancellation can therefore consume a
+once listener without completing it; there is no exactly-once delivery guarantee.
+Publish-filter rejection does not consume a once listener.
 
-### Storage Adapters
-Pluggable storage without vendor lock-in:
+Events are in-process notifications, not durable delivery or cross-instance
+broadcasts. Use a durable outbox/queue where delivery must survive a crash.
+See `dog-transport/REALTIME.md` for WebSocket/SSE connection behavior.
 
-```rust
-use dog_core::{StorageAdapter, StorageResult};
+## Features and companion crates
 
-#[async_trait]
-impl StorageAdapter for MyDatabase {
-    async fn get(&self, tenant: &TenantContext, key: &str) -> StorageResult<Option<Vec<u8>>>;
-    async fn put(&self, tenant: &TenantContext, key: &str, value: Vec<u8>) -> StorageResult<()>;
-    async fn delete(&self, tenant: &TenantContext, key: &str) -> StorageResult<()>;
-}
-```
+Default `json` enables JSON requests and responses. Disable default features for
+format-independent services; `serde` enables serialization without JSON transport.
+The optional `adapters` module supplies storage-related traits.
 
-## Architecture
+Companion crates include `dog-transport`, `dog-auth`, `dog-auth-local`,
+`dog-auth-oauth`, `dog-typedb`, `dog-blob`, `dog-queue` and the `dog-schema` family.
+Runnable applications live in `dog-examples`; follow `docs/application-structure.md`
+for their layout.
 
-dog-core follows a clean separation of concerns:
-
-```
-┌─────────────────┐
-│   Your App      │  ← Business logic
-└─────────────────┘
-         │
-    ┌────┼────┐
-    │    │    │
-    ▼    │    ▼
-┌─────────┐ ┌─────────────┐
-│dog-axum │ │dog-typedb   │  ← Adapters
-│(HTTP)   │ │(DB)         │
-└─────────┘ └─────────────┘
-         │
-         ▼
-┌─────────────────┐
-│   dog-blob      │  ← Object storage
-│   (Storage)     │
-└─────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│   dog-core      │  ← Core abstractions
-└─────────────────┘
-```
-
-## Ecosystem
-
-dog-core works with these adapters:
-
-- **[dog-axum](https://crates.io/crates/dog-axum)** - Axum web framework integration
-- **[dog-typedb](https://crates.io/crates/dog-typedb)** - TypeDB database adapter
-- **[dog-blob](https://crates.io/crates/dog-blob)** - Blob storage infrastructure
-- **[dog-schema](https://crates.io/crates/dog-schema)** - Schema validation utilities
-
-## Examples
-
-See the `dog-examples/` directory for complete applications:
-
-- **music-blobs** - Media streaming service
-- **blog** - REST API with CRUD operations  
-- **social-typedb** - Social network with TypeDB
-- **fleet-queue** - Fleet management with background jobs
-
-## License
-
-MIT OR Apache-2.0
-
----
-
-<div align="center">
-
-**Made by [Jitpomi](https://github.com/Jitpomi)**
-
-</div>
+Licensed under MIT OR Apache-2.0.

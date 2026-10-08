@@ -160,7 +160,9 @@ where
                     if let Some(map) = out.as_object_mut() {
                         map.insert("data".to_string(), Value::Array(stripped));
                     }
-                    HookResult::One(out)
+                    // A page envelope can itself contain protected fields or
+                    // nested metadata. Apply the same rules to it as to rows.
+                    HookResult::One(self.strip_one(out))
                 } else {
                     HookResult::One(self.strip_one(v))
                 }

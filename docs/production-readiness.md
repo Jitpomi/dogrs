@@ -1,11 +1,24 @@
 # Production readiness gates
 
-The hosted acceptance suite is not a production sign-off. The agreed launch target
-is 10 jobs/second per tenant, 100 tenants (1,000 jobs/second aggregate), payloads up
-to 64 KiB, and recovery after a five-minute outage. These are acceptance targets,
-not promises that a free hosted database can provide that capacity.
+The hosted acceptance suite is not a production sign-off. The current capacity
+default is **9 jobs/second per tenant, 100 tenants (900 jobs/second aggregate)**,
+64 KiB payloads, 60 seconds of offers and five seconds of drain. The 1,000/s rate
+is an optional stress experiment, not the default. Correctness/recovery checks
+include a five-minute outage.
 
-## Current evidence (27 September 2026)
+## Current evidence (8 October 2026)
+
+Queue fixes were merged in PR #24 at `f536e52` after all correctness/recovery
+checks passed. All three backends passed twice on one runner at 900/s, but other
+runners still produced capacity failures. The 1,000/s experiment passed
+PostgreSQL and Redis twice and missed NATS twice. See
+[dated results and limitations](capacity-runner-variance.md). These results do not
+guarantee capacity on arbitrary deployments or certify every framework package.
+
+The remaining sections preserve historical targets and experiments. Their older
+1,000/s statements do not override the current 900/s default.
+
+## Historical evidence (27 September 2026)
 
 The queue implementation at `bf38746` passed the complete correctness and recovery
 CI suite. PostgreSQL and Redis each accepted, completed and verified all 60,000

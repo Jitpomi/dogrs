@@ -339,6 +339,13 @@ where
     pub fn config_snapshot(&self) -> crate::DogConfigSnapshot {
         self.inner.config.snapshot()
     }
+
+    /// Number of event listeners that returned errors across this app's clones.
+    /// Event failures do not turn an already successful mutation into a failure.
+    /// Poll this counter for monitoring; cancellation and panic are not counted.
+    pub fn event_listener_failures(&self) -> u64 {
+        self.inner.events.listener_failures()
+    }
 }
 
 #[cfg(feature = "json")]
@@ -531,7 +538,9 @@ where
         let listeners = self.inner.events.snapshot_emit(path, &event, &data, ctx);
 
         for f in &listeners {
-            let _ = f(&data, ctx).await;
+            if f(&data, ctx).await.is_err() {
+                self.inner.events.record_listener_failure();
+            }
         }
     }
 }
@@ -742,7 +751,9 @@ where
                         .snapshot_emit(&self.name, &event, &data, &ctx);
 
                     for f in &listeners {
-                        let _ = f(&data, &ctx).await;
+                        if f(&data, &ctx).await.is_err() {
+                            self.app.inner.events.record_listener_failure();
+                        }
                     }
                 }
             }
