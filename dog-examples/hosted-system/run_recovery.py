@@ -97,7 +97,7 @@ try:
    command('docker','exec',name,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-c',create)
  elif a.backend=='redis':
   number=port();name=run+'-redis'
-  launch(name,'-p',f'127.0.0.1:{number}:6379','redis:7.4-alpine','redis-server','--appendonly','yes','--appendfsync','always','--maxmemory-policy','noeviction')
+  launch(name,'-p',f'127.0.0.1:{number}:6379','redis:7.4-alpine','redis-server','--appendonly','yes','--appendfsync','always','--maxmemory-policy','noeviction','--latency-monitor-threshold','1')
   env['DOGRS_REDIS_URL']=f'redis://127.0.0.1:{number}/';env['DOGRS_REDIS_REQUIRE_AOF']='1';wait_port(number)
  else:
   network=run;command('docker','network','create',network)
@@ -208,6 +208,12 @@ try:
    # Collect provider costs without changing its persistence or rewrite policy.
    for section in ('persistence','stats','memory','commandstats','latencystats'):
     (folder/f'redis-{section}.txt').write_text(command('docker','exec',name,'redis-cli','INFO',section))
+   # Server-side events separate persistence stalls from command execution.
+   # Do not capture SLOWLOG arguments: queue payloads can contain private data.
+   events=json.loads(command('docker','exec',name,'redis-cli','--json','LATENCY','LATEST'))
+   (folder/'redis-latency-events.json').write_text(json.dumps(events,indent=2))
+   histories={event[0]:json.loads(command('docker','exec',name,'redis-cli','--json','LATENCY','HISTORY',event[0])) for event in events}
+   (folder/'redis-latency-history.json').write_text(json.dumps(histories,indent=2))
    (folder/'redis-durability-settings.txt').write_text(command('docker','exec',name,'redis-cli','CONFIG','GET','appendfsync','appendonly','auto-aof-rewrite-percentage','auto-aof-rewrite-min-size','no-appendfsync-on-rewrite','maxmemory-policy'))
   print(json.dumps({'backend':a.backend,'restored_to_fresh_container':a.restore,'outage_seconds':a.outage_seconds,'replicas':3 if a.backend=='nats' else 1,'sync_policy':'always' if a.backend in ('redis','nats') else 'PostgreSQL default fsync/synchronous_commit','measurement':a.admission_mode or 'queue-capacity','passed':result.returncode==0,'capacity_log':str(folder/'capacity.log')}))
   raise SystemExit(result.returncode)
