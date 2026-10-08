@@ -12,8 +12,6 @@ pub struct RedisConfig {
 }
 pub struct RedisStore {
     manager: ConnectionManager,
-    producer: ConnectionManager,
-    enqueue_slots: tokio::sync::Semaphore,
     checked: dashmap::DashSet<String>,
 }
 pub type RedisBackend = DurableBackend<RedisStore>;
@@ -113,21 +111,9 @@ impl RedisBackend {
             )
             .await
             .map_err(error)?;
-        let producer = client
-            .get_connection_manager_with_config(
-                redis::aio::ConnectionManagerConfig::new()
-                    .set_number_of_retries(3)
-                    .set_max_delay(500)
-                    .set_connection_timeout(std::time::Duration::from_secs(5))
-                    .set_response_timeout(std::time::Duration::from_secs(10)),
-            )
-            .await
-            .map_err(error)?;
         Ok(Self {
             store: RedisStore {
                 manager,
-                producer,
-                enqueue_slots: tokio::sync::Semaphore::new(32),
                 checked: Default::default(),
             },
             lease_duration: std::time::Duration::from_secs(300),
@@ -186,11 +172,7 @@ impl RedisStore {
         } else {
             "ready"
         };
-        let mut connection = if enqueue {
-            self.producer.clone()
-        } else {
-            self.manager.clone()
-        };
+        let mut connection = self.manager.clone();
         redis::Script::new(include_str!("redis_write.lua"))
             .key(format!("{p}:meta"))
             .key(format!("{p}:payload"))
@@ -225,15 +207,6 @@ impl RedisStore {
 }
 impl RedisStore {
     async fn update_inner(&self, tenant: &str, op: &Operation) -> QueueResult<Outcome> {
-        // Bound bulk producers before they fill the shared multiplexed connection.
-        // Claims and completions do not acquire these slots, so producer backlog
-        // cannot consume every pending command position. Waiting stays inside the
-        // existing operation deadline and cancellation releases the permit.
-        let _enqueue_permit = if matches!(op, Operation::Enqueue(_)) {
-            Some(self.enqueue_slots.acquire().await.map_err(error)?)
-        } else {
-            None
-        };
         self.check_legacy(tenant).await?;
         let p = prefix(tenant);
         if let Operation::Purge(before) = op {
