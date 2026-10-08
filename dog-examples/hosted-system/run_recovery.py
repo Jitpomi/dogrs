@@ -42,6 +42,7 @@ def wait_port(number):
    time.sleep(.2)
 try:
  (folder/'environment.json').write_text(json.dumps({
+  'backend':a.backend,
   'host_architecture':platform.machine(),'host_logical_cpus':os.cpu_count(),
   'docker':json.loads(command('docker','info','--format','{"cpus":{{.NCPU}},"memory_bytes":{{.MemTotal}},"architecture":"{{.Architecture}}"}')),
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),

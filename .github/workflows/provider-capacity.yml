@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Attribution profiles are diagnostics, not production acceptance
+        description: Queue acceptance, repeated comparisons, or admission-only attribution diagnostics
         type: choice
         options: [queue, queue-comparison, all-backends, attribution]
         default: queue
@@ -312,7 +312,7 @@ jobs:
               found = False
               for log in logs:
                   environment = json.loads((log.parent / 'environment.json').read_text())
-                  summary.write(f"\nFixture partitions: {environment.get('postgres_fixture_partitions', 0)}\n\n")
+                  summary.write(f"\nBackend: {environment.get('backend', 'not recorded')}\n\nFixture partitions: {environment.get('postgres_fixture_partitions', 0)}\n\n")
                   for line in log.read_text().splitlines():
                       try:
                           result = json.loads(line)

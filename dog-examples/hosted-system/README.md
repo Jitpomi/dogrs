@@ -93,7 +93,9 @@ reserves framing and completion space before admitting work.
 Aiven Valkey reports `aof_enabled:0`; Aiven does not support AOF. Its successful
 application-process recovery is **not** evidence of lossless recovery after a
 provider server crash. Use a suitably persistent/replicated deployment or another
-ledger for that requirement. Redis and JetStream still serialize tenant state. PostgreSQL v2 uses per-job rows
+ledger for that requirement. Current Redis and JetStream adapters use per-job
+records and separate immutable payloads; see [KV-STORAGE.md](../../dog-queue/KV-STORAGE.md)
+for their layout and migration limits. PostgreSQL v2 uses per-job rows
 and binary payloads; see its explicit offline migration requirements in
 [POSTGRES.md](../../dog-queue/POSTGRES.md). A small hosted run does not establish
 aggregate production capacity.
@@ -156,8 +158,9 @@ python3 dog-examples/hosted-system/run_recovery.py nats --capacity \
 
 Repeat on fresh fixtures and inspect every verdict. A lower-rate pass never
 reclassifies a failed 1,000/s run. The Provider capacity manual workflow exposes
-all three rates and the 120-second duration; pull requests target 900/s. Attribution profiles retain their original fixed rate and reject a
-non-default rate in the runner. Capacity results record the actual per-tenant rate.
+all three rates and the 120-second duration; pull requests target 900/s. Attribution profiles use the selected rate too; their
+admission-only cases do not certify full queue execution or recovery. Capacity
+results record the actual per-tenant rate.
 
 ### Compare diagnostics on one runner
 
@@ -175,3 +178,25 @@ in trial subdirectories. The workflow's summary scans these subdirectories.
 Do not combine this mode with other fixture-comparison settings or profiling
 experiments: use the ordinary atomic/shared-connection defaults. Same-runner
 repeats control machine assignment but do not guarantee constant disk contention.
+
+### Compare all backends on one runner
+
+Select `all-backends` in the Provider capacity manual workflow, 64 KiB payloads,
+60 seconds and rate 9. It builds one release binary, then runs PostgreSQL, Redis,
+NATS, NATS, Redis, PostgreSQL sequentially with fresh fixtures on the same host.
+It retains the ordinary worker counts (1, 1, 2 per tenant), shards (1, 1, 16),
+durability and five-second drain. All six cases must pass; a later passing case
+cannot erase an earlier failure. This complements the ordinary matrix, which
+assigns a separate runner to each backend.
+
+The optional runner choice labels a standard x86 or ARM environment; it does
+not increase resources or promise equivalent disk performance. Artifacts record
+Linux CPU, block-device and filesystem information. Diagnostics additionally
+sample host-wide I/O counters/pressure; those include unrelated host work and
+are not per-operation fsync timings. Keep hardware, diagnostic mode and results
+together when comparing runs. See [observed runner variance](../../docs/capacity-runner-variance.md).
+
+For a bounded worker-concurrency experiment, ordinary `queue` mode with
+`workers_per_tenant=compare` tests NATS 2/8/8/2 or Redis 1/4/4/1 on one runner.
+It changes worker concurrency only, retains all misses and leaves defaults
+unchanged. Do not combine it with other comparison modes.
