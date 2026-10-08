@@ -7,7 +7,7 @@ on:
       mode:
         description: Queue acceptance, repeated comparisons, or admission-only attribution diagnostics
         type: choice
-        options: [queue, queue-comparison, all-backends, attribution]
+        options: [queue, queue-comparison, nats-pipeline-comparison, all-backends, attribution]
         default: queue
       runner:
         description: Standard free public-repository runner for a labelled hardware comparison
@@ -178,6 +178,21 @@ jobs:
             test "$PAYLOAD_BYTES" = 65536
             python3 dog-examples/hosted-system/compare_queue_diagnostics.py "$BACKEND" --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --report-dir provider-capacity
             exit $?
+          fi
+          if [ "$CAPACITY_MODE" = nats-pipeline-comparison ]; then
+            test "$BACKEND" = nats
+            test "$PAYLOAD_BYTES" = 65536
+            test "$NATS_ATOMIC" = on
+            test "$NATS_CONNECTIONS" = shared
+            test "$DOGRS_CAPACITY_SHARDS" = 16
+            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-pipeline-comparison
+            export DOGRS_CAPACITY_WORKERS=8
+            export DOGRS_NATS_UPDATE_CONCURRENCY=1
+            status=0
+            for slots in 2 4 4 2; do
+              DOGRS_NATS_ENQUEUE_CONCURRENCY="$slots" python3 dog-examples/hosted-system/run_recovery.py nats --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
           fi
           if [ "$WORKER_COMPARISON" = compare ]; then
             case "$BACKEND" in

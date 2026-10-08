@@ -62,6 +62,8 @@ try:
   'comparison_tenant':os.environ.get('DOGRS_CAPACITY_COMPARISON_TENANT') if a.capacity else None,
   'nats_connections':os.environ.get('DOGRS_NATS_CONNECTIONS','shared'),
   'nats_atomic':os.environ.get('DOGRS_NATS_ATOMIC')!='0',
+  'nats_enqueue_concurrency':int(os.environ.get('DOGRS_NATS_ENQUEUE_CONCURRENCY','2')),
+  'nats_update_concurrency':int(os.environ.get('DOGRS_NATS_UPDATE_CONCURRENCY','1')),
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),
   'nats_storage':'anonymous Docker volume at /data',
  },indent=2))
