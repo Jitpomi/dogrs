@@ -68,3 +68,10 @@ The default capacity gate remains 100 tenants, 900 jobs/s, 64 KiB payloads, a
 backends, but [the later matrix run](https://github.com/Jitpomi/dogrs/actions/runs/37788570890)
 passed PostgreSQL and Redis and failed NATS. Do not market 900/s as a universal
 throughput guarantee or describe the full capacity matrix as passing.
+
+A subsequent release-candidate run on `708c9a9` also missed the gate for all three:
+PostgreSQL accepted/completed 46,182/44,959; Redis 52,900/42,393; JetStream
+32,109/21,831. PostgreSQL and Redis recorded zero operation errors; JetStream
+recorded a submission deadline with unknown unfinished commit outcomes. These
+results reinforce that the gate is deployment-dependent and not a release throughput
+guarantee. [Release-candidate capacity run](https://github.com/Jitpomi/dogrs/actions/runs/37792769166).
