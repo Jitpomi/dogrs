@@ -89,7 +89,7 @@ on:
         options: ['1', '4', '16', 'compare']
         default: '1'
       workers_per_tenant:
-        description: Worker concurrency (auto preserves baseline; compare tests NATS 2/8/8/2 on one runner)
+        description: Worker concurrency (auto preserves baseline; compare tests NATS 2/8/8/2 or Redis 1/4/4/1 on one runner)
         type: choice
         options: ['auto', '1', '2', '4', '8', '16', 'compare']
         default: 'auto'
@@ -152,13 +152,17 @@ jobs:
             exit $?
           fi
           if [ "$WORKER_COMPARISON" = compare ]; then
-            test "$BACKEND" = nats
+            case "$BACKEND" in
+              nats) worker_order="2 8 8 2" ;;
+              redis) worker_order="1 4 4 1" ;;
+              *) echo "Worker comparison supports NATS and Redis" >&2; exit 2 ;;
+            esac
             test "$NATS_ATOMIC" = on
             test "$NATS_CONNECTIONS" = shared
             export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-workers
             status=0
-            for workers in 2 8 8 2; do
-              DOGRS_CAPACITY_WORKERS="$workers" python3 dog-examples/hosted-system/run_recovery.py nats --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            for workers in $worker_order; do
+              DOGRS_CAPACITY_WORKERS="$workers" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
             done
             exit "$status"
           fi
