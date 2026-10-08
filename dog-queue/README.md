@@ -99,7 +99,11 @@ replication work without changing revision checks or the stored format. See
 ## Capacity, security and migration
 
 PostgreSQL v2 uses indexed job rows, binary payloads and a bounded connection pool.
-Redis uses one multiplexed connection manager per backend instance. Tenant
+Redis uses one multiplexed connection manager per backend instance. The Redis
+client dependency is at least 1.7.1, including the upstream fix for a duplex
+read/write deadlock under backpressure (redis-rs #1955). A deterministic
+request/reply pressure test guards this behavior. This fixes a transport defect,
+not a universal throughput guarantee. Tenant
 registration and the legacy check run once per tenant per instance. Enqueue
 metadata is constructed with client time; Lua checks eligibility using Redis TIME,
 and acknowledgement scripts recheck lease expiry on the server at commit.

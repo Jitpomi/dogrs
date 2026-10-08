@@ -158,3 +158,20 @@ Repeat on fresh fixtures and inspect every verdict. A lower-rate pass never
 reclassifies a failed 1,000/s run. The Provider capacity manual workflow exposes
 all three rates and the 120-second duration; pull requests target 900/s. Attribution profiles retain their original fixed rate and reject a
 non-default rate in the runner. Capacity results record the actual per-tenant rate.
+
+### Compare diagnostics on one runner
+
+The Provider capacity workflow's `queue-comparison` mode runs Redis or NATS four
+times on the same runner, with fresh storage each time: diagnostics off, on, on,
+off. Select 64 KiB payloads and 60 or 120 seconds. One release binary includes the
+diagnostic feature throughout; the environment toggle changes between trials.
+For NATS, diagnostic mode also enables the fixture's server-stack sampling.
+This compares the entire diagnostic mode, not just one counter's overhead.
+
+`compare_queue_diagnostics.py` saves every measurement and the binary hash in
+`diagnostic-comparison.json`. Any missing measurement or failed trial fails the
+comparison. Individual logs, environment snapshots and server diagnostics remain
+in trial subdirectories. The workflow's summary scans these subdirectories.
+Do not combine this mode with other fixture-comparison settings or profiling
+experiments: use the ordinary atomic/shared-connection defaults. Same-runner
+repeats control machine assignment but do not guarantee constant disk contention.
