@@ -9,6 +9,17 @@ use typedb_driver::{given::GivenRows, Transaction, TypeDBDriver};
 use typeql::{expression::Expression, query::QueryStructure, TypeRef, Variable};
 mod compiler;
 
+/// A proven policy denial, not a parser, driver or schema-integrity failure.
+/// Keep this typed: user-controlled error text must never select an HTTP status.
+#[derive(Debug)]
+struct PolicyDenied;
+impl std::fmt::Display for PolicyDenied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Schema policy does not authorize this operation")
+    }
+}
+impl std::error::Error for PolicyDenied {}
+
 #[derive(Default)]
 struct PendingTransaction(Option<Transaction>);
 impl Drop for PendingTransaction {
@@ -428,6 +439,8 @@ fn operation_error(error: anyhow::Error, committing: bool, deadline: bool) -> do
         dog_core::DogError::unavailable("TypeDB commit outcome unknown; reconcile before retrying")
     } else if deadline {
         dog_core::DogError::timeout("TypeDB policy operation timed out before commit")
+    } else if error.chain().any(|cause| cause.is::<PolicyDenied>()) {
+        dog_core::DogError::forbidden("Schema policy does not authorize this operation")
     } else {
         dog_core::DogError::general_error("TypeDB policy operation denied or failed before commit")
     };

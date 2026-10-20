@@ -77,6 +77,19 @@ async fn schema_policy_failure_preserves_private_cause_and_rolls_back() -> anyho
         assert!(!wire.contains("checkpoint"));
         let remaining = trusted.read(json!({"query":"match $n isa note, has title 'private-rollback-probe'; fetch {'title':$n.title};"})).await?;
         assert!(remaining["ok"]["answers"].as_array().unwrap().is_empty());
+        trusted.write(json!({"query":"insert $c isa company,has tenant-key 'a'; $b isa book,has title 'retained'; (company:$c,book:$b) isa book-owner;"})).await?;
+        for query in [
+            "match $b isa book; delete $b;",
+            "match $b isa book; delete $b; fetch {'done':true};",
+        ] {
+            let denied=scoped.write(&scope,json!({"query":query})).await.unwrap_err();
+            let error=denied.downcast_ref::<dog_core::DogError>().expect("Typed denial");
+            assert_eq!(error.code(),403,"{error:?}");
+            assert!(error.source_ref().is_some());
+            assert!(!serde_json::to_string(&error.sanitize_for_client())?.contains("book"));
+            let retained=trusted.read(json!({"query":"match $b isa book; fetch {'title':$b.title};"})).await?;
+            assert_eq!(retained["ok"]["answers"].as_array().unwrap().len(),1);
+        }
         Ok::<_, anyhow::Error>(())
     }).catch_unwind().await;
     driver.databases().get(&database).await?.delete().await?;

@@ -1081,8 +1081,11 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
     async fn type_function(&self, type_: &str, operation: &str) -> Result<String> {
-        let q = format!("match $t label {type_}; let $f = get_meta('dog.security.{operation}', $t); fetch {{ 'f': $f }};");
-        self.metadata_function(&q, "f").await
+        // Absent permission is an intentional deny-by-default decision. Invalid
+        // declared policies still fail as server errors; do not mask corruption.
+        self.optional_type_function(type_, operation)
+            .await?
+            .ok_or_else(|| super::PolicyDenied.into())
     }
     async fn optional_type_function(&self, type_: &str, operation: &str) -> Result<Option<String>> {
         let key = format!("dog.security.{operation}");
@@ -1101,9 +1104,10 @@ impl<'a> Compiler<'a> {
         }
         let q = format!("match $t label {type_}; let $f = get_meta('dog.security.{operation}', $t); fetch {{ 'f': $f }};");
         let rows = self.rows(&q).await?;
-        if rows.is_empty() {
-            return Ok(None);
-        }
+        ensure!(
+            !rows.is_empty(),
+            "Declared schema policy metadata is missing"
+        );
         Ok(Some(self.metadata_function(&q, "f").await?))
     }
     async fn metadata_function(&self, query: &str, key: &str) -> Result<String> {
