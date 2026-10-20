@@ -1,6 +1,6 @@
 [package]
 name = "dog-typedb"
-version = "0.3.0"
+version = "0.3.3"
 edition = "2021"
 authors = ["Jitpomi <hello@jitpomi.com>"]
 description = "TypeDB database integration for DogRS - adapters, utilities, and TypeQL query builders"
@@ -22,13 +22,20 @@ async-trait = "0.1.89"
 dog-core = { path = "../dog-core", version = "0.3.0" }
 serde_json = "1.0.150"
 typedb-driver = "=3.13.6"
+typeql = "=3.13.4"
 futures = "0.3"
-tokio = { version = "1.52", features = ["sync", "time", "fs", "io-util"] }
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1.52", features = ["rt", "sync", "time", "fs", "io-util"] }
 
 [dev-dependencies]
+dog-transport = { path = "../dog-transport", version = "0.3.0", features = ["http"] }
+axum = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
-uuid = { version = "1", features = ["v4"] }
 
 [lib]
 name = "dog_typedb"

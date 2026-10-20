@@ -8,7 +8,7 @@ edition = "2021"
 anyhow = "1.0.102"
 async-trait = "0.1.89"
 poem = { version = "3.0.4", features = ["tempfile", "tower-compat"] }
-chrono = { version = "0.4.45", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 dog-transport = { path = "../../dog-transport", features = ["http"] }
 dog-core = { path = "../../dog-core", features = ["json", "adapters"] }
 dog-schema = { path = "../../dog-schema" }

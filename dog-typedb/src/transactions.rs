@@ -201,7 +201,7 @@ impl QueryOptions {
         );
         Ok(())
     }
-    fn validate_query(&self, query: &str) -> Result<()> {
+    pub(crate) fn validate_query(&self, query: &str) -> Result<()> {
         self.validate()?;
         anyhow::ensure!(!query.trim().is_empty(), "Query must not be blank");
         anyhow::ensure!(
@@ -281,6 +281,21 @@ pub async fn execute_query_with_options(
     mode: TransactionType,
     options: &QueryOptions,
 ) -> Result<Value> {
+    execute_query_with_result_check(driver, database, query, mode, options, |_| Ok(())).await
+}
+
+// The scoped adapter checks its response contract BEFORE any write commits.
+pub(crate) async fn execute_query_with_result_check<F>(
+    driver: &TypeDBDriver,
+    database: &str,
+    query: &str,
+    mode: TransactionType,
+    options: &QueryOptions,
+    check: F,
+) -> Result<Value>
+where
+    F: FnOnce(&mut Value) -> Result<()>,
+{
     options.validate_query(query)?;
     let mut committing = false;
     let operation = async {
@@ -299,7 +314,8 @@ pub async fn execute_query_with_options(
             )
             .await?;
         let answer = tx.query(query).await?;
-        let result = typedb_answer_to_http_ok(answer, mode.as_str(), query, options).await?;
+        let mut result = typedb_answer_to_http_ok(answer, mode.as_str(), query, options).await?;
+        check(&mut result)?;
         if !matches!(mode, TransactionType::Read) {
             committing = true;
             tx.commit().await.map_err(|e| {
@@ -379,7 +395,7 @@ where
     Ok(envelope(query_type, answer_type, query, answers))
 }
 
-async fn typedb_answer_to_http_ok(
+pub(crate) async fn typedb_answer_to_http_ok(
     answer: typedb_driver::answer::QueryAnswer,
     query_type: &str,
     query: &str,

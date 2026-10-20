@@ -4,6 +4,70 @@ use dog_core::DogAppBuilder;
 use serde_json::{json, Value};
 use std::sync::Arc;
 type P = AuthParams<()>;
+
+#[tokio::test]
+async fn strict_hook_reauthenticates_internal_and_cached_calls() {
+    use dog_core::hooks::DogBeforeHook;
+    let mut builder = DogAppBuilder::<Value, P>::new();
+    let mut options = AuthOptions::default();
+    options.jwt.secret = Some("strict-test-key-at-least-32-bytes-long".into());
+    let mut base = AuthenticationService::builder(&mut builder, Some(options))
+        .unwrap()
+        .with_token_store(Arc::new(TestStore::default()));
+    base.register("jwt", Arc::new(dog_auth::JwtStrategy::<P>::new()));
+    let service = Arc::new(AuthenticationService::new(Arc::new(base.build())));
+    let token = service
+        .base
+        .create_access_token(json!({"sub":"alice"}), None)
+        .await
+        .unwrap();
+    let app = builder.build();
+    let mut ctx = dog_core::HookContext::new(
+        dog_core::TenantContext::new("tenant-a"),
+        dog_core::ServiceMethodKind::Custom("read"),
+        P::default(),
+        dog_core::ServiceCaller::new(app.clone()),
+        app.config_snapshot(),
+    );
+    let hook = AuthenticateHook::new(service.clone(), vec!["jwt".into()]).strict();
+    ctx.params.authenticated = true;
+    ctx.params.auth_result = Some(json!({"user":{"id":"forged"}}));
+    assert!(hook.run(&mut ctx).await.is_err());
+    assert!(!ctx.params.authenticated);
+    assert_eq!(ctx.params.auth_result, Some(Value::Null));
+    ctx.params.authentication = Some(dog_auth::AuthenticationRequest {
+        strategy: Some("jwt".into()),
+        data: serde_json::from_value(json!({"accessToken":token})).unwrap(),
+    });
+    assert!(
+        hook.run(&mut ctx).await.is_err(),
+        "strict mode accepted a payload instead of a bearer header"
+    );
+    ctx.params
+        .headers
+        .insert("authorization".into(), format!("Bearer {token}"));
+    hook.run(&mut ctx).await.unwrap();
+    assert!(ctx.params.authenticated);
+    assert_eq!(
+        ctx.params.auth_result.as_ref().unwrap()["payload"]["sub"],
+        "alice"
+    );
+    service
+        .remove(
+            Some(&token),
+            &dog_auth::AuthenticationParams::default(),
+            &mut ctx,
+            &["jwt".into()],
+        )
+        .await
+        .unwrap();
+    assert!(
+        hook.run(&mut ctx).await.is_err(),
+        "cached internal call reused revoked token"
+    );
+    assert!(!ctx.params.authenticated);
+    assert_eq!(ctx.params.auth_result, Some(Value::Null));
+}
 fn setup() -> (DogAppBuilder<Value, P>, Arc<AuthenticationService<P>>) {
     let mut builder = DogAppBuilder::new();
     let mut options = AuthOptions::default();
