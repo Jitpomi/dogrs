@@ -16,7 +16,10 @@ class QualificationEvidenceTests(unittest.TestCase):
                 folder = self.root / f'{backend}-{index}'
                 folder.mkdir()
                 environment = dict(backend=backend, queue_stage_timings=False,
-                                   postgres_wait_sampling=False, cpu_sampling=False)
+                                   postgres_wait_sampling=False, cpu_sampling=False,
+                                   storage_shards=16, nats_enqueue_concurrency=2,
+                                   nats_update_concurrency=1, nats_atomic=True,
+                                   nats_connections="shared")
                 (folder / 'environment.json').write_text(json.dumps(environment))
                 result = dict(tenants=100, jobs_per_second_per_tenant=9, seconds=60,
                               payload_bytes=65536, offered=54000, accepted=54000,
@@ -48,6 +51,30 @@ class QualificationEvidenceTests(unittest.TestCase):
         counts, errors = verify(self.root)
         self.assertEqual(counts, dict(postgres=6, redis=6, nats=6))
         self.assertEqual(errors, [])
+
+    def test_compact_layout_must_be_explicit_and_match_all_settings(self):
+        for folder in self.root.glob('nats-*'):
+            path = folder / 'environment.json'
+            env = json.loads(path.read_text())
+            env.update(storage_shards=4, nats_enqueue_concurrency=8, nats_update_concurrency=4)
+            path.write_text(json.dumps(env))
+            path = folder / 'capacity.log'
+            result = json.loads(path.read_text())
+            result['shards'] = '4'
+            path.write_text(json.dumps(result))
+            for path in folder.glob('*-stream-state.json'):
+                state = json.loads(path.read_text())
+                for account in state['account_details']:
+                    account['stream_detail'] = [s for s in account['stream_detail']
+                                               if int(s['name'].split('-')[-1]) < 4]
+                path.write_text(json.dumps(state))
+        self.assertTrue(verify(self.root)[1])
+        self.assertEqual(verify(self.root, 'compact-4')[1], [])
+        path = self.root / 'nats-0/environment.json'
+        env = json.loads(path.read_text())
+        env['nats_update_concurrency'] = 8
+        path.write_text(json.dumps(env))
+        self.assertTrue(verify(self.root, 'compact-4')[1])
 
     def test_missing_or_duplicate_results_fail(self):
         log = self.root / 'postgres-0/capacity.log'

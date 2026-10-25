@@ -115,3 +115,39 @@ Artifacts are retained in the run and locally under
 `artifacts/dogrs-capacity-reliability-2026-10-25/x64-qualification-40224103288`
 in the task workspace. Docker Desktop was restored; the temporary Lima capacity
 VM is stopped and no continuously listening runner was installed.
+
+## Mac VM follow-up
+
+The Mac VM remains subject to its host's CPU and storage contention. A follow-up
+comparison used the same release binary, eight-vCPU/16 GiB VM, sixteen NATS
+shards, two workers per tenant, and unchanged 900/s workload. Docker Desktop was
+stopped for this session. Ordinary rootful Docker was tested against the existing
+rootless Docker in rootful/rootless/rootless/rootful order. Both rootless cases
+passed; rootful passed one and failed one. The first rootful case accepted 50,434,
+completed 45,102, recorded 3,279 overload rejections, 55 late offers and one
+submission-deadline error. Host load varied, so this does not establish a causal
+networking advantage. No networking migration or queue tuning was adopted.
+
+A fresh eighteen-measurement Mac qualification began at 19:46 UTC on October 25
+with the original rootless setup, Docker Desktop stopped, AC power and sleep
+inhibited. All cases run even after a failure. The complete result was PostgreSQL 6/6, Redis 6/6, NATS 2/6. The independent
+verifier rejected all four failing NATS measurements. This Mac qualification
+failed; earlier successful diagnostic NATS trials do not override that result.
+
+The first Mac follow-up NATS failure admitted/completed 53,212 of 54,000 jobs,
+with 788 overload rejections and 393 late offers. Its retained stream snapshots
+show all expected jobs on the four-to-six-tenant shards, while the two busiest
+(eight-tenant) shards accepted 4,085 and 4,105 of 4,320 expected jobs. This motivates
+a fresh-topology diagnostic: four shards with eight enqueue and four metadata
+lanes per shard, instead of sixteen shards with two enqueue and one metadata
+lane. Both configurations have 32 enqueue and 16 metadata execution lanes in
+total. This is only a hypothesis until tested; never change the shard count of
+an existing ledger without a migration.
+
+Both compact-layout trials and both original-layout controls passed in the
+four/sixteen/sixteen/four comparison. This alone does not establish that the
+layout resolves intermittent failures. A new complete eighteen-case Mac
+qualification started at 20:13 UTC using the explicit `compact-4` layout.
+Results are pending. The independent verifier checks the four-stream topology,
+eight enqueue/four metadata lanes, and the unchanged workload and durability
+criteria; selecting this profile does not accept a sixteen-stream result.

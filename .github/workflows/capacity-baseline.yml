@@ -3,6 +3,12 @@ name: Dedicated capacity baseline
 # Never execute pull-request code automatically on the dedicated machine.
 on:
   workflow_dispatch:
+    inputs:
+      nats_layout:
+        description: Fixed layout for fresh fixtures only; never reshard an existing ledger
+        type: choice
+        options: [original-16, compact-4]
+        default: original-16
 
 permissions:
   contents: read
@@ -30,7 +36,10 @@ jobs:
       DOGRS_NATS_IMAGE: nats:2.15.0-alpine
       DOGRS_NATS_ATOMIC: '1'
       DOGRS_NATS_CONNECTIONS: shared
-      DOGRS_NATS_ENQUEUE_CONCURRENCY: '2'
+      NATS_LAYOUT: ${{ inputs.nats_layout || 'original-16' }}
+      NATS_SHARDS: ${{ inputs.nats_layout == 'compact-4' && '4' || '16' }}
+      DOGRS_NATS_ENQUEUE_CONCURRENCY: ${{ inputs.nats_layout == 'compact-4' && '8' || '2' }}
+      DOGRS_NATS_UPDATE_CONCURRENCY: ${{ inputs.nats_layout == 'compact-4' && '4' || '1' }}
       DOGRS_QUEUE_TIMINGS: '0'
       DOGRS_PG_PROFILE: '0'
     steps:
@@ -63,7 +72,7 @@ jobs:
             echo "Qualification round $round/3"
             for provider in postgres redis nats nats redis postgres; do
               workers=1; shards=1; storage=extended
-              if [ "$provider" = nats ]; then workers=2; shards=16; fi
+              if [ "$provider" = nats ]; then workers=2; shards="$NATS_SHARDS"; fi
               if [ "$provider" = postgres ]; then storage=external; fi
               DOGRS_CAPACITY_WORKERS="$workers" DOGRS_CAPACITY_SHARDS="$shards" DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$provider" --capacity --rate 9 --seconds 60 --bytes 65536 --report-dir provider-capacity || status=1
             done
@@ -71,7 +80,7 @@ jobs:
           exit "$status"
       - name: Verify complete qualification evidence
         if: always()
-        run: python3 .github/scripts/verify_capacity_reports.py provider-capacity
+        run: python3 .github/scripts/verify_capacity_reports.py provider-capacity --nats-layout "$NATS_LAYOUT"
       - name: Record qualification scope
         if: always()
         run: |

@@ -11,7 +11,11 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def verify_case(folder, backend, result):
+NATS_LAYOUTS = {"original-16": (16, 2, 1), "compact-4": (4, 8, 4)}
+
+
+def verify_case(folder, backend, result, nats_layout="original-16"):
+    nats_shards, _, _ = NATS_LAYOUTS[nats_layout]
     expected = dict(tenants=100, jobs_per_second_per_tenant=9, seconds=60,
                     payload_bytes=65536, offered=54000, accepted=54000,
                     completed=54000, verified_terminal_once=54000,
@@ -31,7 +35,7 @@ def verify_case(folder, backend, result):
     require(result.get('latency_includes_recovery') is False
             and result.get('overload_recovery') is None, 'extra recovery window used')
     require(result.get('stage_timings') is None, 'profiled run is not qualification')
-    require(result.get('shards') == ('16' if backend == 'nats' else '1'),
+    require(result.get('shards') == (str(nats_shards) if backend == 'nats' else '1'),
             'unexpected storage topology')
     if backend == 'postgres':
         settings = {}
@@ -69,10 +73,11 @@ def verify_case(folder, backend, result):
                             'NATS stream is not file-backed with three replicas')
                     streams.add(stream['name'])
         require(len(servers) == 3, 'expected three distinct NATS servers')
-        require(len(streams) == 16, 'expected sixteen NATS streams')
+        require(len(streams) == nats_shards, f'expected {nats_shards} NATS streams')
 
 
-def verify(root):
+def verify(root, nats_layout="original-16"):
+    require(nats_layout in NATS_LAYOUTS, "unknown NATS layout")
     counts = Counter()
     errors = []
     for log in sorted(root.rglob('capacity.log')):
@@ -83,6 +88,15 @@ def verify(root):
             counts[backend] += 1
             for flag in ('queue_stage_timings', 'postgres_wait_sampling', 'cpu_sampling'):
                 require(environment.get(flag) is False, f'{flag} enabled or missing')
+            if backend == 'nats':
+                shards, enqueues, updates = NATS_LAYOUTS[nats_layout]
+                for key, expected in [('storage_shards', shards),
+                                      ('nats_enqueue_concurrency', enqueues),
+                                      ('nats_update_concurrency', updates)]:
+                    require(type(environment.get(key)) is int and environment[key] == expected,
+                            f'{key}: expected {expected}')
+                require(environment.get('nats_atomic') is True, 'atomic batching disabled')
+                require(environment.get('nats_connections') == 'shared', 'unexpected connections')
             results = []
             for line in log.read_text().splitlines():
                 if line.startswith('{'):
@@ -90,7 +104,7 @@ def verify(root):
                     if isinstance(row, dict) and 'offered' in row:
                         results.append(row)
             require(len(results) == 1, 'expected exactly one result per fixture')
-            verify_case(log.parent, backend, results[0])
+            verify_case(log.parent, backend, results[0], nats_layout)
         except (ValueError, OSError, KeyError, TypeError) as error:
             errors.append(f'{log.parent.name}: {error}')
     for backend in ('postgres', 'redis', 'nats'):
@@ -102,7 +116,8 @@ def verify(root):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('reports', type=Path)
+    parser.add_argument('--nats-layout', choices=NATS_LAYOUTS, default='original-16')
     args = parser.parse_args()
-    counts, errors = verify(args.reports)
+    counts, errors = verify(args.reports, args.nats_layout)
     print(json.dumps(dict(measurements=counts, passed=not errors, errors=errors), indent=2))
     raise SystemExit(bool(errors))

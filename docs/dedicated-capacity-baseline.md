@@ -95,3 +95,16 @@ four-logical-CPU AMD EPYC 7763 runner, Rust 1.99.1 and recorded storage setup.
 It does not qualify the Mac VM or all `ubuntu-latest` allocations. See
 [the investigation report](capacity-reliability-2026-10-25.md#completed-x64-qualification)
 for timing, storage-durability limitations and the retained failed experiments.
+
+### Explicit layout trials
+
+The dedicated workflow accepts `nats_layout=original-16` (the unchanged default)
+or `compact-4` for fresh disposable fixtures. The latter uses four buckets with
+eight enqueue and four metadata lanes per bucket; the original uses sixteen
+buckets with two enqueue and one metadata lane each. Both total 32 enqueue and
+16 metadata execution lanes. This does not change replication, fsync, rate,
+payload size, worker count or drain deadline. The verifier must receive the same
+explicit layout using `--nats-layout compact-4`. It checks the recorded lanes and
+stream count, and will not infer a profile from the result. The Mac compact-layout
+qualification is pending; this option is not yet a validated production profile.
+Never apply a changed shard count to existing stored jobs without migration.
