@@ -15,7 +15,7 @@ failures are retained, even if later cases pass.
 ## Host selection and operation
 
 The initial candidate is a Lima Ubuntu 24.04 ARM64 VM named `dogrs-capacity`,
-with four virtual CPUs, 16 GiB memory and a 40 GiB virtual disk on the existing
+with eight virtual CPUs, 16 GiB memory and a 40 GiB virtual disk on the existing
 Mac. No paid service is needed. Host folders are not mounted into the VM.
 This is a candidate, not yet a validated 900/s baseline. Mac activity, sleep,
 power and storage contention can still affect it. Run on AC power with other
@@ -42,7 +42,37 @@ failing workload pass automatically.
 
 ## Qualification status
 
-Pending provisioning and repeated measurements. No dedicated-host capacity
-claim or production qualification has been made. Hosted-runner diagnostics may
+The VM and ephemeral runner `dogrs-capacity-macvm` have been provisioned.
+Rust is pinned to 1.99.1, matching the earlier passing hosted build. Docker
+reports eight CPUs and approximately 16 GiB of guest memory. No host home directory
+is mounted. Initial validation is
+[run 40217023372](https://github.com/Jitpomi/dogrs/actions/runs/40217023372).
+The initial four-CPU run failed: Redis passed twice, PostgreSQL completed every
+job but recorded 14 and 9 late offers, and NATS failed both cases. High guest CPU
+pressure was observed during NATS. The VM was then resized to eight CPUs.
+The repeated eight-CPU qualification is
+[run 40217853256](https://github.com/Jitpomi/dogrs/actions/runs/40217853256).
+No overall dedicated-host capacity claim or production qualification has been
+made. Hosted-runner diagnostics may
 still be run manually to study portability; they must not be used to cherry-pick
 an apparent baseline pass.
+
+
+### Eight-CPU results
+
+The six-case run completed with five passes. PostgreSQL and Redis each passed
+both repetitions, accepting, completing and verifying all 54,000 jobs with no
+late offers, overload or operation errors. NATS passed one repetition; the other
+accepted/completed 53,896 jobs and rejected 104 offers, with no late offers or
+operation errors. That run remains failed. A fixed VM improves control of the
+experiment but does not eliminate capacity variability or establish a reliable
+three-provider 900/s guarantee.
+
+The ephemeral runner unregisters after each job. The VM is stopped between
+benchmark sessions to release the Mac's resources. To run again, start it with
+`limactl start --tty=false dogrs-capacity`, register a new ephemeral runner in
+that VM with the same name and labels using a fresh GitHub registration token,
+and dispatch the reviewed workflow ref. Start `~/actions-runner/run.sh` inside
+the guest with `~/.cargo/env` sourced. Do not print or commit registration tokens.
+Keep the Mac awake and otherwise idle throughout the measurement, then stop the
+VM after artifact upload. No login-time service has been installed.
