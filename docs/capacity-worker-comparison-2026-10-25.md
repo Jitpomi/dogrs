@@ -59,3 +59,31 @@ The separate correctness/recovery CI on 7c6a7e3 passed:
 [40212411372](https://github.com/Jitpomi/dogrs/actions/runs/40212411372).
 That verifies the file-journal fix and other correctness checks, not the separate
 sustained-capacity target.
+
+
+## PostgreSQL stage attribution
+
+[Instrumented run 40214506344](https://github.com/Jitpomi/dogrs/actions/runs/40214506344)
+accepted, completed and verified 48,695 of 54,000 offers; the load generator
+rejected 5,305 while its in-flight budgets were full. Operation errors and late
+offers were zero. This is a capacity failure, not a passing recovery run.
+
+Mean enqueue-slot wait was 1,639.212 ms, compared with 0.040 ms for pool
+acquisition and 49.811 ms for the INSERT request. The pool itself was not the
+observed bottleneck. The server recorded 9.094 ms mean INSERT execution time;
+that statistic and client request duration cover different work and should not
+be subtracted to claim an exact commit latency.
+
+Of sampled enqueue backend observations, 79.6% waited on `LWLock/WALWrite`
+and 14.0% on relation extension. These are counts weighted by the number of
+backends in each sample, not percentages of elapsed application time. Observed
+extension waits included the TOAST relation. PostgreSQL I/O statistics recorded
+18.629 aggregate seconds of WAL initialization fsync time and 32.962 seconds
+of normal client-backend WAL fsync time. This supports investigating write and
+commit contention; it does not establish a single hardware-only cause.
+
+The next controlled comparison uses producer caps 16/48/48/16 on one runner,
+with stage/database profiling disabled. The ordinary cap remains 48. No target,
+drain deadline, payload, pool size or durability setting is relaxed. Earlier
+admission batching was already rejected by a matched comparison; see
+[the earlier investigation](redis-postgres-capacity-follow-up.md).
