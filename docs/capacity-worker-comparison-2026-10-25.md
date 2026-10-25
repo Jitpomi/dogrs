@@ -87,3 +87,19 @@ with stage/database profiling disabled. The ordinary cap remains 48. No target,
 drain deadline, payload, pool size or durability setting is relaxed. Earlier
 admission batching was already rejected by a matched comparison; see
 [the earlier investigation](redis-postgres-capacity-follow-up.md).
+
+
+### Producer-cap comparison result
+
+[Run 40215017495](https://github.com/Jitpomi/dogrs/actions/runs/40215017495)
+failed all four cases. At cap 48, accepted/completed counts were 51,864 and
+52,105, with zero operation errors. At cap 16, one case accepted/completed
+51,412; the other accepted 50,831, completed 50,753 within the deadline and
+verified 50,760 later, with one submission-deadline error. The latter must not
+be described as all accepted work completing or as a successful admission run.
+
+Reducing producer concurrency did not fix capacity and performed worse in this
+comparison. Keep cap 48. The ordinary matrix on the same code separately
+[passed all three backends](https://github.com/Jitpomi/dogrs/actions/runs/40215017830).
+Those jobs used different runners; they do not erase this controlled failure.
+No adapter performance fix is claimed by this investigation.

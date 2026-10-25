@@ -346,6 +346,8 @@ jobs:
                       if not isinstance(result, dict) or "offered" not in result:
                           continue
                       found = True
+                      fields = ("offered", "accepted", "completed", "verified_terminal_once", "overload", "late_offers", "error_count", "elapsed_seconds", "postgres_enqueue_concurrency", "passed")
+                      print(json.dumps({"backend": environment.get("backend"), "log": str(log), **{key: result.get(key) for key in fields}}))
                       summary.write("**" + ("Passed" if result.get("passed") is True else "Failed") + "**\n\n")
                       summary.write("| Measurement | Observed |\n|---|---:|\n")
                       for key in ("tenants", "jobs_per_second_per_tenant", "seconds", "payload_bytes", "offered", "accepted", "completed", "verified_terminal_once", "overload", "late_offers", "error_count", "elapsed_seconds"):
