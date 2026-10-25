@@ -99,9 +99,9 @@ on:
         options: ['auto', '1', '2', '4', '8', '16', 'compare']
         default: 'auto'
       postgres_enqueue_concurrency:
-        description: Producer connection cap (none preserves the baseline)
+        description: Producer connection cap (compare tests 16/48/48/16 on one runner)
         type: choice
-        options: ['none', '16', '32', '48']
+        options: ['none', '16', '32', '48', 'compare']
         default: 'none'
 permissions:
   contents: read
@@ -206,6 +206,16 @@ jobs:
             status=0
             for workers in $worker_order; do
               DOGRS_CAPACITY_WORKERS="$workers" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
+          fi
+          if [ "$PRODUCER_CAP" = compare ]; then
+            test "$BACKEND" = postgres
+            test "$WORKER_COMPARISON" = auto
+            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-producers
+            status=0
+            for producers in 16 48 48 16; do
+              DOGRS_PG_ENQUEUE_CONCURRENCY="$producers" python3 dog-examples/hosted-system/run_recovery.py postgres --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
             done
             exit "$status"
           fi
