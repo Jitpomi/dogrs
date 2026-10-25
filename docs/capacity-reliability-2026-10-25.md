@@ -1,6 +1,6 @@
 # Capacity reliability investigation — 2026-10-25
 
-Status: **not qualified at 900/s**. Do not substitute ordinary CI success for capacity evidence.
+Status: **18/18 measurements passed at 900/s on the recorded AMD EPYC 7763 x64 runner**. This is an environment-specific workload qualification, not a guarantee for every runner or production deployment. ARM and local VM failures below remain valid.
 
 All measurements below offer 54,000 unique 64 KiB jobs across 100 tenants over 60 seconds, with the existing five-second drain and 100 ms late-offer threshold. PostgreSQL durable commits, Redis always-fsync, and NATS three file-backed always-fsync replicas remain enabled.
 
@@ -68,3 +68,50 @@ The next qualification uses an isolated x64 job and the original queue settings,
 with all eighteen measurements required. This explicitly evaluates a different
 hardware class rather than treating the failing ARM cases as passed. The actual
 CPU, toolchain and environment must accompany any resulting claim.
+
+The combined eight-shard / 1 MiB batch experiment in
+[run 40224916592](https://github.com/Jitpomi/dogrs/actions/runs/40224916592)
+also failed all four cases. Eight-worker trials admitted/completed 49,542 and
+50,109 jobs. Two-worker trials completed only 17,168 and 20,019. No late offers
+occurred. The experimental branch was removed after retaining its artifacts;
+none of these changes is adopted as a reliability fix.
+
+## Completed x64 qualification
+
+[Run 40224103288](https://github.com/Jitpomi/dogrs/actions/runs/40224103288)
+completed all eighteen predeclared measurements without retries: three rounds of
+PostgreSQL, Redis, NATS, NATS, Redis, PostgreSQL. Source commit was
+`6a5c7e6722352b3cb7ad2418ee048c70b6a8e697`, Rust 1.99.1, x86_64 Linux,
+four logical CPUs on AMD EPYC 7763. The original queue settings were retained.
+
+| Backend | Passed | Accepted / completed / verified | Elapsed range |
+|---|---:|---|---|
+| PostgreSQL | 6/6 | 54,000 / 54,000 / 54,000 each | 60.063–60.084 s |
+| Redis | 6/6 | 54,000 / 54,000 / 54,000 each | 60.048–60.096 s |
+| NATS | 6/6 | 54,000 / 54,000 / 54,000 each | 60.204–61.618 s |
+
+Total: 972,000 unique jobs. Every measurement had zero late offers, overload
+rejections and operation errors. Rate, payload size, drain deadline and provider
+durability settings were not relaxed. The independent report verifier at
+`a0a2dc6` was run against the downloaded artifact and returned six measurements
+per backend, `passed: true`, and no errors. That verifier is now integrated into
+future qualification runs; this run began before its integration.
+
+The result measures queue persistence and payload integrity, not HTTP throughput,
+payment processing, power-loss recovery or a multi-host production cluster.
+Provider fsync settings were checked, but the hosted runner's recorded root
+filesystem uses `nobarrier` and `data=writeback`; this must not be presented as
+proof of storage durability under host/power failure. NATS replicas share this
+one host. The result also does not establish low request latency: PostgreSQL
+enqueue p95 ranged from 1.151 to 1.301 seconds. No latency SLO beyond the declared
+capacity criteria was evaluated.
+
+The supported conclusion is repeated 900/s capacity on this recorded environment.
+`ubuntu-latest` does not guarantee this CPU on later allocations. Requalify a
+production host and storage configuration before promising that deployment's
+capacity. The failed ARM tuning experiments were reverted, not hidden.
+
+Artifacts are retained in the run and locally under
+`artifacts/dogrs-capacity-reliability-2026-10-25/x64-qualification-40224103288`
+in the task workspace. Docker Desktop was restored; the temporary Lima capacity
+VM is stopped and no continuously listening runner was installed.

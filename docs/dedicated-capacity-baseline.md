@@ -84,3 +84,14 @@ and dispatch the reviewed workflow ref. Start `~/actions-runner/run.sh` inside
 the guest with `~/.cargo/env` sourced. Do not print or commit registration tokens.
 Keep the Mac awake and otherwise idle throughout the measurement, then stop the
 VM after artifact upload. No login-time service has been installed.
+
+### Hosted x64 qualification
+
+The predeclared eighteen-case qualification passed in
+[run 40224103288](https://github.com/Jitpomi/dogrs/actions/runs/40224103288):
+six passes per backend at 900/s, 972,000 jobs total, with zero late offers,
+overload or operation errors. The independently verified result applies to its
+four-logical-CPU AMD EPYC 7763 runner, Rust 1.99.1 and recorded storage setup.
+It does not qualify the Mac VM or all `ubuntu-latest` allocations. See
+[the investigation report](capacity-reliability-2026-10-25.md#completed-x64-qualification)
+for timing, storage-durability limitations and the retained failed experiments.
