@@ -1,7 +1,5 @@
-name: Provider capacity
+name: Provider capacity diagnostics
 on:
-  pull_request:
-    paths: ['.github/scripts/**', 'Cargo.toml', '.github/workflows/provider-capacity.yml', 'dog-queue/**', 'dog-examples/hosted-system/**', 'Cargo.lock']
   workflow_dispatch:
     inputs:
       mode:
@@ -10,9 +8,9 @@ on:
         options: [queue, queue-comparison, nats-pipeline-comparison, all-backends, attribution]
         default: queue
       runner:
-        description: Standard free public-repository runner for a labelled hardware comparison
+        description: Hosted diagnostic runner or designated dedicated capacity host
         type: choice
-        options: [ubuntu-latest, ubuntu-24.04-arm]
+        options: [ubuntu-latest, ubuntu-24.04-arm, dogrs-capacity]
         default: ubuntu-latest
       repeats:
         description: Attribution repetitions (odd repetitions reverse profile order)
@@ -135,9 +133,19 @@ jobs:
       fail-fast: false
       matrix:
         backend: ${{ fromJSON(inputs.mode == 'all-backends' && '["all"]' || inputs.backend && format('["{0}"]', inputs.backend) || '["postgres","redis","nats"]') }}
-    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'dogrs-capacity' && fromJSON('["self-hosted","linux","dogrs-capacity"]') || inputs.runner || 'ubuntu-latest' }}
+    concurrency:
+      group: ${{ inputs.runner == 'dogrs-capacity' && 'dogrs-dedicated-capacity' || format('capacity-{0}-{1}', github.run_id, matrix.backend) }}
+      cancel-in-progress: false
     timeout-minutes: 30
     steps:
+      - name: Require designated dedicated host
+        if: ${{ inputs.runner == 'dogrs-capacity' }}
+        env:
+          EXPECTED_RUNNER: ${{ vars.DOGRS_CAPACITY_RUNNER_NAME }}
+        run: |
+          test -n "$EXPECTED_RUNNER"
+          test "$RUNNER_NAME" = "$EXPECTED_RUNNER"
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build -p hosted-system --release --features redis,nats${{ (inputs.profile_queue || inputs.mode == 'queue-comparison') && ',queue-diagnostics' || '' }} --locked
@@ -365,7 +373,7 @@ jobs:
           path: provider-capacity
 
   attribution:
-    if: ${{ inputs.mode == 'attribution' }}
+    if: ${{ inputs.mode == 'attribution' && inputs.runner != 'dogrs-capacity' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

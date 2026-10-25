@@ -1,0 +1,77 @@
+name: Dedicated capacity baseline
+
+# Never execute pull-request code automatically on the dedicated machine.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dogrs-dedicated-capacity
+  cancel-in-progress: false
+
+jobs:
+  capacity:
+    runs-on: [self-hosted, linux, dogrs-capacity]
+    timeout-minutes: 45
+    env:
+      EXPECTED_RUNNER: ${{ vars.DOGRS_CAPACITY_RUNNER_NAME }}
+      DOGRS_SYSTEM_BINARY: target/release/hosted-system
+      DOGRS_CAPACITY_INFLIGHT: '32'
+      DOGRS_CAPACITY_COMPARISON_TENANT: dogrs-test-dedicated-baseline
+      DOGRS_PG_ENQUEUE_CONCURRENCY: '48'
+      DOGRS_PG_POOL_SIZE: '64'
+      DOGRS_PG_INSTANCES: '1'
+      DOGRS_PG_FIXTURE_PARTITIONS: '0'
+      DOGRS_PG_COMMIT_DELAY: '0'
+      DOGRS_PG_WAL_INIT_ZERO: 'on'
+      DOGRS_NATS_IMAGE: nats:2.15.0-alpine
+      DOGRS_NATS_ATOMIC: '1'
+      DOGRS_NATS_CONNECTIONS: shared
+      DOGRS_NATS_ENQUEUE_CONCURRENCY: '2'
+      DOGRS_QUEUE_TIMINGS: '0'
+      DOGRS_PG_PROFILE: '0'
+    steps:
+      - name: Require the designated host
+        run: |
+          test -n "$EXPECTED_RUNNER" || { echo 'Set DOGRS_CAPACITY_RUNNER_NAME after provisioning the dedicated host.'; exit 1; }
+          test "$RUNNER_NAME" = "$EXPECTED_RUNNER"
+          docker info > /dev/null
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Record build and host identity
+        run: |
+          mkdir -p provider-capacity
+          {
+            echo "Commit: $GITHUB_SHA"
+            echo "Runner: $RUNNER_NAME"
+            rustc --version --verbose
+            cargo --version
+            uname -a
+            lscpu
+            df -h .
+            docker version
+          } > provider-capacity/baseline-host.txt
+      - run: cargo build -p hosted-system --release --features redis,nats --locked
+      - name: Measure all backends twice with fresh durable fixtures
+        run: |
+          status=0
+          for provider in postgres redis nats nats redis postgres; do
+            workers=1; shards=1; storage=extended
+            if [ "$provider" = nats ]; then workers=2; shards=16; fi
+            if [ "$provider" = postgres ]; then storage=external; fi
+            DOGRS_CAPACITY_WORKERS="$workers" DOGRS_CAPACITY_SHARDS="$shards" DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$provider" --capacity --rate 9 --seconds 60 --bytes 65536 --report-dir provider-capacity || status=1
+          done
+          exit "$status"
+      - name: Record qualification scope
+        if: always()
+        run: |
+          echo 'This benchmark qualifies only the recorded host and settings. All six measurements must pass; a later pass does not erase an earlier failure. Inspect the attached capacity.log files for admission, completion and payload-verification counts.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dedicated-capacity-${{ github.run_id }}
+          path: provider-capacity
+          if-no-files-found: warn
