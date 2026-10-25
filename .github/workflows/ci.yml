@@ -241,7 +241,7 @@ jobs:
       - run: cargo install cargo-audit --locked
       - run: cargo audit
       - name: Verify patched AWS signer including SigV4a
-        run: cargo test --manifest-path vendor/aws-sigv4/Cargo.toml --features sigv4a --lib --locked
+        run: cargo test --manifest-path vendor/aws-sigv4/Cargo.toml --all-features --locked
 
   provider-recovery:
     runs-on: ubuntu-latest

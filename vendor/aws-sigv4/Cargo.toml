@@ -197,3 +197,11 @@ version = "1.0.146"
 [dev-dependencies.time]
 version = "0.3.35"
 features = ["parsing"]
+
+[[test]]
+name = "crypto_dependencies"
+path = "tests/crypto_dependencies.rs"
+
+[[test]]
+name = "sigv4a_mrap"
+path = "tests/sigv4a_mrap.rs"
