@@ -19,7 +19,7 @@ python3() {
 }
 ''' + workflow[start:end]
         env = dict(os.environ, CAPACITY_MODE=mode, PAYLOAD_BYTES='65536',
-                   WORKER_COMPARISON='auto', NATS_ATOMIC='on', NATS_CONNECTIONS='shared',
+                   WORKER_COMPARISON='auto', NATS_SHARDS='16', NATS_ATOMIC='on', NATS_CONNECTIONS='shared',
                    PG_INSTANCES='1', PG_SHARDS='1', DOGRS_PG_FIXTURE_PARTITIONS='0',
                    PG_WAL_INIT='on', PG_PAYLOAD_STORAGE='external', PRODUCER_CAP='none',
                    CAPACITY_RATE='9', DURATION_SECONDS='60', FAIL_PROVIDER=failed_provider)

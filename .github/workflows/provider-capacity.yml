@@ -47,7 +47,7 @@ on:
       nats_shards:
         description: Fixed JetStream bucket count
         type: choice
-        options: ['1', '4', '16']
+        options: ['1', '4', '8', '16']
         default: '16'
       postgres_commit_delay_us:
         description: PostgreSQL durable commit grouping delay
@@ -179,6 +179,7 @@ jobs:
             rounds=1
             if [ "$CAPACITY_MODE" = qualification ]; then
               test "$CAPACITY_RUNNER" = dogrs-capacity
+              test "$NATS_SHARDS" = 16
               test "$CAPACITY_RATE" = 9
               test "$DURATION_SECONDS" = 60
               test "$DOGRS_QUEUE_TIMINGS" = 0
@@ -190,7 +191,7 @@ jobs:
               echo "Qualification round $round/$rounds"
               for provider in postgres redis nats nats redis postgres; do
                 workers=1; shards=1; storage=extended
-                if [ "$provider" = nats ]; then workers=2; shards=16; fi
+                if [ "$provider" = nats ]; then workers=2; shards="$NATS_SHARDS"; fi
                 if [ "$provider" = postgres ]; then storage=external; fi
                 DOGRS_CAPACITY_WORKERS="$workers" DOGRS_CAPACITY_SHARDS="$shards" DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$provider" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
               done
@@ -346,6 +347,7 @@ jobs:
           PG_INSTANCES: ${{ inputs.postgres_instances || '1' }}
           DOGRS_PG_INSTANCES: ${{ inputs.postgres_instances != 'compare' && inputs.postgres_instances || '1' }}
           PG_SHARDS: ${{ inputs.postgres_shards || '1' }}
+          NATS_SHARDS: ${{ inputs.nats_shards || '16' }}
           NATS_ATOMIC: ${{ inputs.nats_atomic || 'on' }}
           NATS_CONNECTIONS: ${{ inputs.nats_connections || 'shared' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine

@@ -65,6 +65,8 @@ try:
   'nats_enqueue_concurrency':int(os.environ.get('DOGRS_NATS_ENQUEUE_CONCURRENCY','2')),
   'nats_update_concurrency':int(os.environ.get('DOGRS_NATS_UPDATE_CONCURRENCY','1')),
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),
+  'nats_gomaxprocs':os.environ.get('DOGRS_NATS_GOMAXPROCS','automatic'),
+  'tokio_worker_threads':os.environ.get('TOKIO_WORKER_THREADS','automatic'),
   'nats_storage':'anonymous Docker volume at /data',
  },indent=2))
  if a.capacity and platform.system()=='Linux':
@@ -126,7 +128,12 @@ try:
    if a.capacity and os.environ.get('DOGRS_QUEUE_TIMINGS')=='1':
     profile_port=port();profile_ports[name]=profile_port
     profile_args=['-p',f'127.0.0.1:{profile_port}:6543'];profile_command=['--profile','6543']
-   launch(name,*profile_args,'--network',network,'-v','/data','-p',f'127.0.0.1:{number}:4222','-p',f'127.0.0.1:{monitor}:8222','-v',f'{config}:/etc/nats.conf:ro',os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),'-c','/etc/nats.conf',*profile_command)
+   runtime_args=[]
+   if os.environ.get('DOGRS_NATS_GOMAXPROCS'):
+    procs=int(os.environ['DOGRS_NATS_GOMAXPROCS'])
+    assert 1<=procs<=32,'NATS runtime concurrency must be in 1..=32'
+    runtime_args=['-e',f'GOMAXPROCS={procs}']
+   launch(name,*runtime_args,*profile_args,'--network',network,'-v','/data','-p',f'127.0.0.1:{number}:4222','-p',f'127.0.0.1:{monitor}:8222','-v',f'{config}:/etc/nats.conf:ro',os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),'-c','/etc/nats.conf',*profile_command)
    monitors[name]=monitor
   for number in numbers:wait_port(number)
   deadline=time.monotonic()+60
