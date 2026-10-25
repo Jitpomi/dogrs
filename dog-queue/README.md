@@ -243,11 +243,13 @@ For explicit integrations, use
 `observability::tracing::DistributedTracing::start_job_with_context` and
 `JobSpan::context()` with OpenTelemetry's `FutureExt::with_context`. This allows a
 validated parent context to be supplied. The existing `QueueCtx.trace_id` string
-is not a W3C span context; it is not silently treated as a parent. The current job
-storage format does not carry producer trace context across the durable queue.
-Worker attempts therefore start independent traces unless an integration supplies
-parentage. Correlate attempts using job ID. This release does not claim automatic
-producer-to-worker trace propagation.
+is not a W3C span context; it is not silently treated as a parent. QueueAdapter captures the active W3C `traceparent` at enqueue and workers
+restore it from persisted metadata, including retries and independent processes.
+Malformed parents start a fresh trace; baggage and arbitrary tags are not copied.
+Raw backend producers can set `JobMessage.traceparent` explicitly. Existing stored
+JSON records remain readable; source callers using exhaustive `JobMessage` literals
+must add `traceparent: None` (prefer the constructor). Deploy updated workers before
+producers; old workers cannot preserve the new metadata on subsequent writes.
 
 ## Reconnecting job status clients
 
@@ -260,9 +262,16 @@ backends), nor on a process-local event hub.
 
 This is a bounded status feed, not a durable transition log: intermediate states
 may be coalesced. There are no replay cursors or exactly-once delivery promises.
-There is no generic percentage-progress protocol. Results must be fetched through
-an authorized application operation. Status summaries omit results, payloads,
-lease tokens and raw failure text.
+Handlers can call `realtime::report_progress(percent).await` (0..=100) within the
+worker execution scope. Memory, Redis, PostgreSQL and JetStream persist progress
+atomically with current lease validation; expired, canceled and foreign-tenant
+writers are rejected. Progress resets on a new attempt; report at a modest rate.
+Custom backends return `BackendUnsupported` unless they implement it. Spawned tasks
+do not inherit the handler scope. Reporting progress does not acknowledge a job.
+
+Results are omitted by default. Set `WatchOptions.include_results` only after
+explicitly authorizing result access. Completed results up to 4 KiB can be streamed;
+use references for larger outputs. Payloads, lease tokens and raw failures stay private.
 
 Authenticate the tenant and authorize each requested job before creating the
 stream. A tenant context is not a user permission check. Limit subscriptions per

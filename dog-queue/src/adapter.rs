@@ -317,6 +317,8 @@ impl<B: ?Sized + QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         // Capture the real queue name before the message is moved into the backend.
         let queue_name = message.queue.clone();
 
+        let message = crate::observability::tracing::capture_parent(message);
+
         // Enqueue to backend
         let job_id = self.backend.enqueue(ctx.clone(), message).await?;
 
@@ -345,6 +347,7 @@ impl<B: ?Sized + QueueBackend + Send + Sync + 'static> QueueAdapter<B> {
         let queue_name = message.queue.clone();
         let job_type = message.job_type.clone();
 
+        let message = crate::observability::tracing::capture_parent(message);
         let job_id = self.backend.enqueue(ctx.clone(), message).await?;
 
         self.observability
@@ -791,8 +794,11 @@ impl<C: Send + Sync + 'static> Worker<C> {
         let job_type = &leased_job.record.message.job_type;
 
         debug!("Processing job {} of type {}", job_id, job_type);
-        let mut job_span = crate::observability::tracing::DistributedTracing::new()
-            .start_job(&self.ctx, &job_id, job_type);
+        let mut job_span = crate::observability::tracing::DistributedTracing::new().start_message(
+            &self.ctx,
+            &job_id,
+            &leased_job.record.message,
+        );
 
         // Clone the handler under the registry lock, then release the lock before
         // executing. This prevents long-running jobs from blocking register_job()
@@ -931,6 +937,15 @@ impl<C: Send + Sync + 'static> Worker<C> {
         // so that heartbeat teardown overhead is not counted as job execution time.
         let execute_start = std::time::Instant::now();
         let execution = handler.execute(&decoded_message, self.context.clone());
+        let execution = crate::realtime::REPORTER.scope(
+            crate::realtime::ProgressReporter {
+                backend: self.adapter.backend.clone(),
+                ctx: self.ctx.clone(),
+                id: job_id.clone(),
+                token: leased_job.lease_token.clone(),
+            },
+            execution,
+        );
         #[cfg(feature = "tracing-opentelemetry")]
         let execution =
             opentelemetry::trace::FutureExt::with_context(execution, job_span.context());

@@ -58,6 +58,7 @@ async fn exports_real_parented_spans_with_outcomes_and_no_raw_errors() {
     adapter.register_job::<TracedJob>().await.unwrap();
     adapter
         .enqueue(QueueCtx::new("worker-tenant"), TracedJob)
+        .with_context(parent.clone())
         .await
         .unwrap();
     let handle = adapter
@@ -93,6 +94,11 @@ async fn exports_real_parented_spans_with_outcomes_and_no_raw_errors() {
         })
         .unwrap();
     assert_eq!(attempt.status, Status::Ok);
+    assert_eq!(attempt.parent_span_id, parent_id);
+    assert_eq!(
+        attempt.span_context.trace_id(),
+        parent.span().span_context().trace_id()
+    );
     assert!(attempt
         .attributes
         .iter()
@@ -111,6 +117,7 @@ impl dog_queue::Job for TracedJob {
     async fn execute(&self, _: ()) -> Result<(), dog_queue::JobError> {
         tokio::task::yield_now().await;
         assert!(Context::current().span().span_context().is_valid());
+        dog_queue::realtime::report_progress(50).await.unwrap();
         Ok(())
     }
 }

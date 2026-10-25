@@ -119,3 +119,62 @@ async fn real_http_sse_delivers_status_without_leaving_detached_workers() {
     drop(revoke);
     server.abort();
 }
+
+#[tokio::test]
+async fn event_hub_receives_authorized_snapshots_and_revocation_stops_delivery() {
+    use dog_core::{
+        DogAppBuilder, HookContext, ServiceCaller, ServiceEventData, ServiceEventKind,
+        ServiceMethodKind, TenantContext,
+    };
+    let backend = Arc::new(MemoryBackend::new());
+    let id = backend
+        .enqueue(
+            QueueCtx::new("a"),
+            JobMessage::new("j", vec![], "json", "q"),
+        )
+        .await
+        .unwrap();
+    let mut builder = DogAppBuilder::<String, ()>::new();
+    let (tx, rx) = watch::channel(false);
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = calls.clone();
+    builder.on(
+        "queue",
+        ServiceEventKind::custom("job_status"),
+        Arc::new(move |data, ctx| {
+            assert_eq!(ctx.tenant.tenant_id.0, "a");
+            let ServiceEventData::Custom(payload) = data else {
+                panic!("expected custom event")
+            };
+            assert_eq!(
+                payload
+                    .downcast_ref::<dog_queue::realtime::JobUpdate>()
+                    .unwrap()
+                    .status,
+                "enqueued"
+            );
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tx.send(true).unwrap();
+            Box::pin(async { Ok(()) })
+        }),
+    );
+    let app = builder.build();
+    let context = HookContext::new(
+        TenantContext::new("a"),
+        ServiceMethodKind::Find,
+        (),
+        ServiceCaller::new(app.clone()),
+        app.config_snapshot(),
+    );
+    dog_transport::queue::forward_queue_events(
+        &app,
+        &context,
+        backend,
+        vec![id],
+        WatchOptions::default(),
+        rx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

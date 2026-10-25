@@ -222,6 +222,7 @@ async fn test_idempotent_enqueue_executes_once() {
         priority: JobPriority::Normal,
         max_retries: 3,
         run_at: chrono::Utc::now(),
+        traceparent: None,
         idempotency_key: Some("unique-op-123".to_string()),
     };
 
@@ -392,6 +393,7 @@ async fn test_lease_expiry_requeues_job() {
         priority: JobPriority::Normal,
         max_retries: 3,
         run_at: chrono::Utc::now(),
+        traceparent: None,
         idempotency_key: None,
     };
 

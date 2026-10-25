@@ -282,6 +282,7 @@ impl RedisStore {
                 | Operation::Cancel(id)
                 | Operation::Complete(id, ..)
                 | Operation::Fail(id, ..)
+                | Operation::Progress(id, ..)
                 | Operation::Heartbeat(id, ..) => {
                     read.arg("read").arg(id.as_str());
                 }
@@ -342,7 +343,10 @@ impl RedisStore {
                 }
                 let old = previous.get(id).map(String::as_str).unwrap_or("");
                 let lease = match op {
-                    Operation::Complete(..) | Operation::Fail(..) | Operation::Heartbeat(..) => {
+                    Operation::Complete(..)
+                    | Operation::Fail(..)
+                    | Operation::Progress(..)
+                    | Operation::Heartbeat(..) => {
                         let previous: StoredRecord = serde_json::from_str(old).map_err(error)?;
                         previous
                             .record

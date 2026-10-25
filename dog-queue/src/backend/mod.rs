@@ -139,6 +139,20 @@ pub trait QueueBackend: Send + Sync {
         ))
     }
 
+    /// Report progress while holding the current, unexpired lease. Values are 0..=100.
+    /// Backends must persist this atomically with lease validation.
+    async fn report_progress(
+        &self,
+        _ctx: QueueCtx,
+        _job_id: JobId,
+        _lease_token: LeaseToken,
+        _percent: u8,
+    ) -> QueueResult<()> {
+        Err(QueueError::BackendUnsupported(
+            "progress reporting is unavailable".into(),
+        ))
+    }
+
     /// Cancel a job (cancel-wins semantics)
     async fn cancel(&self, ctx: QueueCtx, job_id: JobId) -> QueueResult<bool>;
 

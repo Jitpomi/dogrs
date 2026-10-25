@@ -8,13 +8,16 @@ use futures::stream;
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-/// Safe status summary. Payloads, results, raw errors and lease tokens stay private.
-/// Fetch results separately through an authorized application operation.
+/// Status and progress summary. Results require explicit opt-in authorization.
+/// Payloads, raw errors, trace context and lease tokens stay private.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct JobUpdate {
     pub job_id: JobId,
     pub status: String,
     pub attempt: u32,
+    pub progress: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -23,6 +26,8 @@ pub struct WatchOptions {
     pub interval: Duration,
     pub read_timeout: Duration,
     pub lifetime: Duration,
+    /// Opt in only after authorizing access to results as well as status.
+    pub include_results: bool,
 }
 impl Default for WatchOptions {
     fn default() -> Self {
@@ -30,6 +35,7 @@ impl Default for WatchOptions {
             interval: Duration::from_secs(1),
             read_timeout: Duration::from_secs(10),
             lifetime: Duration::from_secs(3600),
+            include_results: false,
         }
     }
 }
@@ -107,11 +113,27 @@ pub fn watch_jobs(
                         if snapshot.tenant_id != ctx.tenant_id || snapshot.job_id != id {
                             done = true;
                             Err(QueueError::Internal("snapshot scope mismatch".into()))
+                        } else if options.include_results
+                            && snapshot.result.as_ref().is_some_and(|r| r.len() > 4096)
+                        {
+                            done = true;
+                            Err(QueueError::InvalidConfig(
+                                "streamed result exceeds 4 KiB; use an authorized result reference"
+                                    .into(),
+                            ))
                         } else {
                             let update = JobUpdate {
                                 job_id: id.clone(),
                                 status: snapshot.status.name().to_owned(),
                                 attempt: snapshot.attempt,
+                                progress: snapshot.progress,
+                                result: if options.include_results
+                                    && matches!(snapshot.status, crate::JobStatus::Completed { .. })
+                                {
+                                    snapshot.result
+                                } else {
+                                    None
+                                },
                                 updated_at: snapshot.updated_at,
                             };
                             if previous.get(&id) == Some(&update) {
@@ -139,4 +161,33 @@ pub fn watch_jobs(
             }
         },
     )))
+}
+
+// Scoped to handler polls: concurrent jobs cannot overwrite each other's reporter.
+tokio::task_local! {
+    pub(crate) static REPORTER: ProgressReporter;
+}
+pub(crate) struct ProgressReporter {
+    pub backend: Arc<dyn QueueBackend>,
+    pub ctx: QueueCtx,
+    pub id: JobId,
+    pub token: crate::LeaseToken,
+}
+/// Report progress from a QueueAdapter handler. Await the result; failures can
+/// indicate loss of the lease. Does not extend the lease or mark completion.
+/// Spawned tasks do not inherit this scope. Throttle updates for durable storage.
+pub async fn report_progress(percent: u8) -> QueueResult<()> {
+    let (backend, ctx, id, token) = REPORTER
+        .try_with(|r| {
+            (
+                r.backend.clone(),
+                r.ctx.clone(),
+                r.id.clone(),
+                r.token.clone(),
+            )
+        })
+        .map_err(|_| {
+            QueueError::InvalidConfig("progress requires an active queue handler".into())
+        })?;
+    backend.report_progress(ctx, id, token, percent).await
 }

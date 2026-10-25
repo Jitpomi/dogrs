@@ -25,6 +25,26 @@ impl DistributedTracing {
         }
     }
 
+    /// Start from the persisted producer parent, never an unrelated worker context.
+    pub fn start_message(
+        &self,
+        ctx: &crate::QueueCtx,
+        id: &crate::JobId,
+        message: &crate::JobMessage,
+    ) -> JobSpan {
+        #[cfg(feature = "tracing-opentelemetry")]
+        {
+            let parent = message
+                .traceparent
+                .as_deref()
+                .and_then(parse_parent)
+                .unwrap_or_default();
+            self.start_job_with_context(ctx, id, &message.job_type, &parent)
+        }
+        #[cfg(not(feature = "tracing-opentelemetry"))]
+        self.start_job(ctx, id, &message.job_type)
+    }
+
     #[cfg(feature = "tracing-opentelemetry")]
     pub fn start_job_with_context(
         &self,
@@ -236,5 +256,94 @@ mod tests {
         let spans = collector.get_spans();
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].trace_id, "test_trace");
+    }
+}
+
+/// Capture only W3C identity and sampling flags. Explicit valid parents survive forwarding.
+pub(crate) fn capture_parent(message: crate::JobMessage) -> crate::JobMessage {
+    #[cfg(feature = "tracing-opentelemetry")]
+    {
+        let mut message = message;
+        if message
+            .traceparent
+            .as_deref()
+            .and_then(parse_parent)
+            .is_none()
+        {
+            let current = Context::current();
+            use tracing_opentelemetry::OpenTelemetrySpanExt;
+            let current = if current.span().span_context().is_valid() {
+                current
+            } else {
+                tracing::Span::current().context()
+            };
+            let span = current.span();
+            let sc = span.span_context();
+            message.traceparent = sc.is_valid().then(|| {
+                format!(
+                    "00-{}-{}-{:02x}",
+                    sc.trace_id(),
+                    sc.span_id(),
+                    sc.trace_flags().to_u8() & 1
+                )
+            });
+        }
+        message
+    }
+    #[cfg(not(feature = "tracing-opentelemetry"))]
+    message
+}
+
+#[cfg(feature = "tracing-opentelemetry")]
+fn parse_parent(value: &str) -> Option<Context> {
+    use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
+    // Bounded, strict version-00 format; malformed external metadata never panics.
+    if value.len() != 55 || !value.is_ascii() {
+        return None;
+    }
+    let parts: Vec<_> = value.split('-').collect();
+    if parts.len() != 4
+        || parts[0] != "00"
+        || parts[1].len() != 32
+        || parts[2].len() != 16
+        || parts[3].len() != 2
+        || !parts[1..].iter().all(|p| {
+            p.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+    {
+        return None;
+    }
+    let sc = SpanContext::new(
+        TraceId::from_hex(parts[1]).ok()?,
+        SpanId::from_hex(parts[2]).ok()?,
+        TraceFlags::new(u8::from_str_radix(parts[3], 16).ok()? & 1),
+        true,
+        TraceState::default(),
+    );
+    sc.is_valid()
+        .then(|| Context::new().with_remote_span_context(sc))
+}
+
+#[cfg(all(test, feature = "tracing-opentelemetry"))]
+mod propagation_tests {
+    use super::*;
+    #[test]
+    fn validates_parents_and_reads_legacy_records() {
+        for bad in [
+            "",
+            "00-",
+            "é",
+            "00-00000000000000000000000000000000-2222222222222222-01",
+            "00-11111111111111111111111111111111-0000000000000000-01",
+        ] {
+            assert!(parse_parent(bad).is_none());
+        }
+        assert!(parse_parent("00-11111111111111111111111111111111-2222222222222222-01").is_some());
+        let message = crate::JobMessage::new("j", vec![], "json", "q");
+        let json = serde_json::to_value(message).unwrap();
+        assert!(json.get("traceparent").is_none());
+        let legacy: crate::JobMessage = serde_json::from_value(json).unwrap();
+        assert!(legacy.traceparent.is_none());
     }
 }

@@ -161,12 +161,20 @@ buffer. Database effects cannot be undone by canceling a read.
 On reconnect, reauthorize and construct a new stream. Each job starts with its
 current authoritative state, including completion during a disconnect. Clients
 replace local status by job ID; they must not count notifications as unique state
-transitions. Fetch completed results separately through an authorized operation.
+transitions. Results are private by default; explicitly authorized subscriptions can set `include_results: true` for completed results up to 4 KiB.
 The queue's durable snapshot is authoritative; the process-local DogEventHub is
 not used as a recovery log. This deliberately avoids depending on events emitted
-by only one worker process. Intermediate transitions and arbitrary progress events
-are not replayed. Multi-instance routing works when instances share the ledger.
+by only one worker process. Current worker-reported progress is included; intermediate transitions are not replayed. Multi-instance routing works when instances share the ledger.
 
 Tests cover the actual HTTP SSE response, current-state recovery, tenant denial,
 revocation, bounded lifetime and safe status serialization. Queue backend contract
 tests also reconnect across independent Redis/PostgreSQL/JetStream instances.
+
+`queue::forward_queue_events` forwards authorized snapshots into DogEventHub as
+`queue.job_status` custom events carrying `dog_queue::realtime::JobUpdate`.
+It derives tenant scope from the trusted HookContext, obeys revocation and lifetime,
+and awaits listeners without creating detached tasks. Listeners must enforce tenant
+and user routing before forwarding to WebSocket clients. Never broadcast private
+job updates through a public channel. This bridge is optional; SSE can consume the
+snapshot stream directly. Existing `websocket_loop` handles authorized, bounded
+receivers and disconnect/revocation; reconnect must always reload snapshots.

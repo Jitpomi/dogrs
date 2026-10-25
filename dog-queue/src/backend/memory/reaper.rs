@@ -291,6 +291,7 @@ mod tests {
             priority: JobPriority::Normal,
             max_retries: 3,
             run_at: chrono::Utc::now(),
+            traceparent: None,
             idempotency_key: None,
         }
     }
