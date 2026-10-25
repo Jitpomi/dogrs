@@ -1,32 +1,122 @@
-// #[cfg(feature = "tracing-opentelemetry")]
-// use opentelemetry::trace::{SpanId, TraceId};
+#[cfg(feature = "tracing-opentelemetry")]
+use opentelemetry::{
+    trace::{SpanKind, Status, TraceContextExt, Tracer},
+    Context, KeyValue,
+};
 use std::sync::Arc;
 
-/// Distributed tracing integration for job processing
+/// Uses the application's OpenTelemetry provider; never installs a global exporter.
 pub struct DistributedTracing;
-
 impl DistributedTracing {
-    /// Create stub tracing instance
     pub fn new() -> Self {
         Self
     }
+
+    /// Start one processing attempt. Tags, payloads and raw errors are not exported.
+    pub fn start_job(&self, ctx: &crate::QueueCtx, id: &crate::JobId, job_type: &str) -> JobSpan {
+        #[cfg(feature = "tracing-opentelemetry")]
+        {
+            self.start_job_with_context(ctx, id, job_type, &Context::current())
+        }
+        #[cfg(not(feature = "tracing-opentelemetry"))]
+        {
+            let _ = (ctx, id, job_type);
+            JobSpan {}
+        }
+    }
+
+    #[cfg(feature = "tracing-opentelemetry")]
+    pub fn start_job_with_context(
+        &self,
+        ctx: &crate::QueueCtx,
+        id: &crate::JobId,
+        job_type: &str,
+        parent: &Context,
+    ) -> JobSpan {
+        let span = opentelemetry::global::tracer("dog-queue")
+            .span_builder("dog.queue.process")
+            .with_kind(SpanKind::Consumer)
+            .with_attributes(vec![
+                KeyValue::new("dog.tenant_id", ctx.tenant_id.clone()),
+                KeyValue::new("messaging.message.id", id.to_string()),
+                KeyValue::new("dog.job_type", job_type.to_owned()),
+            ])
+            .start_with_context(&opentelemetry::global::tracer("dog-queue"), parent);
+        JobSpan {
+            context: parent.with_span(span),
+            finished: false,
+        }
+    }
 }
 
-/// Stub span for when opentelemetry is not enabled
-pub struct JobSpan;
-
+/// Ends on drop, including future cancellation. Incomplete attempts are not successes.
+pub struct JobSpan {
+    #[cfg(feature = "tracing-opentelemetry")]
+    context: Context,
+    #[cfg(feature = "tracing-opentelemetry")]
+    finished: bool,
+}
 impl JobSpan {
-    /// Record job completion (stub)
-    pub fn record_success(&mut self) {}
-
-    /// Record job failure (stub)
-    pub fn record_failure(&mut self, _error: &str) {}
-
-    /// Record job retry (stub)
-    pub fn record_retry(&mut self, _attempt: u32, _error: &str) {}
-
-    /// Add custom attribute (stub)
-    pub fn set_attribute(&mut self, _key: &str, _value: &str) {}
+    /// Attach to each poll with `FutureExt::with_context`, never hold a context guard across await.
+    #[cfg(feature = "tracing-opentelemetry")]
+    pub fn context(&self) -> Context {
+        self.context.clone()
+    }
+    pub fn record_success(&mut self) {
+        self.finish("completed", false);
+    }
+    /// Error text is deliberately not exported: it may contain payloads or secrets.
+    pub fn record_failure(&mut self, _error: &str) {
+        self.finish("failed", true);
+    }
+    pub fn record_retry(&mut self, attempt: u32, _error: &str) {
+        self.set_attribute("dog.retry_attempt", &attempt.to_string());
+        self.finish("retrying", true);
+    }
+    pub fn record_canceled(&mut self) {
+        self.finish("canceled", false);
+    }
+    /// Caller is responsible for ensuring custom attributes contain no secrets.
+    pub fn set_attribute(&mut self, key: &str, value: &str) {
+        #[cfg(feature = "tracing-opentelemetry")]
+        self.context
+            .span()
+            .set_attribute(KeyValue::new(key.to_owned(), value.to_owned()));
+        #[cfg(not(feature = "tracing-opentelemetry"))]
+        let _ = (key, value);
+    }
+    fn finish(&mut self, outcome: &str, error: bool) {
+        #[cfg(feature = "tracing-opentelemetry")]
+        {
+            self.context
+                .span()
+                .set_attribute(KeyValue::new("dog.outcome", outcome.to_owned()));
+            self.context.span().set_status(if error {
+                Status::error(outcome.to_owned())
+            } else {
+                Status::Ok
+            });
+            self.finished = true;
+        }
+        #[cfg(not(feature = "tracing-opentelemetry"))]
+        let _ = (outcome, error);
+    }
+}
+impl Drop for JobSpan {
+    fn drop(&mut self) {
+        #[cfg(feature = "tracing-opentelemetry")]
+        {
+            if !self.finished {
+                self.context
+                    .span()
+                    .set_attribute(KeyValue::new("dog.outcome", "interrupted"));
+                self.context
+                    .span()
+                    .set_status(Status::error("attempt interrupted before acknowledgment"));
+            }
+            self.context.span().end();
+        }
+    }
 }
 
 /// Span collector for aggregating trace data

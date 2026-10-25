@@ -32,6 +32,16 @@ pub async fn contract(
         right.is_some(),
         "Only one process may own a lease"
     );
+    let mut statuses = dog_queue::realtime::watch_jobs(
+        a.clone(),
+        tenant.clone(),
+        vec![id.clone()],
+        dog_queue::realtime::WatchOptions::default(),
+    )
+    .unwrap();
+    use futures::StreamExt;
+    assert_eq!(statuses.next().await.unwrap().unwrap().status, "processing");
+    drop(statuses);
     let lease = left.or(right).unwrap();
     assert!(a
         .ack_complete(
@@ -50,6 +60,24 @@ pub async fn contract(
     )
     .await
     .unwrap();
+    // Reconnect through an independent backend after the other instance completes.
+    let mut statuses = dog_queue::realtime::watch_jobs(
+        a.clone(),
+        tenant.clone(),
+        vec![id.clone()],
+        dog_queue::realtime::WatchOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(statuses.next().await.unwrap().unwrap().status, "completed");
+    let mut denied = dog_queue::realtime::watch_jobs(
+        a.clone(),
+        stranger.clone(),
+        vec![id.clone()],
+        dog_queue::realtime::WatchOptions::default(),
+    )
+    .unwrap();
+    assert!(denied.next().await.unwrap().is_err());
+    assert!(denied.next().await.is_none());
     let snapshot = a.get_snapshot(tenant.clone(), id.clone()).await.unwrap();
     let batch = a
         .get_snapshots(tenant.clone(), &[id.clone(), id.clone()])

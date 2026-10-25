@@ -791,6 +791,8 @@ impl<C: Send + Sync + 'static> Worker<C> {
         let job_type = &leased_job.record.message.job_type;
 
         debug!("Processing job {} of type {}", job_id, job_type);
+        let mut job_span = crate::observability::tracing::DistributedTracing::new()
+            .start_job(&self.ctx, &job_id, job_type);
 
         // Clone the handler under the registry lock, then release the lock before
         // executing. This prevents long-running jobs from blocking register_job()
@@ -837,7 +839,7 @@ impl<C: Send + Sync + 'static> Worker<C> {
                 // Permanently fail the job so it leaves Processing immediately.
                 // Ignore ack_fail errors here — we cannot do anything useful with
                 // them and the job will be reclaimed by the reaper at worst.
-                let _ = self
+                let acknowledgment = self
                     .adapter
                     .backend
                     .ack_fail(
@@ -849,6 +851,9 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     )
                     .await;
 
+                if acknowledgment.is_ok() {
+                    job_span.record_failure("codec decode failed");
+                }
                 self.adapter
                     .observability
                     .record_job_failed(&self.ctx, &job_id, job_type, &error_str);
@@ -925,6 +930,10 @@ impl<C: Send + Sync + 'static> Worker<C> {
         // The elapsed duration is recorded after the drop of the heartbeat handle
         // so that heartbeat teardown overhead is not counted as job execution time.
         let execute_start = std::time::Instant::now();
+        let execution = handler.execute(&decoded_message, self.context.clone());
+        #[cfg(feature = "tracing-opentelemetry")]
+        let execution =
+            opentelemetry::trace::FutureExt::with_context(execution, job_span.context());
         let result = tokio::select! {
             biased;
             failure = &mut heartbeat_failure => {
@@ -934,13 +943,14 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     "Lease supervisor stopped before execution finished".into(),
                 ));
                 if matches!(error, QueueError::JobCanceled | QueueError::JobAlreadyTerminal) {
+                    if matches!(error, QueueError::JobCanceled) { job_span.record_canceled(); }
                     // Match the acknowledgement path: cancellation is a handled
                     // lifecycle event, not a backend outage or another failure.
                     return Ok(true);
                 }
                 return Err(error);
             }
-            result = handler.execute(&decoded_message, self.context.clone()) => result,
+            result = execution => result,
         };
         let execute_elapsed = execute_start.elapsed();
 
@@ -977,9 +987,11 @@ impl<C: Send + Sync + 'static> Worker<C> {
                         self.adapter
                             .observability
                             .record_job_completed(&self.ctx, &job_id, job_type);
+                        job_span.record_success();
                         info!("Job {} completed successfully", job_id);
                     }
                     Err(QueueError::JobCanceled) => {
+                        job_span.record_canceled();
                         // Cancel-wins: a cancel request arrived after execute() started.
                         //
                         // record_job_canceled() was ALREADY called by QueueAdapter::cancel()
@@ -1036,6 +1048,7 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     .await?;
 
                 if let Some(retry_at_time) = retry_at {
+                    job_span.record_retry(leased_job.record.attempt, "retry");
                     self.adapter.observability.record_job_retrying(
                         &self.ctx,
                         &job_id,
@@ -1048,6 +1061,7 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     self.adapter
                         .observability
                         .record_job_failed(&self.ctx, &job_id, job_type, &error_str);
+                    job_span.record_failure("permanent");
                     error!("Job {} failed permanently: {}", job_id, error_str);
                 }
             }

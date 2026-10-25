@@ -223,3 +223,50 @@ per-shard deadline. `reclaim_expired_leases_report()` returns both successful
 outcomes and indexed errors. The common trait returns successful outcomes when
 available, logs partial failures, and returns an error when failures occur without
 any outcomes; use the report API when monitoring partial recovery directly.
+
+## OpenTelemetry processing spans
+
+Enable `tracing-opentelemetry` and install an OpenTelemetry 0.32 SDK tracer provider
+in your application before starting workers. DogRS does not install an exporter,
+change your global subscriber, or choose a collector endpoint. Keep the provider
+alive and flush/shut it down after workers stop. Use a batch exporter in production.
+
+Every worker attempt emits `dog.queue.process` with tenant ID, job ID, job type and
+an outcome. Completion is recorded only after acknowledgment. Failed/retrying
+attempts have error status; interrupted or unacknowledged attempts are not reported
+as successful. Job handlers run with the attempt's OpenTelemetry context on each
+future poll, so nested OpenTelemetry spans become children without holding a
+thread-local context guard across `.await`. Payloads, results, context tags and raw
+error messages are not automatically exported.
+
+For explicit integrations, use
+`observability::tracing::DistributedTracing::start_job_with_context` and
+`JobSpan::context()` with OpenTelemetry's `FutureExt::with_context`. This allows a
+validated parent context to be supplied. The existing `QueueCtx.trace_id` string
+is not a W3C span context; it is not silently treated as a parent. The current job
+storage format does not carry producer trace context across the durable queue.
+Worker attempts therefore start independent traces unless an integration supplies
+parentage. Correlate attempts using job ID. This release does not claim automatic
+producer-to-worker trace propagation.
+
+## Reconnecting job status clients
+
+`realtime::watch_jobs(backend, verified_ctx, authorized_job_ids, options)` reads
+current status from any `QueueBackend`, including independent PostgreSQL, Redis
+and JetStream connections. It sends an initial snapshot per job, then changed
+snapshots. Reconnect with a fresh stream to recover terminal state missed while
+offline. It does not depend on `event_stream` (which remains empty for durable
+backends), nor on a process-local event hub.
+
+This is a bounded status feed, not a durable transition log: intermediate states
+may be coalesced. There are no replay cursors or exactly-once delivery promises.
+There is no generic percentage-progress protocol. Results must be fetched through
+an authorized application operation. Status summaries omit results, payloads,
+lease tokens and raw failure text.
+
+Authenticate the tenant and authorize each requested job before creating the
+stream. A tenant context is not a user permission check. Limit subscriptions per
+user/server: each connection polls up to 128 jobs sequentially (default once per
+second, with a 10-second read timeout). Drop the stream on logout/revocation.
+Errors terminate the stream; never send raw backend error text to a client.
+See `dog-transport/REALTIME.md` for the optional SSE integration.

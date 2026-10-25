@@ -13,6 +13,7 @@ pub mod diagnostics;
 pub mod error;
 pub mod job;
 pub mod observability;
+pub mod realtime;
 pub mod types;
 
 #[cfg(test)]

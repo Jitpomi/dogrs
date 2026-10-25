@@ -142,3 +142,31 @@ These tests establish the listed behavior. They do not certify arbitrary network
 failures, deployment capacity, or an application's authorization policy. TLS,
 credential verification, reverse-proxy limits and multi-instance event distribution
 remain explicit deployment responsibilities.
+
+## Queue status SSE (`queue` feature)
+
+Enable `dog-transport/queue` for `queue::queue_sse_stream`. After authentication,
+pass a verified `QueueCtx`, an explicitly authorized list of job IDs, a bounded
+`WatchOptions` lifetime no longer than the credential's remaining validity, and a
+revocation watch receiver. The stream emits `dogrs.job_status` snapshots and a
+terminal `dogrs.stream_error` on expiry, revocation or backend failure. Dropping
+the revocation sender also revokes the stream. Backend error details are redacted.
+
+Map each returned `SseEvent` into your server's SSE event type, just as with
+`realtime::sse_stream`. Configure HTTP keepalive, connection admission and write
+deadlines at the host. No detached polling task is created; disconnect drops the
+stream and cancels its current read. A slow client cannot grow a notification
+buffer. Database effects cannot be undone by canceling a read.
+
+On reconnect, reauthorize and construct a new stream. Each job starts with its
+current authoritative state, including completion during a disconnect. Clients
+replace local status by job ID; they must not count notifications as unique state
+transitions. Fetch completed results separately through an authorized operation.
+The queue's durable snapshot is authoritative; the process-local DogEventHub is
+not used as a recovery log. This deliberately avoids depending on events emitted
+by only one worker process. Intermediate transitions and arbitrary progress events
+are not replayed. Multi-instance routing works when instances share the ledger.
+
+Tests cover the actual HTTP SSE response, current-state recovery, tenant denial,
+revocation, bounded lifetime and safe status serialization. Queue backend contract
+tests also reconnect across independent Redis/PostgreSQL/JetStream instances.
