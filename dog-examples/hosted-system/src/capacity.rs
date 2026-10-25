@@ -53,6 +53,8 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     let completed = Arc::new(AtomicUsize::new(0));
     let overload = Arc::new(AtomicUsize::new(0));
     let late = Arc::new(AtomicUsize::new(0));
+    let late_samples = Arc::new(Mutex::new(Vec::new()));
+    let max_lateness_us = Arc::new(AtomicUsize::new(0));
     let errors = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::new(Mutex::new(HashSet::new()));
     let latency = Arc::new(Mutex::new(Vec::new()));
@@ -148,6 +150,8 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
         let accepted = accepted.clone();
         let overload = overload.clone();
         let late = late.clone();
+        let late_samples = late_samples.clone();
+        let max_lateness_us = max_lateness_us.clone();
         let errors = errors.clone();
         let latency = latency.clone();
         let ids = ids.clone();
@@ -161,8 +165,21 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
                             / (rate as u64 * tenants as u64),
                     );
                 tokio::time::sleep_until(tokio::time::Instant::from_std(due)).await;
-                if Instant::now().saturating_duration_since(due) > Duration::from_millis(100) {
+                let lateness = Instant::now().saturating_duration_since(due);
+                max_lateness_us.fetch_max(lateness.as_micros() as usize, Ordering::Relaxed);
+                if lateness > Duration::from_millis(100) {
                     late.fetch_add(1, Ordering::SeqCst);
+                    // Keep bounded evidence of whether stalls occur at startup or
+                    // under sustained load; the acceptance threshold is unchanged.
+                    let mut samples = late_samples.lock().unwrap();
+                    if samples.len() < 10 {
+                        samples.push(json!({
+                            "tenant": t,
+                            "sequence": n,
+                            "due_offset_seconds": due.duration_since(started).as_secs_f64(),
+                            "lateness_ms": lateness.as_secs_f64() * 1000.0,
+                        }));
+                    }
                 }
                 let Ok(permit) = slots.clone().try_acquire_owned() else {
                     overload.fetch_add(1, Ordering::SeqCst);
@@ -317,7 +334,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     };
     println!(
         "{}",
-        json!({"nats_connections":std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_|"shared".into()),"payload_pattern":"unique-per-tenant-and-sequence","stage_timings":stage_timings,"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":rate,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed_in_capacity_phase,"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed,"overload_recovery":overload_recovery,"latency_includes_recovery":recovery_seconds>0})
+        json!({"nats_connections":std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_|"shared".into()),"payload_pattern":"unique-per-tenant-and-sequence","stage_timings":stage_timings,"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":rate,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed_in_capacity_phase,"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"max_offer_lateness_ms":max_lateness_us.load(Ordering::Relaxed) as f64 / 1000.0,"late_offer_samples":*late_samples.lock().unwrap(),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed,"overload_recovery":overload_recovery,"latency_includes_recovery":recovery_seconds>0})
     );
     anyhow::ensure!(passed, "queue capacity gate failed");
     Ok(())
