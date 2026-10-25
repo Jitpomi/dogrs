@@ -134,6 +134,13 @@ async fn event_hub_receives_authorized_snapshots_and_revocation_stops_delivery()
         )
         .await
         .unwrap();
+    let second = backend
+        .enqueue(
+            QueueCtx::new("a"),
+            JobMessage::new("second", vec![], "json", "q"),
+        )
+        .await
+        .unwrap();
     let mut builder = DogAppBuilder::<String, ()>::new();
     let (tx, rx) = watch::channel(false);
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -170,7 +177,7 @@ async fn event_hub_receives_authorized_snapshots_and_revocation_stops_delivery()
         &app,
         &context,
         backend,
-        vec![id],
+        vec![id, second],
         WatchOptions::default(),
         rx,
     )

@@ -95,6 +95,7 @@ where
         options,
     )?;
     let deadline = tokio::time::Instant::now() + lifetime;
+    let delivery_revoke = revoke.clone();
     tokio::select! {
         biased;
         _ = async {
@@ -106,6 +107,7 @@ where
         _ = tokio::time::sleep_until(deadline) => Ok(()),
         result = async {
             while let Some(update) = updates.next().await {
+                if *delivery_revoke.borrow() || delivery_revoke.has_changed().is_err() { return Ok(()); }
                 app.emit_custom("queue", "job_status", Arc::new(update?), ctx).await;
             }
             Ok(())
