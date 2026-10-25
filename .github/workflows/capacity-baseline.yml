@@ -8,7 +8,7 @@ on:
         description: Fixed layout for fresh fixtures only; never reshard an existing ledger
         type: choice
         options: [original-16, compact-4]
-        default: original-16
+        default: compact-4
 
 permissions:
   contents: read
@@ -36,10 +36,10 @@ jobs:
       DOGRS_NATS_IMAGE: nats:2.15.0-alpine
       DOGRS_NATS_ATOMIC: '1'
       DOGRS_NATS_CONNECTIONS: shared
-      NATS_LAYOUT: ${{ inputs.nats_layout || 'original-16' }}
-      NATS_SHARDS: ${{ inputs.nats_layout == 'compact-4' && '4' || '16' }}
-      DOGRS_NATS_ENQUEUE_CONCURRENCY: ${{ inputs.nats_layout == 'compact-4' && '8' || '2' }}
-      DOGRS_NATS_UPDATE_CONCURRENCY: ${{ inputs.nats_layout == 'compact-4' && '4' || '1' }}
+      NATS_LAYOUT: ${{ inputs.nats_layout || 'compact-4' }}
+      NATS_SHARDS: ${{ inputs.nats_layout == 'original-16' && '16' || '4' }}
+      DOGRS_NATS_ENQUEUE_CONCURRENCY: ${{ inputs.nats_layout == 'original-16' && '2' || '8' }}
+      DOGRS_NATS_UPDATE_CONCURRENCY: ${{ inputs.nats_layout == 'original-16' && '1' || '4' }}
       DOGRS_QUEUE_TIMINGS: '0'
       DOGRS_PG_PROFILE: '0'
     steps:

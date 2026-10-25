@@ -18,7 +18,7 @@ failures are retained, even if later cases pass.
 The initial candidate is a Lima Ubuntu 24.04 ARM64 VM named `dogrs-capacity`,
 with eight virtual CPUs, 16 GiB memory and a 40 GiB virtual disk on the existing
 Mac. No paid service is needed. Host folders are not mounted into the VM.
-This is a candidate, not yet a validated 900/s baseline. Mac activity, sleep,
+The `compact-4` profile passed the complete Mac qualification described below. Mac activity, sleep,
 power and storage contention can still affect it. Run on AC power with other
 heavy workloads stopped. Do not claim parity with the previous AMD runners.
 
@@ -60,8 +60,8 @@ job but recorded 14 and 9 late offers, and NATS failed both cases. High guest CP
 pressure was observed during NATS. The VM was then resized to eight CPUs.
 The repeated eight-CPU qualification is
 [run 40217853256](https://github.com/Jitpomi/dogrs/actions/runs/40217853256).
-No overall dedicated-host capacity claim or production qualification has been
-made. Hosted-runner diagnostics may
+That original-layout attempt did not establish a dedicated-host capacity claim.
+The later compact-layout qualification is documented below. Hosted diagnostics may
 still be run manually to study portability; they must not be used to cherry-pick
 an apparent baseline pass.
 
@@ -98,13 +98,16 @@ for timing, storage-durability limitations and the retained failed experiments.
 
 ### Explicit layout trials
 
-The dedicated workflow accepts `nats_layout=original-16` (the unchanged default)
-or `compact-4` for fresh disposable fixtures. The latter uses four buckets with
+The dedicated workflow defaults to `nats_layout=compact-4`, the tested Mac profile.
+`original-16` remains available for explicit comparisons using fresh fixtures. The compact layout uses four buckets with
 eight enqueue and four metadata lanes per bucket; the original uses sixteen
 buckets with two enqueue and one metadata lane each. Both total 32 enqueue and
 16 metadata execution lanes. This does not change replication, fsync, rate,
 payload size, worker count or drain deadline. The verifier must receive the same
 explicit layout using `--nats-layout compact-4`. It checks the recorded lanes and
 stream count, and will not infer a profile from the result. The Mac compact-layout
-qualification is pending; this option is not yet a validated production profile.
+qualification passed all eighteen measurements at 900/s. This is workload capacity
+evidence, not a general production certification. One NATS run took 64.936 seconds
+against the 65-second limit, so do not infer spare capacity. Full results and
+operating conditions are in [the investigation](capacity-reliability-2026-10-25.md#verified-mac-vm-qualification).
 Never apply a changed shard count to existing stored jobs without migration.

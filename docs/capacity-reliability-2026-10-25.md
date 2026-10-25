@@ -1,6 +1,6 @@
 # Capacity reliability investigation — 2026-10-25
 
-Status: **18/18 measurements passed at 900/s on the recorded AMD EPYC 7763 x64 runner**. This is an environment-specific workload qualification, not a guarantee for every runner or production deployment. ARM and local VM failures below remain valid.
+Status: **18/18 passed at 900/s on the Mac VM with `compact-4`; 18/18 previously passed on the AMD EPYC 7763 x64 runner with the original layout**. This is an environment-specific workload qualification, not a guarantee for every runner or production deployment. Failures from the earlier ARM and original-layout Mac runs below remain valid.
 
 All measurements below offer 54,000 unique 64 KiB jobs across 100 tenants over 60 seconds, with the existing five-second drain and 100 ms late-offer threshold. PostgreSQL durable commits, Redis always-fsync, and NATS three file-backed always-fsync replicas remain enabled.
 
@@ -148,6 +148,50 @@ Both compact-layout trials and both original-layout controls passed in the
 four/sixteen/sixteen/four comparison. This alone does not establish that the
 layout resolves intermittent failures. A new complete eighteen-case Mac
 qualification started at 20:13 UTC using the explicit `compact-4` layout.
-Results are pending. The independent verifier checks the four-stream topology,
+The complete run passed all eighteen measurements. The independent verifier checks the four-stream topology,
 eight enqueue/four metadata lanes, and the unchanged workload and durability
 criteria; selecting this profile does not accept a sixteen-stream result.
+
+## Verified Mac VM qualification
+
+The `compact-4` run completed at approximately 20:33 UTC on October 25 (14:33
+America/Denver), with no retries. PostgreSQL, Redis and NATS each passed all six
+measurements: 972,000 jobs accepted, completed and verified exactly once, zero
+late offers, overload rejections or operation errors. The independent verifier
+returned `passed: true`, six cases per backend, and no errors.
+
+| Backend | Passed | Elapsed range | Jobs accepted/completed/verified per case |
+|---|---:|---:|---|
+| PostgreSQL | 6/6 | 60.050–60.169 s | 54,000 / 54,000 / 54,000 |
+| Redis | 6/6 | 60.052–60.068 s | 54,000 / 54,000 / 54,000 |
+| NATS | 6/6 | 60.133–64.936 s | 54,000 / 54,000 / 54,000 |
+
+This was a local Mac VM run, not a GitHub-hosted capacity job. The host was Apple
+M1 Max with 64 GiB physical memory; the existing VM retained eight virtual CPUs,
+16 GiB RAM and rootless Docker. Docker Desktop was stopped, AC power connected,
+and sleep inhibited. Other user applications were not forcibly paused or closed.
+Source was `6ff9053` and Rust 1.99.1. No queue algorithm, replication count, fsync
+policy, payload, offered rate, admission bound or drain deadline was weakened.
+Only the NATS fixture topology and per-shard write lanes changed: 16×(2 enqueue,
+1 metadata) became 4×(8 enqueue, 4 metadata), retaining 32/16 total lanes.
+
+The dedicated Mac workflow now defaults to the tested `compact-4` profile.
+`original-16` remains available for explicit comparisons; hosted diagnostics keep
+their previous defaults. Existing ledgers must not be resharded in place. This
+qualifies the measured workload and environment, not every future host load or
+power-loss recovery scenario. One NATS case used almost the entire five-second
+drain allowance, and NATS enqueue p95 reached 3.596 seconds; no spare capacity or
+low-latency SLO is claimed. All prior failures are retained.
+
+The machine-readable [result summary](evidence/mac-capacity-2026-10-25.json)
+records every measurement, source/verifier commits, binary identity and archive
+checksum. Full raw reports and host-load samples are in the task workspace at
+`artifacts/dogrs-mac-capacity-2026-10-25/`; the independent verification command is:
+
+```sh
+python3 .github/scripts/verify_capacity_reports.py   /path/to/mac-qualification-compact4-20261025 --nats-layout compact-4
+```
+
+The workflow/verifier suite passed 25 tests. Full CI for the verifier/profile
+implementation passed in [run 40229822947](https://github.com/Jitpomi/dogrs/actions/runs/40229822947).
+The final default selection and evidence documentation followed that run.
