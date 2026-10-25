@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 45
     env:
       EXPECTED_RUNNER: ${{ vars.DOGRS_CAPACITY_RUNNER_NAME }}
+      RUSTUP_TOOLCHAIN: 1.99.1
       DOGRS_SYSTEM_BINARY: target/release/hosted-system
       DOGRS_CAPACITY_INFLIGHT: '32'
       DOGRS_CAPACITY_COMPARISON_TENANT: dogrs-test-dedicated-baseline

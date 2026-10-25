@@ -148,6 +148,8 @@ jobs:
           test "$RUNNER_NAME" = "$EXPECTED_RUNNER"
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.runner == 'dogrs-capacity' && '1.99.1' || 'stable' }}
       - run: cargo build -p hosted-system --release --features redis,nats${{ (inputs.profile_queue || inputs.mode == 'queue-comparison') && ',queue-diagnostics' || '' }} --locked
       - name: Install optional CPU profiler
         if: ${{ inputs.profile_cpu }}
