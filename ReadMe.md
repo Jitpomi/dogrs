@@ -7,6 +7,12 @@ This checkout prepares the **0.3.0 API**. It includes breaking changes from the
 published 0.1.x crates; changing this repository does not publish new crates.io
 versions. Read the [0.3.0 release notes](docs/release-after-0.2.md) and [earlier migration notes](docs/release-0.2.md) before updating an app.
 
+## S3 security notice
+
+The checkout contains a temporary AWS SigV4a dependency fix while retaining
+Multi-Region Access Point signing. **Crates.io consumers do not inherit this patch.**
+Read the [status, application workaround and release requirements](docs/aws-sigv4a-security.md).
+
 ## Start here
 
 ```sh
