@@ -20,7 +20,7 @@ WITH input AS MATERIALIZED (
    '{token}',to_jsonb(stamped.token)),
   status='processing',updated_at=stamped.now,lease_until=stamped.now+interval '1 second'*stamped.seconds
  FROM stamped WHERE j.tenant=stamped.tenant AND j.id=stamped.id
- RETURNING j.tenant,j.id,(j.state #- '{record,progress}'),j.payload
+ RETURNING j.tenant,j.id,j.state,j.payload
 )
 SELECT picked.ordinal,leased.state,leased.payload
 FROM picked LEFT JOIN leased USING (tenant,id) ORDER BY picked.ordinal

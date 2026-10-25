@@ -16,4 +16,4 @@ UPDATE dogrs_queue_jobs_v2 j SET
    '{token}',to_jsonb($3::text)),
  status='processing',updated_at=leased.now,lease_until=leased.until
 FROM leased WHERE j.tenant=$1 AND j.id=leased.id
-RETURNING (j.state #- '{record,progress}'),j.payload
+RETURNING j.state,j.payload
