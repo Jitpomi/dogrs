@@ -49,9 +49,14 @@ python3() {
         self.assertEqual(lines[:6], lines[6:12])
         self.assertEqual(lines[:6], lines[12:])
 
+    def test_isolated_x64_qualification_runs_all_eighteen(self):
+        result = self.run_comparison(mode='qualification', CAPACITY_RUNNER='ubuntu-latest')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len([line for line in result.stdout.splitlines() if '|' in line]), 18)
+
     def test_qualification_rejects_reduced_or_profiled_workload(self):
         for override in [dict(CAPACITY_RATE='5'), dict(DURATION_SECONDS='10'),
-                         dict(CAPACITY_RUNNER='ubuntu-latest'), dict(DOGRS_QUEUE_TIMINGS='1'),
+                         dict(CAPACITY_RUNNER='unrecognized-runner'), dict(DOGRS_QUEUE_TIMINGS='1'),
                          dict(DOGRS_PG_PROFILE='1'), dict(DOGRS_PERF='/usr/bin/perf')]:
             with self.subTest(override=override):
                 result = self.run_comparison(mode='qualification', **override)

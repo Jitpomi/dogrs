@@ -34,7 +34,9 @@ The manual diagnostics workflow also accepts `runner=dogrs-capacity` so the
 candidate can be tested before the new baseline workflow reaches the default
 branch. Use `mode=qualification`, 65,536-byte payloads, 60 seconds and rate nine,
 with all other settings at baseline defaults. Qualification rejects reduced
-rate/duration, profiling, and hosted runners. A failure anywhere fails the entire
+rate/duration and profiling. An isolated `ubuntu-latest` x64 job may also run
+the eighteen-case qualification with the pinned toolchain; its result applies
+only to the hardware recorded in that run, not every hosted runner. A failure anywhere fails the entire
 qualification; it is not retried automatically or replaced by a later pass.
 
 Record the commit, toolchain, runner name, OS, CPU, Docker version and each

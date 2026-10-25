@@ -37,3 +37,34 @@ The partial `qualification-quiet` attempt was stopped after both NATS cases fail
 The reusable qualification mode requires all eighteen measurements to pass and retains every failure. Regression checks reject reduced rate/duration and profiling. The six-case isolated ARM diagnostic with eight NATS shards is [run 40222520019](https://github.com/Jitpomi/dogrs/actions/runs/40222520019); its result must be reviewed before adopting any topology change.
 
 Bounded late-offer samples and maximum lateness are now recorded to distinguish startup delays from mid-run stalls. They do not change scheduling, admission, timing limits, or pass/fail logic.
+
+## Isolated ARM results
+
+[Run 40222520019](https://github.com/Jitpomi/dogrs/actions/runs/40222520019)
+used a fresh GitHub ARM runner and eight NATS shards. PostgreSQL and Redis each
+passed both trials: all 54,000 admitted, completed and verified, with zero late
+offers, overload or errors. NATS admitted/completed 49,288 and 49,014, rejecting
+4,712 and 4,986 offers respectively. Neither NATS trial had late offers or
+operation errors. Eight shards therefore did not qualify.
+
+The separately instrumented timing report in
+[run 40222817094](https://github.com/Jitpomi/dogrs/actions/runs/40222817094)
+used sixteen NATS shards on four Neoverse-N2 CPUs. It recorded zero late offers
+(maximum offer lateness 20.231 ms), 41,928 accepted, 28,609 completed, 11,805
+overload rejections, and a submission-deadline error. This distinguishes the
+remaining sustained-throughput bottleneck from the local Mac's timing stalls.
+A bounded 1 MiB enqueue batch target is under evaluation in
+[run 40223255704](https://github.com/Jitpomi/dogrs/actions/runs/40223255704),
+with two/eight/eight/two workers per tenant. This is not yet an accepted fix.
+
+The larger-batch comparison failed all four cases. With eight workers, admitted
+and completed counts were 48,362 and 48,064; neither met 54,000. With two workers,
+completion was only 14,899 and 18,376. No late offers occurred. The 1 MiB target
+was rejected and reverted to the original 256 KiB target. Runtime concurrency,
+shard count, collection windows, and workload thresholds are not changed by
+these rejected experiments.
+
+The next qualification uses an isolated x64 job and the original queue settings,
+with all eighteen measurements required. This explicitly evaluates a different
+hardware class rather than treating the failing ARM cases as passed. The actual
+CPU, toolchain and environment must accompany any resulting claim.

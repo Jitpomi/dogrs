@@ -9,10 +9,11 @@ use tokio::sync::{mpsc, oneshot};
 const MAX_MESSAGES: usize = 128;
 pub(super) const ADMISSION_CAPACITY: usize = 128;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
-// Bound coalescing independently of the per-operation limit. Larger groups
-// amortize replicated durable acknowledgements when a lane has a backlog;
-// each logical operation remains indivisible and the hard byte cap still applies.
-const TARGET_BATCH_BYTES: usize = 1024 * 1024;
+// JetStream closes a Raft append after the entry that crosses 256 KiB,
+// rather than before it. Include the logical operation crossing the target;
+// enqueues put their small metadata first and payload last so the crossing
+// entry can also finish the atomic batch. A larger operation stays intact.
+const TARGET_BATCH_BYTES: usize = 256 * 1024;
 struct Write {
     key: String,
     // Share the owned buffer with async-nats and any definitively rejected

@@ -149,8 +149,12 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ inputs.runner == 'dogrs-capacity' && '1.99.1' || 'stable' }}
+          toolchain: ${{ (inputs.runner == 'dogrs-capacity' || inputs.mode == 'qualification') && '1.99.1' || 'stable' }}
       - run: cargo build -p hosted-system --release --features redis,nats${{ (inputs.profile_queue || inputs.mode == 'queue-comparison') && ',queue-diagnostics' || '' }} --locked
+      - name: Record build identity
+        run: |
+          mkdir -p provider-capacity
+          { echo "Commit: $GITHUB_SHA"; echo "Runner: $RUNNER_NAME"; rustc --version --verbose; cargo --version; uname -a; } > provider-capacity/build-host.txt
       - name: Install optional CPU profiler
         if: ${{ inputs.profile_cpu }}
         run: |
@@ -178,7 +182,7 @@ jobs:
             status=0
             rounds=1
             if [ "$CAPACITY_MODE" = qualification ]; then
-              test "$CAPACITY_RUNNER" = dogrs-capacity
+              case "$CAPACITY_RUNNER" in dogrs-capacity|ubuntu-latest) ;; *) exit 2 ;; esac
               test "$NATS_SHARDS" = 16
               test "$CAPACITY_RATE" = 9
               test "$DURATION_SECONDS" = 60
