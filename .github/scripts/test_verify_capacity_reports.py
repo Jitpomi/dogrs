@@ -1,0 +1,86 @@
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from verify_capacity_reports import verify
+
+
+class QualificationEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        for backend in ('postgres', 'redis', 'nats'):
+            for index in range(6):
+                folder = self.root / f'{backend}-{index}'
+                folder.mkdir()
+                environment = dict(backend=backend, queue_stage_timings=False,
+                                   postgres_wait_sampling=False, cpu_sampling=False)
+                (folder / 'environment.json').write_text(json.dumps(environment))
+                result = dict(tenants=100, jobs_per_second_per_tenant=9, seconds=60,
+                              payload_bytes=65536, offered=54000, accepted=54000,
+                              completed=54000, verified_terminal_once=54000,
+                              overload=0, late_offers=0, error_count=0,
+                              workers_per_tenant=2 if backend == 'nats' else 1,
+                              max_inflight_per_tenant=32, passed=True, errors=[],
+                              elapsed_seconds=60.5, stage_timings=None,
+                              payload_pattern='unique-per-tenant-and-sequence',
+                              latency_includes_recovery=False, overload_recovery=None,
+                              shards='16' if backend == 'nats' else '1')
+                (folder / 'capacity.log').write_text(json.dumps(result))
+                if backend == 'postgres':
+                    (folder / 'durability-settings.txt').write_text(
+                        'fsync | on\nfull_page_writes | on\nsynchronous_commit | on\n')
+                elif backend == 'redis':
+                    (folder / 'redis-durability-settings.txt').write_text(
+                        'appendonly\nyes\nappendfsync\nalways\n'
+                        'no-appendfsync-on-rewrite\nno\nmaxmemory-policy\nnoeviction\n')
+                else:
+                    for server in range(3):
+                        streams = [dict(name=f'queue-{i}', config=dict(storage='file',
+                                   num_replicas=3)) for i in range(server, 16, 3)]
+                        (folder / f'n{server}-stream-state.json').write_text(json.dumps(
+                            dict(server_id=f'server-{server}', config=dict(sync_always=True),
+                                 account_details=[dict(stream_detail=streams)])))
+
+    def test_complete_evidence_passes(self):
+        counts, errors = verify(self.root)
+        self.assertEqual(counts, dict(postgres=6, redis=6, nats=6))
+        self.assertEqual(errors, [])
+
+    def test_missing_or_duplicate_results_fail(self):
+        log = self.root / 'postgres-0/capacity.log'
+        log.unlink()
+        self.assertTrue(verify(self.root)[1])
+        log = self.root / 'redis-0/capacity.log'
+        log.write_text(log.read_text() + '\n' + log.read_text())
+        self.assertTrue(any('exactly one result' in error for error in verify(self.root)[1]))
+
+    def test_green_flag_cannot_hide_loss_or_relaxed_deadline(self):
+        log = self.root / 'nats-0/capacity.log'
+        original = json.loads(log.read_text())
+        for change in [dict(accepted=53999), dict(verified_terminal_once=53999),
+                       dict(late_offers=1), dict(elapsed_seconds=66),
+                       dict(elapsed_seconds=float('nan')), dict(seconds=10),
+                       dict(payload_bytes=1024), dict(error_count=False),
+                       dict(overload_recovery={'extra_seconds_allowed': 30})]:
+            with self.subTest(change=change):
+                log.write_text(json.dumps(original | change))
+                self.assertTrue(verify(self.root)[1])
+
+    def test_weakened_durability_fails_for_every_backend(self):
+        pg = self.root / 'postgres-0/durability-settings.txt'
+        pg.write_text(pg.read_text().replace('fsync | on', 'fsync | off'))
+        redis = self.root / 'redis-0/redis-durability-settings.txt'
+        redis.write_text(redis.read_text().replace('always', 'everysec'))
+        nats = self.root / 'nats-0/n0-stream-state.json'
+        state = json.loads(nats.read_text())
+        state['account_details'][0]['stream_detail'][0]['config']['num_replicas'] = 1
+        nats.write_text(json.dumps(state))
+        errors = verify(self.root)[1]
+        self.assertEqual(len(errors), 3)
+
+
+if __name__ == '__main__':
+    unittest.main()

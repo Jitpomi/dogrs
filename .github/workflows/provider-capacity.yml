@@ -356,6 +356,9 @@ jobs:
           NATS_CONNECTIONS: ${{ inputs.nats_connections || 'shared' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
           DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '16') || (matrix.backend == 'postgres' && inputs.postgres_shards != 'compare' && inputs.postgres_shards) || '1' }}
+      - name: Verify complete qualification evidence
+        if: ${{ always() && inputs.mode == 'qualification' }}
+        run: python3 .github/scripts/verify_capacity_reports.py provider-capacity
       - name: Explain capacity result
         if: always()
         run: |

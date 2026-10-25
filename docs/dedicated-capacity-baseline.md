@@ -38,6 +38,9 @@ rate/duration and profiling. An isolated `ubuntu-latest` x64 job may also run
 the eighteen-case qualification with the pinned toolchain; its result applies
 only to the hardware recorded in that run, not every hosted runner. A failure anywhere fails the entire
 qualification; it is not retried automatically or replaced by a later pass.
+An independent report verifier also requires six complete results per backend,
+checks the workload and deadline fields, and validates recorded PostgreSQL,
+Redis and NATS durability settings. Missing evidence fails qualification.
 
 Record the commit, toolchain, runner name, OS, CPU, Docker version and each
 fixture's hardware/environment artifacts. Changing the VM resources, toolchain,
