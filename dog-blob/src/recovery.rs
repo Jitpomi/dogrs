@@ -144,10 +144,21 @@ impl UploadJournal for MemoryUploadJournal {
 pub struct FileUploadJournal {
     directory: PathBuf,
 }
+// Closing a descriptor alone may leave a flock held by a duplicate inherited
+// during another thread's process spawn. Explicitly unlock when the final
+// journal owner finishes. Blocking writes share this owner so cancellation
+// cannot release exclusion before their durable work settles.
+struct JournalLock(File);
+impl Drop for JournalLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock(); // Closing the file remains the fallback on error.
+    }
+}
+
 struct FileLease {
     in_flight: bool,
     acknowledged: bool,
-    _lock: File,
+    _lock: Arc<JournalLock>,
     path: PathBuf,
     directory: PathBuf,
     record: PendingWrite,
@@ -167,7 +178,7 @@ impl FileUploadJournal {
             directory: directory.canonicalize()?,
         })
     }
-    fn lock(&self, id: &str) -> BlobResult<Option<File>> {
+    fn lock(&self, id: &str) -> BlobResult<Option<Arc<JournalLock>>> {
         crate::bounded::identifier(id)?;
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
@@ -178,7 +189,7 @@ impl FileUploadJournal {
         }
         let file = options.open(self.directory.join(format!("{id}.lock")))?;
         match file.try_lock() {
-            Ok(()) => Ok(Some(file)),
+            Ok(()) => Ok(Some(Arc::new(JournalLock(file)))),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
         }
@@ -205,8 +216,8 @@ impl UploadLease for FileLease {
         let path = self.path.clone();
         let directory = self.directory.clone();
         let value = record.clone();
-        let lock = self._lock.try_clone()?;
-        // Retain a duplicate lock descriptor in the blocking operation even if
+        let lock = Arc::clone(&self._lock);
+        // Retain shared lock ownership in the blocking operation even if
         // the async caller is canceled, so recovery cannot race a late rename.
         self.in_flight = true;
         tokio::task::spawn_blocking(move || {
@@ -227,7 +238,7 @@ impl UploadLease for FileLease {
         }
         let path = self.path.clone();
         let directory = self.directory.clone();
-        let lock = self._lock.try_clone()?;
+        let lock = Arc::clone(&self._lock);
         self.in_flight = true;
         tokio::task::spawn_blocking(move || -> BlobResult<()> {
             let _lock = lock;
@@ -323,5 +334,33 @@ impl UploadJournal for FileUploadJournal {
         tokio::task::spawn_blocking(move || journal.list_sync())
             .await
             .map_err(BlobError::backend)?
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn final_owner_unlocks_even_with_an_inherited_descriptor() {
+        let directory = tempfile::tempdir().unwrap();
+        let journal = FileUploadJournal::new(directory.path()).unwrap();
+        let owner = journal.lock("ownership").unwrap().unwrap();
+        // Simulate the descriptor retained briefly by a concurrently spawned
+        // process before exec. It is not a journal writer.
+        let inherited_descriptor = owner.0.try_clone().unwrap();
+        let blocking_operation = Arc::clone(&owner);
+        drop(owner);
+        assert!(journal.lock("ownership").unwrap().is_none());
+        // A canceled caller cannot release a still-running operation's lock.
+        drop(blocking_operation);
+        let recovered = journal
+            .lock("ownership")
+            .unwrap()
+            .expect("final journal owner must release the lock before returning");
+        drop(inherited_descriptor);
+        assert!(journal.lock("ownership").unwrap().is_none());
+        drop(recovered);
+        assert!(journal.lock("ownership").unwrap().is_some());
     }
 }

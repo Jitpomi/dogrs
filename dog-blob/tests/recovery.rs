@@ -208,7 +208,7 @@ fn canceled_disk_journal_mutation_cannot_be_reused_or_race_recovery() {
         next.native_id = Some("first-handle".into());
         let mut saving = lease.save(next.clone());
         assert!(futures::poll!(saving.as_mut()).is_pending());
-        drop(saving); // Its disk worker is queued and still owns a duplicate lock.
+        drop(saving); // Its disk worker is queued and still shares lock ownership.
         assert!(lease.save(next.clone()).await.is_err());
         assert!(lease.acknowledge().await.is_err());
         drop(lease);
