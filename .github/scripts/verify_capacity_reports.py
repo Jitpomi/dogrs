@@ -14,7 +14,7 @@ def require(condition, message):
 NATS_LAYOUTS = {"original-16": (16, 2, 1), "compact-4": (4, 8, 4)}
 
 
-def verify_case(folder, backend, result, nats_layout="original-16"):
+def verify_case(folder, backend, result, nats_layout="original-16", headroom=False):
     nats_shards, _, _ = NATS_LAYOUTS[nats_layout]
     expected = dict(tenants=100, jobs_per_second_per_tenant=9, seconds=60,
                     payload_bytes=65536, offered=54000, accepted=54000,
@@ -30,6 +30,11 @@ def verify_case(folder, backend, result, nats_layout="original-16"):
     elapsed = result.get('elapsed_seconds')
     require(type(elapsed) in (float, int) and math.isfinite(elapsed)
             and 0 < elapsed <= 65, 'invalid elapsed time or drain deadline exceeded')
+    if headroom:
+        require(elapsed <= 62, 'headroom: completion exceeded 62 seconds')
+        latency = result.get('enqueue_p95_ms')
+        require(type(latency) in (float, int) and math.isfinite(latency)
+                and 0 <= latency <= 1000, 'headroom: enqueue p95 exceeded 1000 ms or missing')
     require(result.get('payload_pattern') == 'unique-per-tenant-and-sequence',
             'wrong payload workload')
     require(result.get('latency_includes_recovery') is False
@@ -76,7 +81,7 @@ def verify_case(folder, backend, result, nats_layout="original-16"):
         require(len(streams) == nats_shards, f'expected {nats_shards} NATS streams')
 
 
-def verify(root, nats_layout="original-16"):
+def verify(root, nats_layout="original-16", headroom=False):
     require(nats_layout in NATS_LAYOUTS, "unknown NATS layout")
     counts = Counter()
     errors = []
@@ -104,7 +109,7 @@ def verify(root, nats_layout="original-16"):
                     if isinstance(row, dict) and 'offered' in row:
                         results.append(row)
             require(len(results) == 1, 'expected exactly one result per fixture')
-            verify_case(log.parent, backend, results[0], nats_layout)
+            verify_case(log.parent, backend, results[0], nats_layout, headroom)
         except (ValueError, OSError, KeyError, TypeError) as error:
             errors.append(f'{log.parent.name}: {error}')
     for backend in ('postgres', 'redis', 'nats'):
@@ -117,7 +122,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('reports', type=Path)
     parser.add_argument('--nats-layout', choices=NATS_LAYOUTS, default='original-16')
+    parser.add_argument('--headroom', action='store_true',
+                        help='Also require completion <=62s and enqueue p95 <=1000ms in every case')
     args = parser.parse_args()
-    counts, errors = verify(args.reports, args.nats_layout)
+    counts, errors = verify(args.reports, args.nats_layout, args.headroom)
     print(json.dumps(dict(measurements=counts, passed=not errors, errors=errors), indent=2))
     raise SystemExit(bool(errors))

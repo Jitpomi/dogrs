@@ -80,11 +80,11 @@ jobs:
           exit "$status"
       - name: Verify complete qualification evidence
         if: always()
-        run: python3 .github/scripts/verify_capacity_reports.py provider-capacity --nats-layout "$NATS_LAYOUT"
+        run: python3 .github/scripts/verify_capacity_reports.py provider-capacity --nats-layout "$NATS_LAYOUT" --headroom
       - name: Record qualification scope
         if: always()
         run: |
-          echo 'This benchmark qualifies only the recorded host and settings. All eighteen measurements must pass; a later pass does not erase an earlier failure. Inspect the attached capacity.log files for admission, completion and payload-verification counts.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This benchmark qualifies only the recorded host and settings. All eighteen measurements must pass, finish within 62 seconds, and keep enqueue p95 at or below 1000 ms; a later pass does not erase an earlier failure. Inspect the attached capacity.log files for admission, completion and payload-verification counts.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -195,3 +195,85 @@ python3 .github/scripts/verify_capacity_reports.py   /path/to/mac-qualification-
 The workflow/verifier suite passed 25 tests. Full CI for the verifier/profile
 implementation passed in [run 40229822947](https://github.com/Jitpomi/dogrs/actions/runs/40229822947).
 The final default selection and evidence documentation followed that run.
+
+
+## Headroom follow-up (2026-10-25, 20:41–20:46 UTC)
+
+The dedicated qualification now additionally requires every measurement to finish
+within 62 seconds and enqueue p95 to remain at or below 1000 ms. These targets
+were chosen before the new experiments. Use `verify_capacity_reports.py --headroom`
+with the matching layout. The previous compact-4 qualification fails this stricter
+check in two NATS fixtures (7d164e2c06 and d023effacf). Its original pass remains
+valid only against the original 65-second gate.
+
+A runtime comparison (GOMAXPROCS=4 and TOKIO_WORKER_THREADS=4 versus automatic)
+was stopped because the Mac exhausted available disk space. The first bounded
+fixture c103971e9c accepted 31,993 and completed 22,505 jobs; the first automatic
+control fccf4180ba accepted 42,760 and completed 26,217. Both failed. A second
+automatic fixture 33f38b5ced was interrupted by host storage exhaustion and is not
+a qualification result. The fourth planned measurement was not started. Reports
+remain inside the stopped VM under ~/headroom-threads-{bounded,automatic}.
+No runtime tuning from this experiment was adopted.
+
+During these runs the host reported 17.6 GiB swap usage, substantial IDE background
+CPU activity, and available space fell from 6.7 GiB to 162 MiB. Guest I/O pressure
+was elevated and guest commands ultimately returned input/output errors. These
+observations do not isolate the cause of the earlier narrow pass. The VM was shut
+down to stop further writes. Docker Desktop remains stopped deliberately until
+host disk space is recovered. Before resuming, recover sufficient host storage,
+check the guest filesystem and disposable fixtures, and repeat controlled tests.
+Headroom is **not yet qualified**; do not treat the new verifier as a performance fix.
+
+
+### Safe cleanup and resumed measurements
+
+The follow-up recovered host storage by deleting regenerable npm package cache,
+Chrome HTTP/code/image cache directories (not Storage, profiles, cookies or
+history), Xcode DerivedData, and three old Sparkle updater staging directories.
+No project source, personal documents, credentials or arbitrary Docker volumes
+were removed. Boot-time filesystem checking repaired the test VM; tune2fs then
+reported clean. The release binary SHA256 still matched the earlier qualification.
+Only the three abandoned containers for fixture 33f38b5ced and its isolated
+network were removed. Guest fstrim reclaimed unused sparse-disk blocks. Host free
+space rose from 2.1 GiB before cleanup to approximately 32 GiB afterward.
+
+The unchanged compact-4 baseline then passed two 900/s NATS measurements:
+39b8afbb63 finished in 60.0967 s with enqueue p95 117.11 ms; 49624256fd finished
+in 60.0892 s with enqueue p95 230.27 ms. Both verified all 54,000 jobs, with zero
+late offers, overload or errors. These two runs alone are not qualification.
+
+Two additional 1000/s stress measurements each completed and verified 60,000
+jobs, but failed the zero-late-offer requirement: 50a6cede5d had eight late offers
+and 1066.93 ms enqueue p95; 455ba4145f had 136 late offers and 842.13 ms p95.
+Neither is a pass or evidence of qualified 1000/s capacity. No runtime code or
+thread tuning was adopted. A fresh eighteen-case 900/s headroom qualification
+was started after these diagnostics; its results are recorded separately below.
+
+
+### Follow-up outcome: headroom remains unqualified
+
+The resumed qualification stopped after five completed fixtures: PostgreSQL and
+both Redis cases passed, as did the first NATS case. The second NATS case,
+dc81e793c5, completed and verified all jobs but recorded 136 late offers and
+1845.75 ms enqueue p95. The sequence is failed and incomplete, not 18/18.
+A host-space preflight paused between the first and second cases while macOS
+reclaimed trimmed blocks; the same sequence resumed without repeating a case.
+
+An 8 GiB guest-memory trial retained eight CPUs and the existing four buckets.
+Both measurements completed all jobs but recorded 17 and 157 late offers.
+A subsequent two/four/four/two-bucket comparison retained 32 total enqueue lanes
+and 16 total metadata lanes: each layout passed once and failed once. These
+trials do not justify adopting either change. The VM was returned to 16 GiB and
+stopped after testing. Docker Desktop was restarted.
+
+Late offers remained present even in a run with 74.2 ms enqueue p95 and 60.22 s
+completion. Concurrent host builds and substantial swap usage were observed;
+these observations suggest host scheduling interference but do not establish
+exclusive causality. A quiet, controlled host interval is needed to isolate
+remaining provider/runtime effects. No passing criterion was relaxed, and no
+runtime tuning was adopted. The requested headroom improvement remains open.
+
+Machine-readable results and raw-log checksums are in
+[evidence/mac-headroom-followup-2026-10-25.json](evidence/mac-headroom-followup-2026-10-25.json).
+The local archive is `artifacts/dogrs-mac-capacity-2026-10-25/headroom-followup.tar.gz`
+in the parent task workspace, retaining failures and incomplete fixtures.

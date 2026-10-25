@@ -11,7 +11,10 @@ measurements) on the designated host, using fresh
 fixtures. Every case must admit, complete and verify all 54,000 offers: 100
 tenants at nine jobs/second each for 60 seconds, 64 KiB unique payloads and the
 existing five-second drain. Durable commit settings remain unchanged. All
-failures are retained, even if later cases pass.
+failures are retained, even if later cases pass. The dedicated workflow also applies
+`--headroom`: every case must finish within 62 seconds and report finite enqueue
+p95 at or below 1000 ms. A pass against the older 65-second gate alone does not
+qualify headroom.
 
 ## Host selection and operation
 
@@ -20,7 +23,13 @@ with eight virtual CPUs, 16 GiB memory and a 40 GiB virtual disk on the existing
 Mac. No paid service is needed. Host folders are not mounted into the VM.
 The `compact-4` profile passed the complete Mac qualification described below. Mac activity, sleep,
 power and storage contention can still affect it. Run on AC power with other
-heavy workloads stopped. Do not claim parity with the previous AMD runners.
+heavy workloads stopped. Before starting, require at least 25 GiB free on the
+Mac host as well as sufficient space inside the guest. Check host space between
+fixtures; the guest free-space figure alone does not protect a sparse VM disk
+from host exhaustion. Stop further fixtures if this reserve is unavailable.
+After an I/O failure, check filesystem recovery and the benchmark binary checksum
+before reusing the VM. Remove only identified disposable test fixtures; never
+prune arbitrary Docker volumes or user files. Do not claim parity with the previous AMD runners.
 
 Register only this VM with runner labels `self-hosted`, `linux`, and
 `dogrs-capacity`. Set repository variable `DOGRS_CAPACITY_RUNNER_NAME` to its

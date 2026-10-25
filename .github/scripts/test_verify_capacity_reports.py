@@ -27,7 +27,7 @@ class QualificationEvidenceTests(unittest.TestCase):
                               overload=0, late_offers=0, error_count=0,
                               workers_per_tenant=2 if backend == 'nats' else 1,
                               max_inflight_per_tenant=32, passed=True, errors=[],
-                              elapsed_seconds=60.5, stage_timings=None,
+                              elapsed_seconds=60.5, enqueue_p95_ms=100, stage_timings=None,
                               payload_pattern='unique-per-tenant-and-sequence',
                               latency_includes_recovery=False, overload_recovery=None,
                               shards='16' if backend == 'nats' else '1')
@@ -75,6 +75,20 @@ class QualificationEvidenceTests(unittest.TestCase):
         env['nats_update_concurrency'] = 8
         path.write_text(json.dumps(env))
         self.assertTrue(verify(self.root, 'compact-4')[1])
+
+    def test_headroom_requires_latency_and_completion_reserve(self):
+        self.assertEqual(verify(self.root, headroom=True)[1], [])
+        log = self.root / 'nats-0/capacity.log'
+        original = json.loads(log.read_text())
+        for change in [dict(elapsed_seconds=62.001), dict(enqueue_p95_ms=1000.001),
+                       dict(enqueue_p95_ms=None), dict(enqueue_p95_ms=float('nan')),
+                       dict(enqueue_p95_ms=True), dict(enqueue_p95_ms=-1)]:
+            with self.subTest(change=change):
+                log.write_text(json.dumps(original | change))
+                self.assertEqual(verify(self.root)[1], [])
+                self.assertTrue(verify(self.root, headroom=True)[1])
+        log.write_text(json.dumps(original | dict(elapsed_seconds=62, enqueue_p95_ms=1000)))
+        self.assertEqual(verify(self.root, headroom=True)[1], [])
 
     def test_missing_or_duplicate_results_fail(self):
         log = self.root / 'postgres-0/capacity.log'
