@@ -6,7 +6,8 @@ checks. `Provider capacity diagnostics` is now manual-only; historical failures
 remain valid evidence and are not reclassified as passes.
 
 `Dedicated capacity baseline` is also manual-only. It runs PostgreSQL, Redis,
-NATS, NATS, Redis, PostgreSQL serially on the designated host, using fresh
+NATS, NATS, Redis, PostgreSQL serially, repeated for three full rounds (18
+measurements) on the designated host, using fresh
 fixtures. Every case must admit, complete and verify all 54,000 offers: 100
 tenants at nine jobs/second each for 60 seconds, 64 KiB unique payloads and the
 existing five-second drain. Durable commit settings remain unchanged. All
@@ -31,8 +32,10 @@ Do not provide production secrets or host SSH agents to the VM.
 
 The manual diagnostics workflow also accepts `runner=dogrs-capacity` so the
 candidate can be tested before the new baseline workflow reaches the default
-branch. Use `mode=all-backends`, 65,536-byte payloads, 60 seconds and rate nine,
-with all other settings at baseline defaults.
+branch. Use `mode=qualification`, 65,536-byte payloads, 60 seconds and rate nine,
+with all other settings at baseline defaults. Qualification rejects reduced
+rate/duration, profiling, and hosted runners. A failure anywhere fails the entire
+qualification; it is not retried automatically or replaced by a later pass.
 
 Record the commit, toolchain, runner name, OS, CPU, Docker version and each
 fixture's hardware/environment artifacts. Changing the VM resources, toolchain,

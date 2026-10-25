@@ -5,7 +5,7 @@ on:
       mode:
         description: Queue acceptance, repeated comparisons, or admission-only attribution diagnostics
         type: choice
-        options: [queue, queue-comparison, nats-pipeline-comparison, all-backends, attribution]
+        options: [queue, queue-comparison, nats-pipeline-comparison, all-backends, qualification, attribution]
         default: queue
       runner:
         description: Hosted diagnostic runner or designated dedicated capacity host
@@ -132,12 +132,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.mode == 'all-backends' && '["all"]' || inputs.backend && format('["{0}"]', inputs.backend) || '["postgres","redis","nats"]') }}
+        backend: ${{ fromJSON((inputs.mode == 'all-backends' || inputs.mode == 'qualification') && '["all"]' || inputs.backend && format('["{0}"]', inputs.backend) || '["postgres","redis","nats"]') }}
     runs-on: ${{ inputs.runner == 'dogrs-capacity' && fromJSON('["self-hosted","linux","dogrs-capacity"]') || inputs.runner || 'ubuntu-latest' }}
     concurrency:
       group: ${{ inputs.runner == 'dogrs-capacity' && 'dogrs-dedicated-capacity' || format('capacity-{0}-{1}', github.run_id, matrix.backend) }}
       cancel-in-progress: false
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Require designated dedicated host
         if: ${{ inputs.runner == 'dogrs-capacity' }}
@@ -161,7 +161,7 @@ jobs:
           "$profiler" version
           echo "DOGRS_PERF=$profiler" >> "$GITHUB_ENV"
       - run: |
-          if [ "$CAPACITY_MODE" = all-backends ]; then
+          if [ "$CAPACITY_MODE" = all-backends ] || [ "$CAPACITY_MODE" = qualification ]; then
             # One binary and host, fresh durable fixtures, both provider orders.
             # Keep every failure; later success must not overwrite it.
             test "$PAYLOAD_BYTES" = 65536
@@ -176,11 +176,24 @@ jobs:
             test "$PRODUCER_CAP" = none
             export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-all-backends
             status=0
-            for provider in postgres redis nats nats redis postgres; do
-              workers=1; shards=1; storage=extended
-              if [ "$provider" = nats ]; then workers=2; shards=16; fi
-              if [ "$provider" = postgres ]; then storage=external; fi
-              DOGRS_CAPACITY_WORKERS="$workers" DOGRS_CAPACITY_SHARDS="$shards" DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$provider" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            rounds=1
+            if [ "$CAPACITY_MODE" = qualification ]; then
+              test "$CAPACITY_RUNNER" = dogrs-capacity
+              test "$CAPACITY_RATE" = 9
+              test "$DURATION_SECONDS" = 60
+              test "$DOGRS_QUEUE_TIMINGS" = 0
+              test "$DOGRS_PG_PROFILE" = 0
+              test -z "${DOGRS_PERF:-}"
+              rounds=3
+            fi
+            for round in $(seq 1 "$rounds"); do
+              echo "Qualification round $round/$rounds"
+              for provider in postgres redis nats nats redis postgres; do
+                workers=1; shards=1; storage=extended
+                if [ "$provider" = nats ]; then workers=2; shards=16; fi
+                if [ "$provider" = postgres ]; then storage=external; fi
+                DOGRS_CAPACITY_WORKERS="$workers" DOGRS_CAPACITY_SHARDS="$shards" DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$provider" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+              done
             done
             exit "$status"
           fi
@@ -312,6 +325,7 @@ jobs:
           python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
         env:
           CAPACITY_MODE: ${{ inputs.mode || 'queue' }}
+          CAPACITY_RUNNER: ${{ inputs.runner || 'ubuntu-latest' }}
           BACKEND: ${{ matrix.backend }}
           CAPACITY_RATE: ${{ inputs.jobs_per_second_per_tenant || '9' }}
           DURATION_SECONDS: ${{ inputs.seconds || '60' }}

@@ -8,9 +8,9 @@ WORKFLOW = Path(__file__).resolve().parents[1] / 'workflows/provider-capacity.ym
 
 
 class AllBackendCapacityTests(unittest.TestCase):
-    def run_comparison(self, failed_provider=''):
+    def run_comparison(self, failed_provider='', mode='all-backends', **overrides):
         workflow = WORKFLOW.read_text()
-        start = workflow.index('          if [ "$CAPACITY_MODE" = all-backends ]; then')
+        start = workflow.index('          if [ "$CAPACITY_MODE" = all-backends ]')
         end = workflow.index('          if [ "$CAPACITY_MODE" = queue-comparison ]; then', start)
         script = '''set -e
 python3() {
@@ -18,17 +18,19 @@ python3() {
   test "$2" != "$FAIL_PROVIDER"
 }
 ''' + workflow[start:end]
-        env = dict(os.environ, CAPACITY_MODE='all-backends', PAYLOAD_BYTES='65536',
+        env = dict(os.environ, CAPACITY_MODE=mode, PAYLOAD_BYTES='65536',
                    WORKER_COMPARISON='auto', NATS_ATOMIC='on', NATS_CONNECTIONS='shared',
                    PG_INSTANCES='1', PG_SHARDS='1', DOGRS_PG_FIXTURE_PARTITIONS='0',
                    PG_WAL_INIT='on', PG_PAYLOAD_STORAGE='external', PRODUCER_CAP='none',
                    CAPACITY_RATE='9', DURATION_SECONDS='60', FAIL_PROVIDER=failed_provider)
+        env.update(CAPACITY_RUNNER='dogrs-capacity', DOGRS_QUEUE_TIMINGS='0', DOGRS_PG_PROFILE='0')
+        env.update(overrides)
         return subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
 
     def test_preserves_backend_settings_and_reverses_order(self):
         result = self.run_comparison()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), [
+        self.assertEqual([line for line in result.stdout.splitlines() if '|' in line], [
             'postgres|1|1|external', 'redis|1|1|extended', 'nats|2|16|extended',
             'nats|2|16|extended', 'redis|1|1|extended', 'postgres|1|1|external',
         ])
@@ -36,9 +38,25 @@ python3() {
     def test_later_pass_does_not_erase_failure_or_skip_remaining_backends(self):
         result = self.run_comparison('redis')
         self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertEqual(len(result.stdout.splitlines()), 6)
-        self.assertEqual(result.stdout.splitlines()[-1], 'postgres|1|1|external')
+        self.assertEqual(len([line for line in result.stdout.splitlines() if '|' in line]), 6)
+        self.assertEqual([line for line in result.stdout.splitlines() if '|' in line][-1], 'postgres|1|1|external')
 
+    def test_qualification_preserves_all_eighteen_results(self):
+        result = self.run_comparison('nats', mode='qualification')
+        self.assertEqual(result.returncode, 1)
+        lines = [line for line in result.stdout.splitlines() if '|' in line]
+        self.assertEqual(len(lines), 18)
+        self.assertEqual(lines[:6], lines[6:12])
+        self.assertEqual(lines[:6], lines[12:])
+
+    def test_qualification_rejects_reduced_or_profiled_workload(self):
+        for override in [dict(CAPACITY_RATE='5'), dict(DURATION_SECONDS='10'),
+                         dict(CAPACITY_RUNNER='ubuntu-latest'), dict(DOGRS_QUEUE_TIMINGS='1'),
+                         dict(DOGRS_PG_PROFILE='1'), dict(DOGRS_PERF='/usr/bin/perf')]:
+            with self.subTest(override=override):
+                result = self.run_comparison(mode='qualification', **override)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('|', result.stdout)
 
 if __name__ == '__main__':
     unittest.main()

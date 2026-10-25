@@ -20,7 +20,7 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.99.1
       DOGRS_SYSTEM_BINARY: target/release/hosted-system
       DOGRS_CAPACITY_INFLIGHT: '32'
-      DOGRS_CAPACITY_COMPARISON_TENANT: dogrs-test-dedicated-baseline
+      DOGRS_CAPACITY_COMPARISON_TENANT: dogrs-test-all-backends
       DOGRS_PG_ENQUEUE_CONCURRENCY: '48'
       DOGRS_PG_POOL_SIZE: '64'
       DOGRS_PG_INSTANCES: '1'
@@ -56,20 +56,23 @@ jobs:
             docker version
           } > provider-capacity/baseline-host.txt
       - run: cargo build -p hosted-system --release --features redis,nats --locked
-      - name: Measure all backends twice with fresh durable fixtures
+      - name: Measure three complete rounds with fresh durable fixtures
         run: |
           status=0
-          for provider in postgres redis nats nats redis postgres; do
-            workers=1; shards=1; storage=extended
-            if [ "$provider" = nats ]; then workers=2; shards=16; fi
-            if [ "$provider" = postgres ]; then storage=external; fi
-            DOGRS_CAPACITY_WORKERS="$workers" DOGRS_CAPACITY_SHARDS="$shards" DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$provider" --capacity --rate 9 --seconds 60 --bytes 65536 --report-dir provider-capacity || status=1
+          for round in 1 2 3; do
+            echo "Qualification round $round/3"
+            for provider in postgres redis nats nats redis postgres; do
+              workers=1; shards=1; storage=extended
+              if [ "$provider" = nats ]; then workers=2; shards=16; fi
+              if [ "$provider" = postgres ]; then storage=external; fi
+              DOGRS_CAPACITY_WORKERS="$workers" DOGRS_CAPACITY_SHARDS="$shards" DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$provider" --capacity --rate 9 --seconds 60 --bytes 65536 --report-dir provider-capacity || status=1
+            done
           done
           exit "$status"
       - name: Record qualification scope
         if: always()
         run: |
-          echo 'This benchmark qualifies only the recorded host and settings. All six measurements must pass; a later pass does not erase an earlier failure. Inspect the attached capacity.log files for admission, completion and payload-verification counts.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This benchmark qualifies only the recorded host and settings. All eighteen measurements must pass; a later pass does not erase an earlier failure. Inspect the attached capacity.log files for admission, completion and payload-verification counts.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
