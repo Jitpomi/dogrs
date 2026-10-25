@@ -1,0 +1,3 @@
+
+# AWS signature fixtures require exact whitespace and line endings.
+vendor/aws-sigv4/aws-signing-test-suite/** -text -whitespace

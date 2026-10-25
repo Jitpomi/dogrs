@@ -240,6 +240,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --locked
       - run: cargo audit
+      - name: Verify patched AWS signer including SigV4a
+        run: cargo test --manifest-path vendor/aws-sigv4/Cargo.toml --features sigv4a --lib --locked
 
   provider-recovery:
     runs-on: ubuntu-latest

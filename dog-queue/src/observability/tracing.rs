@@ -222,43 +222,6 @@ impl Default for SpanCollector {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{JobId, QueueCtx};
-
-    #[test]
-    fn test_distributed_tracing() {
-        let _tracing = DistributedTracing::new();
-        let _ctx = QueueCtx::new("test_tenant".to_string());
-        let _job_id = JobId::new();
-
-        // Test passes - basic tracing functionality works
-    }
-
-    #[test]
-    fn test_span_collector() {
-        let collector = SpanCollector::new();
-
-        let span_data = SpanData {
-            trace_id: "test_trace".to_string(),
-            span_id: "test_span".to_string(),
-            operation_name: "test_operation".to_string(),
-            start_time: chrono::Utc::now(),
-            end_time: None,
-            duration_ms: None,
-            status: SpanStatus::Ok,
-            attributes: std::collections::HashMap::new(),
-        };
-
-        collector.collect_span(span_data.clone());
-
-        let spans = collector.get_spans();
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].trace_id, "test_trace");
-    }
-}
-
 /// Capture only W3C identity and sampling flags. Explicit valid parents survive forwarding.
 pub(crate) fn capture_parent(message: crate::JobMessage) -> crate::JobMessage {
     #[cfg(feature = "tracing-opentelemetry")]
@@ -345,5 +308,42 @@ mod propagation_tests {
         assert!(json.get("traceparent").is_none());
         let legacy: crate::JobMessage = serde_json::from_value(json).unwrap();
         assert!(legacy.traceparent.is_none());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{JobId, QueueCtx};
+
+    #[test]
+    fn test_distributed_tracing() {
+        let _tracing = DistributedTracing::new();
+        let _ctx = QueueCtx::new("test_tenant".to_string());
+        let _job_id = JobId::new();
+
+        // Test passes - basic tracing functionality works
+    }
+
+    #[test]
+    fn test_span_collector() {
+        let collector = SpanCollector::new();
+
+        let span_data = SpanData {
+            trace_id: "test_trace".to_string(),
+            span_id: "test_span".to_string(),
+            operation_name: "test_operation".to_string(),
+            start_time: chrono::Utc::now(),
+            end_time: None,
+            duration_ms: None,
+            status: SpanStatus::Ok,
+            attributes: std::collections::HashMap::new(),
+        };
+
+        collector.collect_span(span_data.clone());
+
+        let spans = collector.get_spans();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].trace_id, "test_trace");
     }
 }
