@@ -17,6 +17,7 @@ members = [
     "dog-examples/fleet-queue",
     "dog-examples/auth-demo",
     "dog-examples/iot-devices",
+    "dog-examples/calendar",
     "dog-auth",
     "dog-auth-local",
     "dog-auth-oauth"
