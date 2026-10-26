@@ -230,25 +230,28 @@
 
     <!-- MODAL: SCHEDULE / EDIT EVENT (Native <dialog>) -->
     <dialog id="modal-event" class="event-dialog">
-        <form id="form-event" method="dialog" class="event-form">
+        <form id="form-event" class="event-form">
             <div class="event-dialog-header">
-                <div class="color-picker-chips">
-                    <label class="chip-color" title="Indigo (Engineering)">
-                        <input type="radio" name="color" value="indigo" checked />
-                        <span class="swatch swatch-indigo"></span>
-                    </label>
-                    <label class="chip-color" title="Emerald (Product)">
-                        <input type="radio" name="color" value="emerald" />
-                        <span class="swatch swatch-emerald"></span>
-                    </label>
-                    <label class="chip-color" title="Amber (Release)">
-                        <input type="radio" name="color" value="amber" />
-                        <span class="swatch swatch-amber"></span>
-                    </label>
-                    <label class="chip-color" title="Rose (Personal)">
-                        <input type="radio" name="color" value="rose" />
-                        <span class="swatch swatch-rose"></span>
-                    </label>
+                <div class="modal-header-meta">
+                    <h3 id="modal-heading-title" class="modal-dialog-heading">Schedule Event</h3>
+                    <div class="color-picker-chips">
+                        <label class="chip-color" title="Indigo (Engineering)">
+                            <input type="radio" name="color" value="indigo" checked />
+                            <span class="swatch swatch-indigo"></span>
+                        </label>
+                        <label class="chip-color" title="Emerald (Product)">
+                            <input type="radio" name="color" value="emerald" />
+                            <span class="swatch swatch-emerald"></span>
+                        </label>
+                        <label class="chip-color" title="Amber (Release)">
+                            <input type="radio" name="color" value="amber" />
+                            <span class="swatch swatch-amber"></span>
+                        </label>
+                        <label class="chip-color" title="Rose (Personal)">
+                            <input type="radio" name="color" value="rose" />
+                            <span class="swatch swatch-rose"></span>
+                        </label>
+                    </div>
                 </div>
                 <button type="button" id="btn-close-modal" class="btn-icon" aria-label="Close">
                     <!-- icones: lucide:x -->
@@ -369,7 +372,7 @@
                     <div class="input-with-icon">
                         <!-- icones: lucide:video -->
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.934a.5.5 0 0 0-.777-.416L16 11"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>
-                        <input type="url" id="input-meeting" placeholder="e.g. https://meet.google.com/new" class="input-text" />
+                        <input type="text" id="input-meeting" placeholder="e.g. https://meet.google.com/new" class="input-text" />
                     </div>
                 </div>
 
@@ -402,6 +405,10 @@
         <div class="popover-header">
             <span id="popover-swatch" class="popover-swatch swatch-indigo"></span>
             <div class="popover-actions">
+                <button id="btn-popover-edit" class="btn-icon" title="Edit event (E)" aria-label="Edit meeting">
+                    <!-- icones: lucide:pencil -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                </button>
                 <button id="btn-popover-delete" class="btn-icon" title="Delete meeting">
                     <!-- icones: lucide:trash-2 -->
                     <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
@@ -464,6 +471,6 @@
     <!-- TOAST ALERTS (Reminders & Live updates) -->
     <div id="toast-shelf" class="toast-shelf" aria-live="polite"></div>
 
-    <script src="app.js?v=20261026_bell_1"></script>
+    <script src="app.js?v=20261026_edit_4"></script>
 </body>
 </html>

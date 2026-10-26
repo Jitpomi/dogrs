@@ -1359,6 +1359,11 @@ select {
     gap: 0.35rem;
 }
 
+#btn-popover-edit:hover {
+    color: var(--cal-indigo);
+    background-color: var(--cal-indigo-subtle);
+}
+
 .popover-body {
     padding: 0.65rem 1.4rem 1.4rem;
     display: flex;
@@ -1441,6 +1446,20 @@ select {
     align-items: center;
     justify-content: space-between;
     padding: 1.35rem 1.5rem 0.65rem;
+}
+
+.modal-header-meta {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+}
+
+.modal-dialog-heading {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+    letter-spacing: -0.01em;
 }
 
 .color-picker-chips {

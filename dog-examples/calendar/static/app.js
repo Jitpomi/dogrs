@@ -22,6 +22,7 @@ class CalendarApp {
         this.currentWorkspace = 'default';
         this.searchQuery = '';
         this.selectedEvent = null;
+        this.editingEventId = null;
         this.ws = null;
         this.enabledColors = new Set(['indigo', 'emerald', 'amber', 'rose']);
         this.notifications = [];
@@ -86,10 +87,13 @@ class CalendarApp {
         this.elPopoverRepeatRow = document.getElementById('popover-repeat-row');
         this.elPopoverRepeatText = document.getElementById('popover-repeat-text');
         this.elBtnPopoverClose = document.getElementById('btn-popover-close');
+        this.elBtnPopoverEdit = document.getElementById('btn-popover-edit');
         this.elBtnPopoverDelete = document.getElementById('btn-popover-delete');
 
         // Modal
         this.elModal = document.getElementById('modal-event');
+        this.elModalHeadingTitle = document.getElementById('modal-heading-title');
+        this.elBtnSaveEvent = document.getElementById('btn-save-event');
         this.elForm = document.getElementById('form-event');
         this.elInputTitle = document.getElementById('input-title');
         this.elInputStart = document.getElementById('input-start');
@@ -228,6 +232,9 @@ class CalendarApp {
         this.elBtnCreateEvent.addEventListener('click', () => this.openCreateModal());
         this.elBtnCloseModal.addEventListener('click', () => this.elModal.close());
         this.elBtnCancelModal.addEventListener('click', () => this.elModal.close());
+        this.elModal.addEventListener('close', () => {
+            this.editingEventId = null;
+        });
 
         // Light dismiss on backdrop click
         this.elModal.addEventListener('click', (e) => {
@@ -338,9 +345,32 @@ class CalendarApp {
             e.preventDefault();
             this.saveNewEvent();
         });
+        this.elForm.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
+                e.preventDefault();
+                if (this.elForm.checkValidity && !this.elForm.checkValidity()) {
+                    this.elForm.reportValidity();
+                    return;
+                }
+                this.saveNewEvent();
+            }
+        });
+        this.elBtnSaveEvent?.addEventListener('click', (e) => {
+            if (this.elForm.checkValidity && !this.elForm.checkValidity()) {
+                this.elForm.reportValidity();
+                return;
+            }
+            e.preventDefault();
+            this.saveNewEvent();
+        });
 
         // Popover Actions
         this.elBtnPopoverClose.addEventListener('click', () => this.closePopover());
+        this.elBtnPopoverEdit?.addEventListener('click', () => {
+            if (this.selectedEvent) {
+                this.openEditModal(this.selectedEvent);
+            }
+        });
         this.elBtnPopoverDelete.addEventListener('click', () => {
             if (this.selectedEvent) {
                 this.deleteEvent(this.selectedEvent.id);
@@ -360,6 +390,9 @@ class CalendarApp {
             if (e.key === 'c' || e.key === 'C') {
                 e.preventDefault();
                 this.openCreateModal();
+            } else if ((e.key === 'e' || e.key === 'E') && this.selectedEvent && !this.elPopover.classList.contains('hidden')) {
+                e.preventDefault();
+                this.openEditModal(this.selectedEvent);
             } else if (e.key === 't' || e.key === 'T') {
                 e.preventDefault();
                 this.currentDate = new Date();
@@ -510,23 +543,30 @@ class CalendarApp {
         const recVal = this.elSelectRecurrence ? this.elSelectRecurrence.value : 'none';
         const recurrence = (recVal === 'custom') ? this.buildCustomRecurrenceString() : recVal;
 
-        if (!title || !start) return;
+        if (!title || !start) {
+            if (this.elForm.reportValidity) this.elForm.reportValidity();
+            return;
+        }
 
+        const isEdit = !!this.editingEventId;
         const payload = {
             title,
             start_time: new Date(start).toISOString(),
-            ...(end ? { end_time: new Date(end).toISOString() } : {}),
-            ...(recurrence && recurrence !== 'none' ? { recurrence } : {}),
-            ...(meeting_url ? { meeting_url } : {}),
-            ...(location ? { location } : {}),
-            ...(description ? { description } : {}),
+            end_time: end ? new Date(end).toISOString() : null,
+            recurrence: recurrence || 'none',
+            meeting_url: meeting_url || '',
+            location: location || '',
+            description: description || '',
             color
         };
 
+        const url = isEdit ? `/api/events/${this.editingEventId}` : '/api/events';
+        const method = isEdit ? 'PATCH' : 'POST';
+
         try {
-            this.logDev('REST', `POST /api/events: "${title}"`);
-            const res = await fetch('/api/events', {
-                method: 'POST',
+            this.logDev('REST', `${method} ${url}: "${title}"`);
+            const res = await fetch(url, {
+                method,
                 headers: {
                     'Content-Type': 'application/json',
                     'x-tenant-id': this.currentWorkspace
@@ -535,29 +575,43 @@ class CalendarApp {
             });
 
             if (!res.ok) {
-                const err = await res.json();
+                const err = await res.json().catch(() => ({ message: `HTTP ${res.status}` }));
                 throw new Error(err.message || `HTTP ${res.status}`);
             }
 
-            const created = await res.json();
+            const result = await res.json();
+            const wasEditingId = this.editingEventId;
+            this.editingEventId = null;
             this.elModal.close();
             this.elForm.reset();
 
-            if (!this.events.some(e => e.id === created.id)) {
-                this.events.push(created);
-                this.render();
+            if (isEdit) {
+                const idx = this.events.findIndex(e => e.id === wasEditingId);
+                if (idx !== -1) {
+                    this.events[idx] = { ...this.events[idx], ...result };
+                } else {
+                    this.events.push(result);
+                }
+                this.showToast('Event Updated', title, 'created');
+            } else {
+                if (!this.events.some(e => e.id === result.id)) {
+                    this.events.push(result);
+                }
+                this.showToast('Event Scheduled', title, 'created');
             }
 
-            this.showToast('Event Scheduled', title, 'created');
+            this.render();
         } catch (err) {
-            alert(`Failed to save event: ${err.message}`);
+            console.error('Failed to save event:', err);
+            this.logDev('ERROR', `Save event failed: ${err.message}`);
+            this.showToast('Error', err.message, 'error');
         }
     }
 
     async deleteEvent(id) {
         try {
             this.logDev('REST', `DELETE /api/events/${id}`);
-            const res = await fetch(`/api/events/${encodeURIComponent(id)}`, {
+            const res = await fetch(`/api/events/${id}`, {
                 method: 'DELETE',
                 headers: { 'x-tenant-id': this.currentWorkspace }
             });
@@ -1019,6 +1073,10 @@ class CalendarApp {
                 e.stopPropagation();
                 this.openPopover(evt, tile);
             });
+            tile.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                this.openEditModal(evt);
+            });
 
             col.appendChild(tile);
         });
@@ -1097,6 +1155,10 @@ class CalendarApp {
                 e.stopPropagation();
                 this.openPopover(evt, tile);
             });
+            tile.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                this.openEditModal(evt);
+            });
 
             col.appendChild(tile);
         });
@@ -1164,6 +1226,11 @@ class CalendarApp {
                 e.stopPropagation();
                 const evt = this.events.find(x => x.id === pill.dataset.id);
                 if (evt) this.openPopover(evt, pill);
+            });
+            pill.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                const evt = this.events.find(x => x.id === pill.dataset.id);
+                if (evt) this.openEditModal(evt);
             });
         });
 
@@ -1248,6 +1315,11 @@ class CalendarApp {
             card.addEventListener('click', () => {
                 const evt = this.events.find(x => x.id === card.dataset.id);
                 if (evt) this.openPopover(evt, card);
+            });
+            card.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                const evt = this.events.find(x => x.id === card.dataset.id);
+                if (evt) this.openEditModal(evt);
             });
         });
     }
@@ -1372,6 +1444,10 @@ class CalendarApp {
     // Modal & Popover Handling
     // =========================================================================
     openCreateModal() {
+        this.editingEventId = null;
+        if (this.elModalHeadingTitle) this.elModalHeadingTitle.textContent = 'Schedule Event';
+        if (this.elBtnSaveEvent) this.elBtnSaveEvent.textContent = 'Save Event';
+
         const now = new Date();
         now.setMinutes(0, 0, 0);
         now.setHours(now.getHours() + 1);
@@ -1393,6 +1469,10 @@ class CalendarApp {
     }
 
     openCreateModalWithSlot(dateKey, hour) {
+        this.editingEventId = null;
+        if (this.elModalHeadingTitle) this.elModalHeadingTitle.textContent = 'Schedule Event';
+        if (this.elBtnSaveEvent) this.elBtnSaveEvent.textContent = 'Save Event';
+
         const [year, month, day] = dateKey.split('-').map(Number);
         const start = new Date(year, month - 1, day, hour, 0, 0);
         const end = new Date(start.getTime() + 60 * 60 * 1000);
@@ -1408,6 +1488,72 @@ class CalendarApp {
 
         this.closePopover();
         this.resetCustomRecurrence();
+        this.elModal.showModal();
+        this.elInputTitle.focus();
+    }
+
+    openEditModal(evt) {
+        if (!evt) return;
+        this.editingEventId = evt.id;
+        if (this.elModalHeadingTitle) this.elModalHeadingTitle.textContent = 'Edit Event';
+        if (this.elBtnSaveEvent) this.elBtnSaveEvent.textContent = 'Update Event';
+
+        this.elInputTitle.value = evt.title || '';
+        this.elInputLocation.value = evt.location || '';
+        this.elInputMeeting.value = evt.meeting_url || '';
+        this.elInputDesc.value = evt.description || '';
+
+        const start = evt.start_time ? new Date(evt.start_time) : new Date();
+        const end = evt.end_time ? new Date(evt.end_time) : new Date(start.getTime() + 60 * 60 * 1000);
+        this.elInputStart.value = this.toLocalIso(start);
+        this.elInputEnd.value = this.toLocalIso(end);
+
+        // Color radio chip
+        const color = evt.color || 'indigo';
+        const colorRadio = document.querySelector(`input[name="color"][value="${color}"]`);
+        if (colorRadio) colorRadio.checked = true;
+
+        // Recurrence
+        const rec = evt.recurrence || 'none';
+        if (rec.startsWith('custom:')) {
+            if (this.elSelectRecurrence) this.elSelectRecurrence.value = 'custom';
+            const rule = this.parseRecurrenceRule(rec, start);
+            if (rule) {
+                if (this.elSelectCustomFreq) this.elSelectCustomFreq.value = rule.freq || 'week';
+                if (this.elInputCustomInterval) this.elInputCustomInterval.value = rule.interval || 1;
+                if (this.elCustomWeekdaysGroup) {
+                    this.elCustomWeekdaysGroup.style.display = (rule.freq === 'week') ? 'flex' : 'none';
+                }
+                if (this.elWeekdayChips) {
+                    const daysSet = new Set(rule.days || [start.getDay()]);
+                    this.elWeekdayChips.forEach(chip => {
+                        const d = parseInt(chip.dataset.day, 10);
+                        chip.classList.toggle('active', daysSet.has(d));
+                    });
+                }
+                if (this.elCustomEndsRadios) {
+                    this.elCustomEndsRadios.forEach(r => {
+                        r.checked = (r.value === (rule.ends || 'never'));
+                    });
+                }
+                if (this.elInputCustomUntil) {
+                    this.elInputCustomUntil.disabled = (rule.ends !== 'until');
+                    this.elInputCustomUntil.value = rule.until || '';
+                }
+                if (this.elInputCustomCount) {
+                    this.elInputCustomCount.disabled = (rule.ends !== 'count');
+                    this.elInputCustomCount.value = rule.count || 10;
+                }
+                if (this.elCustomRecPanel) this.elCustomRecPanel.classList.remove('hidden');
+                this.updateCustomRecurrenceSummary();
+            }
+        } else {
+            if (this.elSelectRecurrence) this.elSelectRecurrence.value = rec;
+            this.resetCustomRecurrence();
+        }
+
+        this.updateRecurrenceLabels();
+        this.closePopover();
         this.elModal.showModal();
         this.elInputTitle.focus();
     }
@@ -1798,6 +1944,9 @@ class CalendarApp {
     }
 
     toLocalIso(date) {
+        if (!date || isNaN(date.getTime())) {
+            date = new Date();
+        }
         const offset = date.getTimezoneOffset();
         const local = new Date(date.getTime() - (offset * 60 * 1000));
         return local.toISOString().slice(0, 16);
