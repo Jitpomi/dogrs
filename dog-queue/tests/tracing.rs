@@ -17,7 +17,14 @@ async fn exports_real_parented_spans_with_outcomes_and_no_raw_errors() {
     let parent = Context::new().with_span(tracer.start("request"));
     let parent_id = parent.span().span_context().span_id();
     let tracing = DistributedTracing::new();
-    for outcome in ["completed", "failed", "retrying", "canceled", "interrupted"] {
+    for outcome in [
+        "completed",
+        "failed",
+        "retrying",
+        "canceled",
+        "already_terminal",
+        "interrupted",
+    ] {
         let mut span = tracing.start_job_with_context(
             &QueueCtx::new("tenant"),
             &JobId::new(),
@@ -38,13 +45,14 @@ async fn exports_real_parented_spans_with_outcomes_and_no_raw_errors() {
             "failed" => span.record_failure("secret-password"),
             "retrying" => span.record_retry(2, "secret-password"),
             "canceled" => span.record_canceled(),
+            "already_terminal" => span.record_terminal(),
             _ => (),
         }
         drop(span);
     }
     provider.force_flush().unwrap();
     let spans = exporter.get_finished_spans().unwrap();
-    assert_eq!(spans.len(), 5);
+    assert_eq!(spans.len(), 6);
     for span in &spans {
         assert_eq!(span.parent_span_id, parent_id);
         assert!(span.span_context.is_valid());
@@ -52,7 +60,9 @@ async fn exports_real_parented_spans_with_outcomes_and_no_raw_errors() {
     }
     assert_eq!(spans[0].status, Status::Ok);
     assert!(matches!(spans[1].status, Status::Error { .. }));
-    assert!(matches!(spans[4].status, Status::Error { .. }));
+    assert_eq!(spans[3].status, Status::Ok);
+    assert_eq!(spans[4].status, Status::Ok);
+    assert!(matches!(spans[5].status, Status::Error { .. }));
     assert!(!Context::current().span().span_context().is_valid());
     let adapter = dog_queue::QueueAdapter::new(dog_queue::backend::memory::MemoryBackend::new());
     adapter.register_job::<TracedJob>().await.unwrap();

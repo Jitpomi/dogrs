@@ -857,8 +857,11 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     )
                     .await;
 
-                if acknowledgment.is_ok() {
-                    job_span.record_failure("codec decode failed");
+                match acknowledgment {
+                    Ok(()) => job_span.record_failure("codec decode failed"),
+                    Err(QueueError::JobCanceled) => job_span.record_canceled(),
+                    Err(QueueError::JobAlreadyTerminal) => job_span.record_terminal(),
+                    Err(_) => {}
                 }
                 self.adapter
                     .observability
@@ -1025,6 +1028,7 @@ impl<C: Send + Sync + 'static> Worker<C> {
                         );
                     }
                     Err(QueueError::JobAlreadyTerminal) => {
+                        job_span.record_terminal();
                         // The reaper reclaimed the job between execute() completing and
                         // ack_complete() being called.  The reaper has already re-queued it;
                         // logging only — do NOT re-execute or alter state.
@@ -1055,7 +1059,8 @@ impl<C: Send + Sync + 'static> Worker<C> {
                 // Capture error string once; used by ack_fail AND observability.
                 let error_str = job_error.to_string();
 
-                self.adapter
+                match self
+                    .adapter
                     .backend
                     .ack_fail(
                         self.ctx.clone(),
@@ -1064,24 +1069,44 @@ impl<C: Send + Sync + 'static> Worker<C> {
                         error_str.clone(),
                         retry_at,
                     )
-                    .await?;
-
-                if let Some(retry_at_time) = retry_at {
-                    job_span.record_retry(leased_job.record.attempt, "retry");
-                    self.adapter.observability.record_job_retrying(
-                        &self.ctx,
-                        &job_id,
-                        job_type,
-                        &error_str,
-                        retry_at_time,
-                    );
-                    warn!("Job {} failed, will retry: {}", job_id, error_str);
-                } else {
-                    self.adapter
-                        .observability
-                        .record_job_failed(&self.ctx, &job_id, job_type, &error_str);
-                    job_span.record_failure("permanent");
-                    error!("Job {} failed permanently: {}", job_id, error_str);
+                    .await
+                {
+                    Ok(()) => {
+                        if let Some(retry_at_time) = retry_at {
+                            job_span.record_retry(leased_job.record.attempt, "retry");
+                            self.adapter.observability.record_job_retrying(
+                                &self.ctx,
+                                &job_id,
+                                job_type,
+                                &error_str,
+                                retry_at_time,
+                            );
+                            warn!("Job {} failed, will retry: {}", job_id, error_str);
+                        } else {
+                            self.adapter
+                                .observability
+                                .record_job_failed(&self.ctx, &job_id, job_type, &error_str);
+                            job_span.record_failure("permanent");
+                            error!("Job {} failed permanently: {}", job_id, error_str);
+                        }
+                    }
+                    Err(QueueError::JobCanceled) => {
+                        job_span.record_canceled();
+                        warn!(
+                            "Job {} failed execution but was canceled mid-flight — \
+                             failure discarded (cancel-wins); metrics already recorded by cancel()",
+                            job_id
+                        );
+                    }
+                    Err(QueueError::JobAlreadyTerminal) => {
+                        job_span.record_terminal();
+                        warn!(
+                            "Job {} ack_fail: already terminal (reaper race?) — \
+                             failure discarded, job may be re-executed",
+                            job_id
+                        );
+                    }
+                    Err(e) => return Err(e), // Genuine infrastructure error — propagate.
                 }
             }
         }
