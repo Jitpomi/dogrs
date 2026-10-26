@@ -41,6 +41,14 @@ Persist the returned receipt in your application's database. Attributes and the
 original filename in receipts are application metadata: `open` cannot reconstruct
 all receipt fields from a backend `head` response.
 
+> **S3 security update (2026-10-25):** This repository temporarily patches AWS's
+> SigV4a signer to use a corrected cryptography dependency while preserving
+> Multi-Region Access Point signing. The patch does **not** propagate to crates.io
+> installations. See [security status and application workaround](https://github.com/Jitpomi/dogrs/blob/codex/queue-tracing-realtime/docs/aws-sigv4a-security.md)
+> and [upstream fix #4958](https://github.com/smithy-lang/smithy-rs/pull/4958).
+> A clean audit of this checkout is not evidence that the published S3 dependency
+> tree is fixed. Default builds without the `s3` feature do not include this signer.
+
 ## Limits and file ownership
 
 Uploads are streamed to private temporary files, counting actual bytes before any

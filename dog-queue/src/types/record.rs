@@ -116,6 +116,10 @@ pub struct JobRecord {
     #[serde(default)]
     pub result: Option<String>,
 
+    /// Worker-reported percentage (0..=100); absent when not reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
+
     /// Current lease token (if processing).
     ///
     /// Skipped during serialization to prevent the raw proof-of-ownership token
@@ -146,6 +150,7 @@ impl JobRecord {
             updated_at: now,
             last_error: None,
             result: None,
+            progress: None,
             lease_token: None,
         }
     }
@@ -182,6 +187,9 @@ impl JobRecord {
     /// The `lease_until` timestamp is stored exclusively inside
     /// [`JobStatus::Processing`] — it is the single source of truth.
     pub fn start_processing(&mut self, lease_token: LeaseToken, lease_until: DateTime<Utc>) {
+        if !self.status.is_processing() {
+            self.progress = None;
+        }
         self.status = JobStatus::Processing { lease_until };
         self.lease_token = Some(lease_token);
         self.updated_at = Utc::now();
@@ -313,6 +321,10 @@ pub struct JobSnapshot {
     pub updated_at: DateTime<Utc>,
     pub last_error: Option<String>,
     pub result: Option<String>,
+
+    /// Worker-reported percentage (0..=100); absent when not reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
 }
 impl From<&JobRecord> for JobSnapshot {
     fn from(record: &JobRecord) -> Self {
@@ -325,6 +337,7 @@ impl From<&JobRecord> for JobSnapshot {
             updated_at: record.updated_at,
             last_error: record.last_error.clone(),
             result: record.result.clone(),
+            progress: record.progress,
         }
     }
 }

@@ -9,7 +9,7 @@ WITH picked AS MATERIALIZED (
  SELECT id,now,now+interval '1 second'*$4::double precision AS until FROM stamped
 )
 UPDATE dogrs_queue_jobs_v2 j SET
- state=jsonb_set(jsonb_set(jsonb_set(jsonb_set(j.state,
+ state=jsonb_set(jsonb_set(jsonb_set(jsonb_set((j.state #- '{record,progress}'),
    '{record,status}',jsonb_build_object('Processing',jsonb_build_object('lease_until',leased.until))),
    '{record,attempt}',to_jsonb((j.state#>>'{record,attempt}')::bigint+1)),
    '{record,updated_at}',to_jsonb(leased.now)),

@@ -422,3 +422,6 @@ where
 #[cfg(feature = "http")]
 #[doc = include_str!("../MIGRATION.md")]
 pub mod migration {}
+
+#[cfg(feature = "queue")]
+pub mod queue;

@@ -43,6 +43,7 @@ def wait_port(number):
 try:
  (folder/'environment.json').write_text(json.dumps({
   'backend':a.backend,
+  'container_health_evidence':True,
   'host_architecture':platform.machine(),'host_logical_cpus':os.cpu_count(),
   'docker':json.loads(command('docker','info','--format','{"cpus":{{.NCPU}},"memory_bytes":{{.MemTotal}},"architecture":"{{.Architecture}}"}')),
   'postgres_commit_delay_us':int(os.environ.get('DOGRS_PG_COMMIT_DELAY','0')),
@@ -65,6 +66,13 @@ try:
   'nats_enqueue_concurrency':int(os.environ.get('DOGRS_NATS_ENQUEUE_CONCURRENCY','2')),
   'nats_update_concurrency':int(os.environ.get('DOGRS_NATS_UPDATE_CONCURRENCY','1')),
   'nats_image':os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),
+  'redis_rewrite_min_mib':int(os.environ.get('DOGRS_REDIS_REWRITE_MIN_MIB','64')),
+  'fair_scheduler':os.environ.get('DOGRS_CAPACITY_FAIR_SCHEDULER')=='1',
+  'producer_runtime':os.environ.get('DOGRS_CAPACITY_PRODUCER_RUNTIME','shared'),
+  'nats_leader_placement':os.environ.get('DOGRS_NATS_LEADER_PLACEMENT','natural'),
+  'nats_gomemlimit_mib':int(os.environ.get('DOGRS_NATS_GOMEMLIMIT_MIB','0')),
+  'nats_gomaxprocs':os.environ.get('DOGRS_NATS_GOMAXPROCS','automatic'),
+  'tokio_worker_threads':os.environ.get('TOKIO_WORKER_THREADS','automatic'),
   'nats_storage':'anonymous Docker volume at /data',
  },indent=2))
  if a.capacity and platform.system()=='Linux':
@@ -114,7 +122,9 @@ try:
    command('docker','exec',name,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-c',create)
  elif a.backend=='redis':
   number=port();name=run+'-redis'
-  launch(name,'-p',f'127.0.0.1:{number}:6379','redis:7.4-alpine','redis-server','--appendonly','yes','--appendfsync','always','--maxmemory-policy','noeviction','--latency-monitor-threshold','1')
+  rewrite_mib=int(os.environ.get('DOGRS_REDIS_REWRITE_MIN_MIB','64'))
+  assert 64<=rewrite_mib<=4096,'Redis rewrite minimum must be 64..4096 MiB'
+  launch(name,'-p',f'127.0.0.1:{number}:6379','redis:7.4-alpine','redis-server','--appendonly','yes','--appendfsync','always','--maxmemory-policy','noeviction','--latency-monitor-threshold','1','--auto-aof-rewrite-min-size',str(rewrite_mib*1024*1024))
   env['DOGRS_REDIS_URL']=f'redis://127.0.0.1:{number}/';env['DOGRS_REDIS_REQUIRE_AOF']='1';wait_port(number)
  else:
   network=run;command('docker','network','create',network)
@@ -126,7 +136,16 @@ try:
    if a.capacity and os.environ.get('DOGRS_QUEUE_TIMINGS')=='1':
     profile_port=port();profile_ports[name]=profile_port
     profile_args=['-p',f'127.0.0.1:{profile_port}:6543'];profile_command=['--profile','6543']
-   launch(name,*profile_args,'--network',network,'-v','/data','-p',f'127.0.0.1:{number}:4222','-p',f'127.0.0.1:{monitor}:8222','-v',f'{config}:/etc/nats.conf:ro',os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),'-c','/etc/nats.conf',*profile_command)
+   runtime_args=[]
+   if os.environ.get('DOGRS_NATS_GOMAXPROCS'):
+    procs=int(os.environ['DOGRS_NATS_GOMAXPROCS'])
+    assert 1<=procs<=32,'NATS runtime concurrency must be in 1..=32'
+    runtime_args=['-e',f'GOMAXPROCS={procs}']
+   if os.environ.get('DOGRS_NATS_GOMEMLIMIT_MIB'):
+    memory_mib=int(os.environ['DOGRS_NATS_GOMEMLIMIT_MIB'])
+    assert 512<=memory_mib<=8192,'NATS Go memory budget must be within 512..=8192 MiB'
+    runtime_args+=['-e',f'GOMEMLIMIT={memory_mib}MiB']
+   launch(name,*runtime_args,*profile_args,'--network',network,'-v','/data','-p',f'127.0.0.1:{number}:4222','-p',f'127.0.0.1:{monitor}:8222','-v',f'{config}:/etc/nats.conf:ro',os.environ.get('DOGRS_NATS_IMAGE','nats:2.15.0-alpine'),'-c','/etc/nats.conf',*profile_command)
    monitors[name]=monitor
   for number in numbers:wait_port(number)
   deadline=time.monotonic()+60
@@ -144,6 +163,9 @@ try:
    except (OSError,ValueError):pass
    if time.monotonic()>deadline:raise TimeoutError('JetStream cluster readiness')
    time.sleep(.2)
+  placement=os.environ.get('DOGRS_NATS_LEADER_PLACEMENT','natural')
+  assert placement in ('natural','balanced'),'invalid leader placement'
+  if placement=='balanced':env['DOGRS_NATS_FIXTURE_LEADERS']=','.join(containers)
   env.update(DOGRS_NATS_URL=','.join('nats://127.0.0.1:'+str(n) for n in numbers),DOGRS_NATS_BUCKET=run.replace('-','_'),DOGRS_NATS_REPLICAS='3')
  if a.race:
   with (folder/'race.log').open('w') as output:
@@ -221,6 +243,12 @@ try:
   clean=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', stats_path.read_text())
   samples=[json.loads(line) for line in clean.splitlines() if line.strip()]
   stats_path.write_text(''.join(json.dumps(sample)+'\n' for sample in samples))
+  # Inspect before cleanup so an OOM kill or server crash cannot be hidden by
+  # removing the disposable container. Never serialize container environment.
+  states={node:json.loads(command('docker','inspect','--format','{{json .State}}',node)) for node in containers}
+  (folder/'container-health.json').write_text(json.dumps(states,indent=2))
+  healthy=all(state.get('Running') is True and state.get('OOMKilled') is False
+              and state.get('ExitCode')==0 for state in states.values())
   if a.backend=='nats':
    # After timed work and verification, record each replica independently.
    # Stream sequences count logical records, not Raft entries or fsyncs.
@@ -247,8 +275,8 @@ try:
    histories={event[0]:json.loads(command('docker','exec',name,'redis-cli','--json','LATENCY','HISTORY',event[0])) for event in events}
    (folder/'redis-latency-history.json').write_text(json.dumps(histories,indent=2))
    (folder/'redis-durability-settings.txt').write_text(command('docker','exec',name,'redis-cli','CONFIG','GET','appendfsync','appendonly','auto-aof-rewrite-percentage','auto-aof-rewrite-min-size','no-appendfsync-on-rewrite','maxmemory-policy'))
-  print(json.dumps({'backend':a.backend,'restored_to_fresh_container':a.restore,'outage_seconds':a.outage_seconds,'replicas':3 if a.backend=='nats' else 1,'sync_policy':'always' if a.backend in ('redis','nats') else 'PostgreSQL default fsync/synchronous_commit','measurement':a.admission_mode or 'queue-capacity','passed':result.returncode==0,'capacity_log':str(folder/'capacity.log')}))
-  raise SystemExit(result.returncode)
+  print(json.dumps({'backend':a.backend,'restored_to_fresh_container':a.restore,'outage_seconds':a.outage_seconds,'replicas':3 if a.backend=='nats' else 1,'sync_policy':'always' if a.backend in ('redis','nats') else 'PostgreSQL default fsync/synchronous_commit','measurement':a.admission_mode or 'queue-capacity','passed':result.returncode==0 and healthy,'capacity_log':str(folder/'capacity.log')}))
+  raise SystemExit(result.returncode or (0 if healthy else 1))
  log=folder/'client.log'
  with log.open('w') as output:
   process=subprocess.Popen([binary,'recovery-live'],env=env,stdout=output,stderr=subprocess.STDOUT)

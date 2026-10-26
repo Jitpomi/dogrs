@@ -414,6 +414,39 @@ impl QueueBackend for MemoryBackend {
         Ok(())
     }
 
+    async fn report_progress(
+        &self,
+        ctx: QueueCtx,
+        job_id: JobId,
+        lease_token: LeaseToken,
+        percent: u8,
+    ) -> QueueResult<()> {
+        if percent > 100 {
+            return Err(QueueError::InvalidConfig("progress must be 0..=100".into()));
+        }
+        let mut jobs = self.jobs.write().await;
+        let now = Utc::now();
+        let record = jobs
+            .get_mut(&job_id)
+            .filter(|r| r.tenant_id == ctx.tenant_id)
+            .ok_or_else(|| QueueError::JobNotFound(job_id.clone()))?;
+        if matches!(record.status, JobStatus::Canceled { .. }) {
+            return Err(QueueError::JobCanceled);
+        }
+        if record.status.is_terminal() {
+            return Err(QueueError::JobAlreadyTerminal);
+        }
+        if record.lease_token.as_ref() != Some(&lease_token) || !record.status.is_processing() {
+            return Err(QueueError::InvalidLeaseToken { job_id });
+        }
+        if record.lease_expired(now) {
+            return Err(QueueError::LeaseExpired);
+        }
+        record.progress = Some(percent);
+        record.updated_at = now;
+        Ok(())
+    }
+
     async fn heartbeat_extend(
         &self,
         ctx: QueueCtx,
@@ -636,6 +669,7 @@ mod tests {
             priority: JobPriority::Normal,
             max_retries: 3,
             run_at: chrono::Utc::now(),
+            traceparent: None,
             idempotency_key: None,
         }
     }

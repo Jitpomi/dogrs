@@ -1,18 +1,16 @@
-name: Provider capacity
+name: Provider capacity diagnostics
 on:
-  pull_request:
-    paths: ['.github/scripts/**', 'Cargo.toml', '.github/workflows/provider-capacity.yml', 'dog-queue/**', 'dog-examples/hosted-system/**', 'Cargo.lock']
   workflow_dispatch:
     inputs:
       mode:
         description: Queue acceptance, repeated comparisons, or admission-only attribution diagnostics
         type: choice
-        options: [queue, queue-comparison, nats-pipeline-comparison, all-backends, attribution]
+        options: [queue, queue-comparison, nats-pipeline-comparison, all-backends, qualification, attribution]
         default: queue
       runner:
-        description: Standard free public-repository runner for a labelled hardware comparison
+        description: Hosted diagnostic runner or designated dedicated capacity host
         type: choice
-        options: [ubuntu-latest, ubuntu-24.04-arm]
+        options: [ubuntu-latest, ubuntu-24.04-arm, dogrs-capacity]
         default: ubuntu-latest
       repeats:
         description: Attribution repetitions (odd repetitions reverse profile order)
@@ -49,7 +47,7 @@ on:
       nats_shards:
         description: Fixed JetStream bucket count
         type: choice
-        options: ['1', '4', '16']
+        options: ['1', '4', '8', '16']
         default: '16'
       postgres_commit_delay_us:
         description: PostgreSQL durable commit grouping delay
@@ -94,14 +92,14 @@ on:
         options: ['1', '4', '16', 'compare']
         default: '1'
       workers_per_tenant:
-        description: Worker concurrency (auto preserves baseline; compare tests NATS 2/8/8/2 or Redis 1/4/4/1 on one runner)
+        description: Worker concurrency (auto preserves baseline; compare tests NATS 2/8/8/2 or Redis/PostgreSQL 1/4/4/1 on one runner)
         type: choice
         options: ['auto', '1', '2', '4', '8', '16', 'compare']
         default: 'auto'
       postgres_enqueue_concurrency:
-        description: Producer connection cap (none preserves the baseline)
+        description: Producer connection cap (compare tests 16/48/48/16 on one runner)
         type: choice
-        options: ['none', '16', '32', '48']
+        options: ['none', '16', '32', '48', 'compare']
         default: 'none'
 permissions:
   contents: read
@@ -134,13 +132,29 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.mode == 'all-backends' && '["all"]' || inputs.backend && format('["{0}"]', inputs.backend) || '["postgres","redis","nats"]') }}
-    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
-    timeout-minutes: 30
+        backend: ${{ fromJSON((inputs.mode == 'all-backends' || inputs.mode == 'qualification') && '["all"]' || inputs.backend && format('["{0}"]', inputs.backend) || '["postgres","redis","nats"]') }}
+    runs-on: ${{ inputs.runner == 'dogrs-capacity' && fromJSON('["self-hosted","linux","dogrs-capacity"]') || inputs.runner || 'ubuntu-latest' }}
+    concurrency:
+      group: ${{ inputs.runner == 'dogrs-capacity' && 'dogrs-dedicated-capacity' || format('capacity-{0}-{1}', github.run_id, matrix.backend) }}
+      cancel-in-progress: false
+    timeout-minutes: 45
     steps:
+      - name: Require designated dedicated host
+        if: ${{ inputs.runner == 'dogrs-capacity' }}
+        env:
+          EXPECTED_RUNNER: ${{ vars.DOGRS_CAPACITY_RUNNER_NAME }}
+        run: |
+          test -n "$EXPECTED_RUNNER"
+          test "$RUNNER_NAME" = "$EXPECTED_RUNNER"
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ (inputs.runner == 'dogrs-capacity' || inputs.mode == 'qualification') && '1.99.1' || 'stable' }}
       - run: cargo build -p hosted-system --release --features redis,nats${{ (inputs.profile_queue || inputs.mode == 'queue-comparison') && ',queue-diagnostics' || '' }} --locked
+      - name: Record build identity
+        run: |
+          mkdir -p provider-capacity
+          { echo "Commit: $GITHUB_SHA"; echo "Runner: $RUNNER_NAME"; rustc --version --verbose; cargo --version; uname -a; } > provider-capacity/build-host.txt
       - name: Install optional CPU profiler
         if: ${{ inputs.profile_cpu }}
         run: |
@@ -151,7 +165,7 @@ jobs:
           "$profiler" version
           echo "DOGRS_PERF=$profiler" >> "$GITHUB_ENV"
       - run: |
-          if [ "$CAPACITY_MODE" = all-backends ]; then
+          if [ "$CAPACITY_MODE" = all-backends ] || [ "$CAPACITY_MODE" = qualification ]; then
             # One binary and host, fresh durable fixtures, both provider orders.
             # Keep every failure; later success must not overwrite it.
             test "$PAYLOAD_BYTES" = 65536
@@ -166,11 +180,25 @@ jobs:
             test "$PRODUCER_CAP" = none
             export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-all-backends
             status=0
-            for provider in postgres redis nats nats redis postgres; do
-              workers=1; shards=1; storage=extended
-              if [ "$provider" = nats ]; then workers=2; shards=16; fi
-              if [ "$provider" = postgres ]; then storage=external; fi
-              DOGRS_CAPACITY_WORKERS="$workers" DOGRS_CAPACITY_SHARDS="$shards" DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$provider" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            rounds=1
+            if [ "$CAPACITY_MODE" = qualification ]; then
+              case "$CAPACITY_RUNNER" in dogrs-capacity|ubuntu-latest) ;; *) exit 2 ;; esac
+              test "$NATS_SHARDS" = 16
+              test "$CAPACITY_RATE" = 9
+              test "$DURATION_SECONDS" = 60
+              test "$DOGRS_QUEUE_TIMINGS" = 0
+              test "$DOGRS_PG_PROFILE" = 0
+              test -z "${DOGRS_PERF:-}"
+              rounds=3
+            fi
+            for round in $(seq 1 "$rounds"); do
+              echo "Qualification round $round/$rounds"
+              for provider in postgres redis nats nats redis postgres; do
+                workers=1; shards=1; storage=extended
+                if [ "$provider" = nats ]; then workers=2; shards="$NATS_SHARDS"; fi
+                if [ "$provider" = postgres ]; then storage=external; fi
+                DOGRS_CAPACITY_WORKERS="$workers" DOGRS_CAPACITY_SHARDS="$shards" DOGRS_PG_PAYLOAD_STORAGE="$storage" python3 dog-examples/hosted-system/run_recovery.py "$provider" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+              done
             done
             exit "$status"
           fi
@@ -197,8 +225,8 @@ jobs:
           if [ "$WORKER_COMPARISON" = compare ]; then
             case "$BACKEND" in
               nats) worker_order="2 8 8 2" ;;
-              redis) worker_order="1 4 4 1" ;;
-              *) echo "Worker comparison supports NATS and Redis" >&2; exit 2 ;;
+              redis|postgres) worker_order="1 4 4 1" ;;
+              *) echo "Worker comparison supports NATS, Redis and PostgreSQL" >&2; exit 2 ;;
             esac
             test "$NATS_ATOMIC" = on
             test "$NATS_CONNECTIONS" = shared
@@ -206,6 +234,16 @@ jobs:
             status=0
             for workers in $worker_order; do
               DOGRS_CAPACITY_WORKERS="$workers" python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
+            done
+            exit "$status"
+          fi
+          if [ "$PRODUCER_CAP" = compare ]; then
+            test "$BACKEND" = postgres
+            test "$WORKER_COMPARISON" = auto
+            export DOGRS_CAPACITY_COMPARISON_TENANT=dogrs-test-capacity-producers
+            status=0
+            for producers in 16 48 48 16; do
+              DOGRS_PG_ENQUEUE_CONCURRENCY="$producers" python3 dog-examples/hosted-system/run_recovery.py postgres --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity || status=1
             done
             exit "$status"
           fi
@@ -292,6 +330,7 @@ jobs:
           python3 dog-examples/hosted-system/run_recovery.py "$BACKEND" --capacity --rate "$CAPACITY_RATE" --seconds "$DURATION_SECONDS" --bytes "$PAYLOAD_BYTES" --report-dir provider-capacity
         env:
           CAPACITY_MODE: ${{ inputs.mode || 'queue' }}
+          CAPACITY_RUNNER: ${{ inputs.runner || 'ubuntu-latest' }}
           BACKEND: ${{ matrix.backend }}
           CAPACITY_RATE: ${{ inputs.jobs_per_second_per_tenant || '9' }}
           DURATION_SECONDS: ${{ inputs.seconds || '60' }}
@@ -312,10 +351,14 @@ jobs:
           PG_INSTANCES: ${{ inputs.postgres_instances || '1' }}
           DOGRS_PG_INSTANCES: ${{ inputs.postgres_instances != 'compare' && inputs.postgres_instances || '1' }}
           PG_SHARDS: ${{ inputs.postgres_shards || '1' }}
+          NATS_SHARDS: ${{ inputs.nats_shards || '16' }}
           NATS_ATOMIC: ${{ inputs.nats_atomic || 'on' }}
           NATS_CONNECTIONS: ${{ inputs.nats_connections || 'shared' }}
           DOGRS_NATS_IMAGE: nats:2.15.0-alpine
           DOGRS_CAPACITY_SHARDS: ${{ matrix.backend == 'nats' && (inputs.nats_shards || '16') || (matrix.backend == 'postgres' && inputs.postgres_shards != 'compare' && inputs.postgres_shards) || '1' }}
+      - name: Verify complete qualification evidence
+        if: ${{ always() && inputs.mode == 'qualification' }}
+        run: python3 .github/scripts/verify_capacity_reports.py provider-capacity
       - name: Explain capacity result
         if: always()
         run: |
@@ -336,6 +379,8 @@ jobs:
                       if not isinstance(result, dict) or "offered" not in result:
                           continue
                       found = True
+                      fields = ("offered", "accepted", "completed", "verified_terminal_once", "overload", "late_offers", "error_count", "elapsed_seconds", "postgres_enqueue_concurrency", "passed")
+                      print(json.dumps({"backend": environment.get("backend"), "log": str(log), **{key: result.get(key) for key in fields}}))
                       summary.write("**" + ("Passed" if result.get("passed") is True else "Failed") + "**\n\n")
                       summary.write("| Measurement | Observed |\n|---|---:|\n")
                       for key in ("tenants", "jobs_per_second_per_tenant", "seconds", "payload_bytes", "offered", "accepted", "completed", "verified_terminal_once", "overload", "late_offers", "error_count", "elapsed_seconds"):
@@ -353,7 +398,7 @@ jobs:
           path: provider-capacity
 
   attribution:
-    if: ${{ inputs.mode == 'attribution' }}
+    if: ${{ inputs.mode == 'attribution' && inputs.runner != 'dogrs-capacity' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

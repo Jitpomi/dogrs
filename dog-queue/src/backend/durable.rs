@@ -32,6 +32,7 @@ pub(crate) fn metadata_message(message: &JobMessage) -> JobMessage {
         max_retries,
         run_at,
         idempotency_key,
+        traceparent,
     } = message;
     JobMessage {
         job_type: job_type.clone(),
@@ -42,6 +43,7 @@ pub(crate) fn metadata_message(message: &JobMessage) -> JobMessage {
         max_retries: *max_retries,
         run_at: *run_at,
         idempotency_key: idempotency_key.clone(),
+        traceparent: traceparent.clone(),
     }
 }
 
@@ -51,6 +53,7 @@ pub(crate) enum Operation {
     Complete(JobId, LeaseToken, Option<String>),
     Fail(JobId, LeaseToken, String, Option<DateTime<Utc>>),
     Heartbeat(JobId, LeaseToken, Duration),
+    Progress(JobId, LeaseToken, u8),
     Cancel(JobId),
     Get(JobId),
     Snapshot(JobId),
@@ -235,6 +238,7 @@ impl TenantState {
             }
             Operation::Complete(id, token, _)
             | Operation::Fail(id, token, _, _)
+            | Operation::Progress(id, token, _)
             | Operation::Heartbeat(id, token, _) => {
                 let row = self
                     .jobs
@@ -284,6 +288,15 @@ impl TenantState {
                         row.record.updated_at = now;
                         row.record.lease_token = None;
                         row.token = None;
+                    }
+                    Operation::Progress(_, _, percent) => {
+                        if *percent > 100 {
+                            return Err(QueueError::InvalidConfig(
+                                "progress must be 0..=100".into(),
+                            ));
+                        }
+                        row.record.progress = Some(*percent);
+                        row.record.updated_at = now;
                     }
                     Operation::Heartbeat(_, _, duration) => {
                         let until = row
@@ -387,6 +400,18 @@ impl<S: StateStore> QueueBackend for DurableBackend<S> {
     ) -> QueueResult<()> {
         self.store
             .update(&ctx.tenant_id, &Operation::Heartbeat(id, token, duration))
+            .await?;
+        Ok(())
+    }
+    async fn report_progress(
+        &self,
+        ctx: QueueCtx,
+        id: JobId,
+        token: LeaseToken,
+        percent: u8,
+    ) -> QueueResult<()> {
+        self.store
+            .update(&ctx.tenant_id, &Operation::Progress(id, token, percent))
             .await?;
         Ok(())
     }

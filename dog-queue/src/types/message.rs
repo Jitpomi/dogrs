@@ -27,6 +27,11 @@ pub struct JobMessage {
     /// Absolute UTC eligibility time, or [`Self::IMMEDIATE`] for immediate work.
     pub run_at: DateTime<Utc>,
 
+    /// W3C traceparent captured by the producer. No baggage or customer data.
+    /// Older persisted records deserialize without a parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traceparent: Option<String>,
+
     /// Optional idempotency key (scoped by tenant/queue/job_type)
     pub idempotency_key: Option<String>,
 }
@@ -51,6 +56,7 @@ impl JobMessage {
             priority: JobPriority::default(),
             max_retries: 3,
             run_at: Self::IMMEDIATE,
+            traceparent: None,
             idempotency_key: None,
         }
     }

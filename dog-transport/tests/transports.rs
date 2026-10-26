@@ -1,10 +1,12 @@
+#![cfg(any(feature = "cli", feature = "http", feature = "grpc"))]
 use dog_auth::AuthParams;
-use dog_core::{
-    DogApp, DogAppBuilder, DogMethod, DogParams, DogRequest, DogService, DogTransportKind,
-    TenantContext,
-};
+use dog_core::{DogApp, DogAppBuilder, DogService, TenantContext};
+#[cfg(any(feature = "grpc", feature = "cli"))]
+use dog_core::{DogMethod, DogParams, DogRequest, DogTransportKind};
 use serde_json::{json, Value};
-use std::{collections::HashMap, sync::Arc};
+#[cfg(any(feature = "grpc", feature = "cli"))]
+use std::collections::HashMap;
+use std::sync::Arc;
 type Params = AuthParams<Value>;
 
 struct Echo;

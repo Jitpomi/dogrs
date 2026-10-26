@@ -44,7 +44,10 @@ where
 fn mutation_deadline(row: &StoredRecord, op: &Operation) -> Option<chrono::DateTime<Utc>> {
     if matches!(
         op,
-        Operation::Complete(..) | Operation::Fail(..) | Operation::Heartbeat(..)
+        Operation::Complete(..)
+            | Operation::Fail(..)
+            | Operation::Progress(..)
+            | Operation::Heartbeat(..)
     ) {
         row.record.lease_until()
     } else {
@@ -952,6 +955,7 @@ impl NatsStore {
                 | Operation::Cancel(id)
                 | Operation::Complete(id, ..)
                 | Operation::Fail(id, ..)
+                | Operation::Progress(id, ..)
                 | Operation::Heartbeat(id, ..) => id.clone(),
                 _ => unreachable!(),
             };
@@ -1008,7 +1012,10 @@ impl NatsStore {
                     }
                 } else if matches!(
                     op,
-                    Operation::Complete(..) | Operation::Fail(..) | Operation::Heartbeat(..)
+                    Operation::Complete(..)
+                        | Operation::Fail(..)
+                        | Operation::Progress(..)
+                        | Operation::Heartbeat(..)
                 ) {
                     if let Ok(outcome) = state.apply_at(tenant, op, Utc::now()) {
                         let row = &state.jobs[&id];

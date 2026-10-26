@@ -648,6 +648,7 @@ impl PostgresStore {
         // database clock again: a lease that expired in transit cannot commit.
         if let Operation::Complete(id, ..)
         | Operation::Fail(id, ..)
+        | Operation::Progress(id, ..)
         | Operation::Heartbeat(id, ..)
         | Operation::Cancel(id) = op
         {
@@ -689,7 +690,7 @@ impl PostgresStore {
         let tx = client.transaction().await.map_err(error)?;
         let rows = match op {
             Operation::Reap => tx.query_typed("SELECT state FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND lease_until < statement_timestamp() ORDER BY lease_until LIMIT 256 FOR UPDATE SKIP LOCKED", &[(&tenant,Type::TEXT)]).await.map_err(error)?,
-            Operation::Complete(id, ..) | Operation::Fail(id, ..) | Operation::Heartbeat(id, ..) | Operation::Cancel(id) => tx.query_typed("SELECT state FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND id=$2 FOR UPDATE", &[(&tenant,Type::TEXT),(&id.as_str(),Type::TEXT)]).await.map_err(error)?,
+            Operation::Complete(id, ..) | Operation::Fail(id, ..) | Operation::Progress(id, ..) | Operation::Heartbeat(id, ..) | Operation::Cancel(id) => tx.query_typed("SELECT state FROM dogrs_queue_jobs_v2 WHERE tenant=$1 AND id=$2 FOR UPDATE", &[(&tenant,Type::TEXT),(&id.as_str(),Type::TEXT)]).await.map_err(error)?,
             _ => unreachable!(),
         };
         // Read time after row locks are held, not before a potentially long wait.

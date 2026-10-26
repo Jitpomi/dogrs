@@ -6,6 +6,14 @@ default is **9 jobs/second per tenant, 100 tenants (900 jobs/second aggregate)**
 is an optional stress experiment, not the default. Correctness/recovery checks
 include a five-minute outage.
 
+## S3 dependency release gate (25 October 2026)
+
+The repository backports the AWS SigV4a dependency fix, but the override does not
+propagate to crates.io consumers. Published S3 security clearance remains pending
+a fixed AWS release and a clean, unpatched consumer verification. See the
+[security status and release checklist](aws-sigv4a-security.md). This is separate
+from queue capacity and recovery results.
+
 ## Current evidence (8 October 2026)
 
 Queue fixes were merged in PR #24 at `f536e52` after all correctness/recovery

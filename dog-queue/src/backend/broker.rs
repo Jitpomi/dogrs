@@ -197,6 +197,15 @@ impl<N: Notifications + 'static> QueueBackend for BrokerBackend<N> {
         }
         Ok(())
     }
+    async fn report_progress(
+        &self,
+        ctx: QueueCtx,
+        id: JobId,
+        token: LeaseToken,
+        percent: u8,
+    ) -> QueueResult<()> {
+        self.ledger.report_progress(ctx, id, token, percent).await
+    }
     async fn heartbeat_extend(
         &self,
         ctx: QueueCtx,

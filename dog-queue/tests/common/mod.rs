@@ -7,9 +7,10 @@ pub async fn contract(
 ) {
     let tenant = QueueCtx::new(format!("audit-{}", uuid::Uuid::new_v4()));
     let stranger = QueueCtx::new(format!("stranger-{}", uuid::Uuid::new_v4()));
-    let msg = JobMessage::new("test", vec![1, 2, 3], "json", "q")
+    let mut msg = JobMessage::new("test", vec![1, 2, 3], "json", "q")
         .with_idempotency_key("same")
         .with_run_at(chrono::Utc::now() - chrono::Duration::seconds(1));
+    msg.traceparent = Some("00-11111111111111111111111111111111-2222222222222222-01".into());
     let (left, right) = tokio::join!(
         a.enqueue(tenant.clone(), msg.clone()),
         b.enqueue(tenant.clone(), msg)
@@ -32,7 +33,43 @@ pub async fn contract(
         right.is_some(),
         "Only one process may own a lease"
     );
+    let mut statuses = dog_queue::realtime::watch_jobs(
+        a.clone(),
+        tenant.clone(),
+        vec![id.clone()],
+        dog_queue::realtime::WatchOptions::default(),
+    )
+    .unwrap();
+    use futures::StreamExt;
+    assert_eq!(statuses.next().await.unwrap().unwrap().status, "processing");
+    drop(statuses);
     let lease = left.or(right).unwrap();
+    assert_eq!(
+        lease.record.message.traceparent.as_deref(),
+        Some("00-11111111111111111111111111111111-2222222222222222-01")
+    );
+    b.report_progress(tenant.clone(), id.clone(), lease.lease_token.clone(), 37)
+        .await
+        .unwrap();
+    assert_eq!(
+        a.get_snapshot(tenant.clone(), id.clone())
+            .await
+            .unwrap()
+            .progress,
+        Some(37)
+    );
+    assert!(b
+        .report_progress(stranger.clone(), id.clone(), lease.lease_token.clone(), 38)
+        .await
+        .is_err());
+    assert!(b
+        .report_progress(tenant.clone(), id.clone(), dog_queue::LeaseToken::new(), 38)
+        .await
+        .is_err());
+    assert!(b
+        .report_progress(tenant.clone(), id.clone(), lease.lease_token.clone(), 101)
+        .await
+        .is_err());
     assert!(a
         .ack_complete(
             stranger.clone(),
@@ -50,6 +87,37 @@ pub async fn contract(
     )
     .await
     .unwrap();
+    // Reconnect through an independent backend after the other instance completes.
+    let mut statuses = dog_queue::realtime::watch_jobs(
+        a.clone(),
+        tenant.clone(),
+        vec![id.clone()],
+        dog_queue::realtime::WatchOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(statuses.next().await.unwrap().unwrap().status, "completed");
+    let mut with_result = dog_queue::realtime::watch_jobs(
+        a.clone(),
+        tenant.clone(),
+        vec![id.clone()],
+        dog_queue::realtime::WatchOptions {
+            include_results: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let final_update = with_result.next().await.unwrap().unwrap();
+    assert_eq!(final_update.result.as_deref(), Some("42"));
+    assert_eq!(final_update.progress, Some(37));
+    let mut denied = dog_queue::realtime::watch_jobs(
+        a.clone(),
+        stranger.clone(),
+        vec![id.clone()],
+        dog_queue::realtime::WatchOptions::default(),
+    )
+    .unwrap();
+    assert!(denied.next().await.unwrap().is_err());
+    assert!(denied.next().await.is_none());
     let snapshot = a.get_snapshot(tenant.clone(), id.clone()).await.unwrap();
     let batch = a
         .get_snapshots(tenant.clone(), &[id.clone(), id.clone()])
@@ -98,6 +166,9 @@ pub async fn contract(
         .await
         .unwrap();
     let lease = b.dequeue(tenant.clone(), &["q"]).await.unwrap().unwrap();
+    b.report_progress(tenant.clone(), retry.clone(), lease.lease_token.clone(), 73)
+        .await
+        .unwrap();
     b.ack_fail(
         tenant.clone(),
         retry.clone(),
@@ -109,6 +180,7 @@ pub async fn contract(
     .unwrap();
     let lease = a.dequeue(tenant.clone(), &["q"]).await.unwrap().unwrap();
     assert_eq!(lease.record.attempt, 2);
+    assert_eq!(lease.record.progress, None);
     a.ack_complete(tenant.clone(), retry, lease.lease_token, None)
         .await
         .unwrap();
@@ -127,6 +199,16 @@ pub async fn contract(
         .unwrap()
         .unwrap();
     tokio::time::sleep(Duration::from_millis(80)).await;
+    assert!(matches!(
+        b.report_progress(
+            tenant.clone(),
+            expired.clone(),
+            lease.lease_token.clone(),
+            90
+        )
+        .await,
+        Err(QueueError::LeaseExpired)
+    ));
     assert!(matches!(
         b.ack_complete(tenant.clone(), expired.clone(), lease.lease_token, None)
             .await,

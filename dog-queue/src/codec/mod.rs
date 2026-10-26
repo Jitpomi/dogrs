@@ -214,6 +214,7 @@ impl CodecRegistry {
             priority: J::PRIORITY,
             max_retries: J::MAX_RETRIES,
             run_at: opts.run_at.unwrap_or_else(Utc::now),
+            traceparent: None,
             idempotency_key: job.idempotency_key().map(|k| k.into_owned()),
         })
     }
