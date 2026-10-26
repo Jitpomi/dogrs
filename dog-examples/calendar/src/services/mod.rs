@@ -22,7 +22,7 @@ pub fn configure(
     let events: Arc<dyn DogService<serde_json::Value, CalendarParams>> =
         Arc::new(events::EventsService::new(Arc::clone(&state)));
     app.register_service("events", Arc::clone(&events));
-    events::events_shared::register_hooks(app)?;
+    events::events_shared::register_hooks(app, Arc::clone(&state))?;
 
     Ok(())
 }
