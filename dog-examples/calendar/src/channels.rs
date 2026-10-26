@@ -52,9 +52,15 @@ pub fn configure(
                 }
             };
 
+            let tenant_id = ctx.tenant.tenant_id.0.clone();
             Box::pin(async move {
-                if let Some(p) = payload {
+                if let Some(mut p) = payload {
+                    if let Some(map) = p.as_object_mut() {
+                        map.entry("tenant".to_string())
+                            .or_insert_with(|| Value::String(tenant_id.clone()));
+                    }
                     let json_payload = serde_json::json!({
+                        "tenant": tenant_id,
                         "event": event_name,
                         "data": p
                     });

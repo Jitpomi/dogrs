@@ -95,7 +95,9 @@ impl CalendarAdapter {
             // Reminder 15 minutes before start (or immediately if start is sooner)
             let reminder_time = (start_utc - chrono::Duration::minutes(15)).max(chrono::Utc::now());
 
+            let reminder_key = format!("{}:{}", tenant, id);
             let job = EventReminderJob {
+                tenant: tenant.clone(),
                 event_id: id.clone(),
                 title,
                 start_time: start_time_str,
@@ -110,7 +112,11 @@ impl CalendarAdapter {
                 .enqueue_opts(queue_ctx, job, opts)
                 .await
             {
-                self.state.reminder_jobs.write().await.insert(id, job_id);
+                self.state
+                    .reminder_jobs
+                    .write()
+                    .await
+                    .insert(reminder_key, job_id);
             }
         }
 
@@ -160,51 +166,64 @@ impl CalendarAdapter {
         _params: CalendarParams,
     ) -> Result<Value> {
         let id = self.require_id(id, "Patch requires an id")?;
-
         let tenant = Self::tenant_key(ctx);
-        let mut by_tenant = self.state.events_by_tenant.write().await;
-        let map = by_tenant.entry(tenant.clone()).or_default();
+        let reminder_key = format!("{}:{}", tenant, id);
 
-        let existing = map.get(id).cloned().ok_or_else(|| self.not_found(id))?;
+        // Scope the in-memory write lock so it's dropped before awaiting queue operations
+        let (value, start_utc_opt, title, start_time_str) = {
+            let mut by_tenant = self.state.events_by_tenant.write().await;
+            let map = by_tenant.entry(tenant.clone()).or_default();
 
-        let mut record = existing.as_object().cloned().unwrap_or_default();
-        if let Some(patch) = data.as_object() {
-            for (k, v) in patch {
-                if k == "id" {
-                    continue;
+            let existing = map.get(id).cloned().ok_or_else(|| self.not_found(id))?;
+
+            let mut record = existing.as_object().cloned().unwrap_or_default();
+            if let Some(patch) = data.as_object() {
+                for (k, v) in patch {
+                    if k == "id" {
+                        continue;
+                    }
+                    record.insert(k.clone(), v.clone());
                 }
-                record.insert(k.clone(), v.clone());
             }
-        }
 
-        record.insert("id".to_string(), Value::String(id.to_string()));
-        let value = Value::Object(record);
-        map.insert(id.to_string(), value.clone());
+            record.insert("id".to_string(), Value::String(id.to_string()));
+            let value = Value::Object(record);
+            map.insert(id.to_string(), value.clone());
+
+            let start_utc_opt = if data.get("start_time").is_some() {
+                Self::parse_start_time(value.get("start_time"))
+            } else {
+                None
+            };
+            let title = value
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled Event")
+                .to_string();
+            let start_time_str = value
+                .get("start_time")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+
+            (value, start_utc_opt, title, start_time_str)
+        };
 
         // Reschedule reminder if start_time was updated
         if data.get("start_time").is_some() {
             // Cancel-wins: cancel existing reminder
-            if let Some(old_job_id) = self.state.reminder_jobs.write().await.remove(id) {
+            let old_job_id = self.state.reminder_jobs.write().await.remove(&reminder_key);
+            if let Some(old_job_id) = old_job_id {
                 let queue_ctx = QueueCtx::new(tenant.clone());
                 let _ = self.state.queue.adapter.cancel(queue_ctx, old_job_id).await;
             }
 
             // Schedule updated reminder
-            if let Some(start_utc) = Self::parse_start_time(value.get("start_time")) {
-                let title = value
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Untitled Event")
-                    .to_string();
-                let start_time_str = value
-                    .get("start_time")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-
+            if let Some(start_utc) = start_utc_opt {
                 let reminder_time =
                     (start_utc - chrono::Duration::minutes(15)).max(chrono::Utc::now());
                 let job = EventReminderJob {
+                    tenant: tenant.clone(),
                     event_id: id.to_string(),
                     title,
                     start_time: start_time_str,
@@ -223,7 +242,7 @@ impl CalendarAdapter {
                         .reminder_jobs
                         .write()
                         .await
-                        .insert(id.to_string(), new_job_id);
+                        .insert(reminder_key, new_job_id);
                 }
             }
         }
@@ -239,14 +258,19 @@ impl CalendarAdapter {
         _params: CalendarParams,
     ) -> Result<Value> {
         let id = self.require_id(id, "Remove requires an id")?;
-
         let tenant = Self::tenant_key(ctx);
-        let mut by_tenant = self.state.events_by_tenant.write().await;
-        let map = by_tenant.entry(tenant.clone()).or_default();
-        let removed = map.remove(id).ok_or_else(|| self.not_found(id))?;
+        let reminder_key = format!("{}:{}", tenant, id);
+
+        // Scope the write lock so it's dropped before awaiting queue cancellation
+        let removed = {
+            let mut by_tenant = self.state.events_by_tenant.write().await;
+            let map = by_tenant.entry(tenant.clone()).or_default();
+            map.remove(id).ok_or_else(|| self.not_found(id))?
+        };
 
         // Cancel-wins: cancel pending reminder job when event is removed
-        if let Some(job_id) = self.state.reminder_jobs.write().await.remove(id) {
+        let old_job_id = self.state.reminder_jobs.write().await.remove(&reminder_key);
+        if let Some(job_id) = old_job_id {
             let queue_ctx = QueueCtx::new(tenant);
             let _ = self.state.queue.adapter.cancel(queue_ctx, job_id).await;
         }

@@ -24,7 +24,7 @@ async-nats = { version = "0.50", optional = true }
 redis = { version = "1.7.1", optional = true, features = ["tokio-rustls-comp"] }
 lapin = { version = "2.4", optional = true }
 rdkafka = { version = "0.36", optional = true, features = ["cmake-build", "ssl"] }
-rskafka = { version = "0.6", optional = true, features = ["transport-tls"] }
+rskafka = { version = "0.6", optional = true, default-features = false, features = ["transport-tls", "compression-gzip", "compression-lz4", "compression-snappy"] }
 chrono = "0.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

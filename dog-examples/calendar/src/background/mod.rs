@@ -23,6 +23,7 @@ pub struct CalendarJobContext {
 /// Delayed reminder job scheduled by dog-queue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventReminderJob {
+    pub tenant: String,
     pub event_id: String,
     pub title: String,
     pub start_time: String,
@@ -39,8 +40,10 @@ impl Job for EventReminderJob {
 
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
         let reminder_event = serde_json::json!({
+            "tenant": self.tenant,
             "event": "reminder",
             "data": {
+                "tenant": self.tenant,
                 "event_id": self.event_id,
                 "title": self.title,
                 "start_time": self.start_time,

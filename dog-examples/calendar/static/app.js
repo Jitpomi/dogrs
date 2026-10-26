@@ -662,6 +662,15 @@ class CalendarApp {
     handleWebSocketBroadcast(msg) {
         if (msg.type === 'BROADCAST') {
             const { event, payload } = msg;
+
+            // Tenant isolation: ignore broadcasts intended for other workspaces
+            if (payload && payload.tenant && payload.tenant !== this.currentWorkspace) {
+                return;
+            }
+            if (msg.tenant && msg.tenant !== this.currentWorkspace) {
+                return;
+            }
+
             this.logDev('WS-PACKET', `[${event}] ${JSON.stringify(payload)}`);
 
             if (event === 'reminder') {
@@ -831,8 +840,8 @@ class CalendarApp {
                 weekAnchor.setDate(weekAnchor.getDate() - weekAnchor.getDay()); // Sunday of origStart week
                 weekAnchor.setHours(origStart.getHours(), origStart.getMinutes(), origStart.getSeconds(), origStart.getMilliseconds());
 
-                // Fast-forward weekAnchor if rangeStart is far ahead
-                if (weekAnchor.getTime() < startTs - 7 * 86400000) {
+                // Fast-forward weekAnchor if rangeStart is far ahead (only when not count-bounded)
+                if (rule.ends !== 'count' && weekAnchor.getTime() < startTs - 7 * 86400000) {
                     const weeksDiff = Math.floor((startTs - weekAnchor.getTime()) / (7 * 86400000 * rule.interval));
                     if (weeksDiff > 1) {
                         weekAnchor.setDate(weekAnchor.getDate() + (weeksDiff - 1) * 7 * rule.interval);
@@ -871,8 +880,8 @@ class CalendarApp {
                 // Day, Month, or Year steps
                 let cur = new Date(origStart);
 
-                // Fast-forward for daily if far behind
-                if (rule.freq === 'day' && cur.getTime() < startTs) {
+                // Fast-forward for daily if far behind (only when not count-bounded)
+                if (rule.freq === 'day' && rule.ends !== 'count' && cur.getTime() < startTs) {
                     const daysDiff = Math.floor((startTs - cur.getTime()) / (86400000 * rule.interval));
                     if (daysDiff > 1) {
                         cur.setDate(cur.getDate() + (daysDiff - 1) * rule.interval);
@@ -1065,7 +1074,7 @@ class CalendarApp {
                 <div class="event-tile-meta">
                     <span>${this.formatTime(startDate)}</span>
                     ${evt.recurrence && evt.recurrence !== 'none' ? `<span class="event-tile-repeat-badge" title="Repeats: ${this.formatRecurrence(evt.recurrence, evt.start_time)}">${Icons.repeat(10)}</span>` : ''}
-                    ${evt.meeting_url ? `<span class="event-tile-meet-badge">${Icons.video(11)}<span>Call</span></span>` : ''}
+                    ${this.sanitizeUrl(evt.meeting_url) ? `<span class="event-tile-meet-badge">${Icons.video(11)}<span>Call</span></span>` : ''}
                 </div>
             `;
 
@@ -1146,7 +1155,7 @@ class CalendarApp {
                 <div class="event-tile-meta">
                     <span>${this.formatTime(startDate)}</span>
                     ${evt.recurrence && evt.recurrence !== 'none' ? `<span class="event-tile-repeat-badge" title="Repeats: ${this.formatRecurrence(evt.recurrence, evt.start_time)}">${Icons.repeat(11)} <span>${this.formatRecurrence(evt.recurrence, evt.start_time)}</span></span>` : ''}
-                    ${evt.meeting_url ? `<span class="event-tile-meet-badge">${Icons.video(12)}<span>Video Call</span></span>` : ''}
+                    ${this.sanitizeUrl(evt.meeting_url) ? `<span class="event-tile-meet-badge">${Icons.video(12)}<span>Video Call</span></span>` : ''}
                     ${evt.location ? `<span>• ${this.escapeHtml(evt.location)}</span>` : ''}
                 </div>
             `;
@@ -1295,8 +1304,8 @@ class CalendarApp {
                                             </div>
                                         </div>
                                     </div>
-                                    ${e.meeting_url ? `
-                                        <a href="${this.escapeHtml(e.meeting_url)}" target="_blank" class="btn-join-call" onclick="event.stopPropagation()">
+                                    ${this.sanitizeUrl(e.meeting_url) ? `
+                                        <a href="${this.escapeHtml(this.sanitizeUrl(e.meeting_url))}" target="_blank" rel="noopener noreferrer" class="btn-join-call" onclick="event.stopPropagation()">
                                             ${Icons.video(13)}
                                             <span>Join Call</span>
                                         </a>
@@ -1408,10 +1417,12 @@ class CalendarApp {
         this.elNextMeetingTitle.textContent = next.title;
         this.elNextMeetingTime.textContent = `Today, ${this.formatTime(nextDate)} (in ${minutesDiff}m)`;
 
-        if (next.meeting_url) {
-            this.elNextMeetingLink.href = next.meeting_url;
+        const safeNextUrl = this.sanitizeUrl(next.meeting_url);
+        if (safeNextUrl) {
+            this.elNextMeetingLink.href = safeNextUrl;
             this.elNextMeetingLink.style.display = 'inline-flex';
         } else {
+            this.elNextMeetingLink.removeAttribute('href');
             this.elNextMeetingLink.style.display = 'none';
         }
     }
@@ -1709,10 +1720,12 @@ class CalendarApp {
         this.elPopoverSwatch.className = `popover-swatch swatch-${evt.color || 'indigo'}`;
 
         // Join call CTA
-        if (evt.meeting_url) {
-            this.elPopoverJoinBtn.href = evt.meeting_url;
+        const safeMeetUrl = this.sanitizeUrl(evt.meeting_url);
+        if (safeMeetUrl) {
+            this.elPopoverJoinBtn.href = safeMeetUrl;
             this.elPopoverJoinBtn.style.display = 'inline-flex';
         } else {
+            this.elPopoverJoinBtn.removeAttribute('href');
             this.elPopoverJoinBtn.style.display = 'none';
         }
 
@@ -1968,6 +1981,15 @@ class CalendarApp {
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+    }
+
+    sanitizeUrl(url) {
+        if (!url) return '';
+        const trimmed = String(url).trim();
+        if (/^https?:\/\//i.test(trimmed)) {
+            return trimmed;
+        }
+        return '';
     }
 }
 

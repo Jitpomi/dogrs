@@ -279,6 +279,7 @@ async fn events_realtime_websocket_broadcast() {
 
     assert_eq!(json["type"], "BROADCAST");
     assert_eq!(json["event"], "created");
+    assert_eq!(json["payload"]["tenant"], "default");
     assert_eq!(json["payload"]["title"], "Realtime Standup");
     assert_eq!(json["payload"]["description"], "Live sync test");
 
