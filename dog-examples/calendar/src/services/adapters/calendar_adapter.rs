@@ -63,12 +63,8 @@ impl CalendarAdapter {
     ) -> Result<Value> {
         let mut obj = data.as_object().cloned().unwrap_or_default();
 
-        let id = obj
-            .get("id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("{}:{}", self.id_prefix, Uuid::new_v4()));
-
+        // Always issue a fresh server-authoritative UUID to prevent ID squatting or collisions
+        let id = format!("{}:{}", self.id_prefix, Uuid::new_v4());
         obj.insert("id".to_string(), Value::String(id.clone()));
         let value = Value::Object(obj);
 
@@ -79,44 +75,50 @@ impl CalendarAdapter {
             .or_default()
             .insert(id.clone(), value.clone());
 
-        // Schedule delayed reminder via dog-queue if start_time is provided
+        // Schedule delayed reminder via dog-queue only if start_time is in the future
         if let Some(start_utc) = Self::parse_start_time(value.get("start_time")) {
-            let title = value
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or("Untitled Event")
-                .to_string();
-            let start_time_str = value
-                .get("start_time")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
+            let now = chrono::Utc::now();
+            if start_utc > now {
+                let title = value
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Untitled Event")
+                    .to_string();
+                let start_time_str = value
+                    .get("start_time")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
 
-            // Reminder 15 minutes before start (or immediately if start is sooner)
-            let reminder_time = (start_utc - chrono::Duration::minutes(15)).max(chrono::Utc::now());
+                // Reminder 15 minutes before start (or immediately if start is sooner)
+                let reminder_time = (start_utc
+                    .checked_sub_signed(chrono::Duration::minutes(15))
+                    .unwrap_or(start_utc))
+                .max(now);
 
-            let reminder_key = format!("{}:{}", tenant, id);
-            let job = EventReminderJob {
-                tenant: tenant.clone(),
-                event_id: id.clone(),
-                title,
-                start_time: start_time_str,
-            };
+                let reminder_key = format!("{}:{}", tenant, id);
+                let job = EventReminderJob {
+                    tenant: tenant.clone(),
+                    event_id: id.clone(),
+                    title,
+                    start_time: start_time_str,
+                };
 
-            let queue_ctx = QueueCtx::new(tenant);
-            let opts = EnqueueOptions::scheduled(reminder_time);
-            if let Ok(job_id) = self
-                .state
-                .queue
-                .adapter
-                .enqueue_opts(queue_ctx, job, opts)
-                .await
-            {
-                self.state
-                    .reminder_jobs
-                    .write()
+                let queue_ctx = QueueCtx::new(tenant);
+                let opts = EnqueueOptions::scheduled(reminder_time);
+                if let Ok(job_id) = self
+                    .state
+                    .queue
+                    .adapter
+                    .enqueue_opts(queue_ctx, job, opts)
                     .await
-                    .insert(reminder_key, job_id);
+                {
+                    self.state
+                        .reminder_jobs
+                        .write()
+                        .await
+                        .insert(reminder_key, job_id);
+                }
             }
         }
 
@@ -218,31 +220,36 @@ impl CalendarAdapter {
                 let _ = self.state.queue.adapter.cancel(queue_ctx, old_job_id).await;
             }
 
-            // Schedule updated reminder
+            // Schedule updated reminder only if start_time is in the future
             if let Some(start_utc) = start_utc_opt {
-                let reminder_time =
-                    (start_utc - chrono::Duration::minutes(15)).max(chrono::Utc::now());
-                let job = EventReminderJob {
-                    tenant: tenant.clone(),
-                    event_id: id.to_string(),
-                    title,
-                    start_time: start_time_str,
-                };
+                let now = chrono::Utc::now();
+                if start_utc > now {
+                    let reminder_time = (start_utc
+                        .checked_sub_signed(chrono::Duration::minutes(15))
+                        .unwrap_or(start_utc))
+                    .max(now);
+                    let job = EventReminderJob {
+                        tenant: tenant.clone(),
+                        event_id: id.to_string(),
+                        title,
+                        start_time: start_time_str,
+                    };
 
-                let queue_ctx = QueueCtx::new(tenant);
-                let opts = EnqueueOptions::scheduled(reminder_time);
-                if let Ok(new_job_id) = self
-                    .state
-                    .queue
-                    .adapter
-                    .enqueue_opts(queue_ctx, job, opts)
-                    .await
-                {
-                    self.state
-                        .reminder_jobs
-                        .write()
+                    let queue_ctx = QueueCtx::new(tenant);
+                    let opts = EnqueueOptions::scheduled(reminder_time);
+                    if let Ok(new_job_id) = self
+                        .state
+                        .queue
+                        .adapter
+                        .enqueue_opts(queue_ctx, job, opts)
                         .await
-                        .insert(reminder_key, new_job_id);
+                    {
+                        self.state
+                            .reminder_jobs
+                            .write()
+                            .await
+                            .insert(reminder_key, new_job_id);
+                    }
                 }
             }
         }

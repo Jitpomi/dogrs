@@ -1062,7 +1062,7 @@ class CalendarApp {
             }
             const heightPx = Math.max(28, duration * 60 - 3);
 
-            const colorClass = `color-${evt.color || 'indigo'}`;
+            const colorClass = `color-${this.sanitizeColor(evt.color)}`;
 
             const tile = document.createElement('div');
             tile.className = `event-tile ${colorClass}`;
@@ -1073,7 +1073,7 @@ class CalendarApp {
                 <div class="event-tile-title">${this.escapeHtml(evt.title)}</div>
                 <div class="event-tile-meta">
                     <span>${this.formatTime(startDate)}</span>
-                    ${evt.recurrence && evt.recurrence !== 'none' ? `<span class="event-tile-repeat-badge" title="Repeats: ${this.formatRecurrence(evt.recurrence, evt.start_time)}">${Icons.repeat(10)}</span>` : ''}
+                    ${evt.recurrence && evt.recurrence !== 'none' ? `<span class="event-tile-repeat-badge" title="Repeats: ${this.escapeHtml(this.formatRecurrence(evt.recurrence, evt.start_time))}">${Icons.repeat(10)}</span>` : ''}
                     ${this.sanitizeUrl(evt.meeting_url) ? `<span class="event-tile-meet-badge">${Icons.video(11)}<span>Call</span></span>` : ''}
                 </div>
             `;
@@ -1146,7 +1146,7 @@ class CalendarApp {
             const heightPx = Math.max(28, duration * 60 - 3);
 
             const tile = document.createElement('div');
-            tile.className = `event-tile color-${evt.color || 'indigo'}`;
+            tile.className = `event-tile color-${this.sanitizeColor(evt.color)}`;
             tile.style.top = `${topPx}px`;
             tile.style.height = `${heightPx}px`;
 
@@ -1154,7 +1154,7 @@ class CalendarApp {
                 <div class="event-tile-title">${this.escapeHtml(evt.title)}</div>
                 <div class="event-tile-meta">
                     <span>${this.formatTime(startDate)}</span>
-                    ${evt.recurrence && evt.recurrence !== 'none' ? `<span class="event-tile-repeat-badge" title="Repeats: ${this.formatRecurrence(evt.recurrence, evt.start_time)}">${Icons.repeat(11)} <span>${this.formatRecurrence(evt.recurrence, evt.start_time)}</span></span>` : ''}
+                    ${evt.recurrence && evt.recurrence !== 'none' ? `<span class="event-tile-repeat-badge" title="Repeats: ${this.escapeHtml(this.formatRecurrence(evt.recurrence, evt.start_time))}">${Icons.repeat(11)} <span>${this.escapeHtml(this.formatRecurrence(evt.recurrence, evt.start_time))}</span></span>` : ''}
                     ${this.sanitizeUrl(evt.meeting_url) ? `<span class="event-tile-meet-badge">${Icons.video(12)}<span>Video Call</span></span>` : ''}
                     ${evt.location ? `<span>• ${this.escapeHtml(evt.location)}</span>` : ''}
                 </div>
@@ -1207,7 +1207,7 @@ class CalendarApp {
                     <span class="month-cell-day">${d}</span>
                     <div class="month-pills-list">
                         ${dayEvents.slice(0, 3).map(e => `
-                            <div class="month-pill color-${e.color || 'indigo'}" data-id="${e.id}">
+                            <div class="month-pill color-${this.sanitizeColor(e.color)}" data-id="${this.escapeHtml(e.id)}">
                                 ${e.recurrence && e.recurrence !== 'none' ? '🔁 ' : ''}${this.escapeHtml(e.title)}
                             </div>
                         `).join('')}
@@ -1287,7 +1287,7 @@ class CalendarApp {
                         <h2 class="agenda-date-header">${dateStr}</h2>
                         <div class="agenda-items-list">
                             ${items.map(e => `
-                                <div class="agenda-item-card" data-id="${e.id}">
+                                <div class="agenda-item-card" data-id="${this.escapeHtml(e.id)}">
                                     <div class="agenda-card-left">
                                         <div class="agenda-time-badge">
                                             ${e.start_time ? this.formatTime(new Date(e.start_time)) : 'All Day'}
@@ -1296,7 +1296,7 @@ class CalendarApp {
                                         <div class="agenda-title-block">
                                             <div class="agenda-title-text">
                                                 ${this.escapeHtml(e.title)}
-                                                ${e.recurrence && e.recurrence !== 'none' ? `<span class="event-tile-repeat-badge" style="margin-left: 6px;">${Icons.repeat(11)} <span>${this.formatRecurrence(e.recurrence, e.start_time)}</span></span>` : ''}
+                                                ${e.recurrence && e.recurrence !== 'none' ? `<span class="event-tile-repeat-badge" style="margin-left: 6px;">${Icons.repeat(11)} <span>${this.escapeHtml(this.formatRecurrence(e.recurrence, e.start_time))}</span></span>` : ''}
                                             </div>
                                             <div class="agenda-desc-text">
                                                 ${e.location ? `<span class="agenda-location-badge">${Icons.pin(12)}<span>${this.escapeHtml(e.location)}</span></span> • ` : ''}
@@ -1717,7 +1717,7 @@ class CalendarApp {
         }
 
         // Swatch
-        this.elPopoverSwatch.className = `popover-swatch swatch-${evt.color || 'indigo'}`;
+        this.elPopoverSwatch.className = `popover-swatch swatch-${this.sanitizeColor(evt.color)}`;
 
         // Join call CTA
         const safeMeetUrl = this.sanitizeUrl(evt.meeting_url);
@@ -1980,7 +1980,13 @@ class CalendarApp {
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    sanitizeColor(color) {
+        const allowed = ['indigo', 'emerald', 'sky', 'amber', 'rose', 'purple'];
+        return allowed.includes(color) ? color : 'indigo';
     }
 
     sanitizeUrl(url) {

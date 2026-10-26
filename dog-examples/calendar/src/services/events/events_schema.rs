@@ -10,61 +10,61 @@ use dog_schema::schema;
 pub mod def {
     #[create]
     pub struct CreateEvent {
-        #[dog(trim, min_len(1))]
+        #[dog(trim, min_len(1), max_len(200))]
         pub title: String,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(4000))]
         pub description: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(100))]
         pub start_time: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(100))]
         pub end_time: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(200))]
         pub location: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(500))]
         pub meeting_url: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(50))]
         pub color: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(50))]
         pub category: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(200))]
         pub recurrence: Option<String>,
     }
 
     #[patch]
     pub struct PatchEvent {
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(200))]
         pub title: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(4000))]
         pub description: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(100))]
         pub start_time: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(100))]
         pub end_time: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(200))]
         pub location: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(500))]
         pub meeting_url: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(50))]
         pub color: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(50))]
         pub category: Option<String>,
 
-        #[dog(optional, trim, min_len(1))]
+        #[dog(optional, trim, min_len(1), max_len(200))]
         pub recurrence: Option<String>,
     }
 }
