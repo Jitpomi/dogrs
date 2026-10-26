@@ -47,6 +47,46 @@ class QualificationEvidenceTests(unittest.TestCase):
                             dict(server_id=f'server-{server}', config=dict(sync_always=True),
                                  account_details=[dict(stream_detail=streams)])))
 
+    def test_producer_runtime_must_match_environment_and_result(self):
+        for folder in self.root.iterdir():
+            for name in ('environment.json', 'capacity.log'):
+                path = folder / name
+                data = json.loads(path.read_text())
+                data['producer_runtime'] = 'isolated'
+                path.write_text(json.dumps(data))
+        self.assertTrue(verify(self.root)[1])
+        self.assertEqual(verify(self.root, producer_runtime='isolated')[1], [])
+        path = self.root / 'nats-0/capacity.log'
+        data = json.loads(path.read_text())
+        data['producer_runtime'] = 'shared'
+        path.write_text(json.dumps(data))
+        self.assertTrue(verify(self.root, producer_runtime='isolated')[1])
+
+    def test_container_crash_or_missing_health_evidence_fails(self):
+        folder = self.root / 'nats-0'
+        path = folder / 'environment.json'
+        env = json.loads(path.read_text())
+        env['container_health_evidence'] = True
+        path.write_text(json.dumps(env))
+        self.assertTrue(verify(self.root)[1])
+        states = {f'n{i}': dict(Running=True, OOMKilled=False, ExitCode=0) for i in range(3)}
+        path = folder / 'container-health.json'
+        path.write_text(json.dumps(states))
+        self.assertEqual(verify(self.root)[1], [])
+        for change in (dict(OOMKilled=True), dict(Running=False), dict(ExitCode=137)):
+            with self.subTest(change=change):
+                path.write_text(json.dumps(states | {'n0': states['n0'] | change}))
+                self.assertTrue(verify(self.root)[1])
+
+    def test_memory_budget_must_be_explicit(self):
+        for folder in self.root.glob('nats-*'):
+            path = folder / 'environment.json'
+            env = json.loads(path.read_text())
+            env['nats_gomemlimit_mib'] = 1536
+            path.write_text(json.dumps(env))
+        self.assertTrue(verify(self.root)[1])
+        self.assertEqual(verify(self.root, nats_memory_mib=1536)[1], [])
+
     def test_complete_evidence_passes(self):
         counts, errors = verify(self.root)
         self.assertEqual(counts, dict(postgres=6, redis=6, nats=6))
@@ -89,6 +129,73 @@ class QualificationEvidenceTests(unittest.TestCase):
                 self.assertTrue(verify(self.root, headroom=True)[1])
         log.write_text(json.dumps(original | dict(elapsed_seconds=62, enqueue_p95_ms=1000)))
         self.assertEqual(verify(self.root, headroom=True)[1], [])
+
+    def test_balanced_leaders_require_explicit_policy_and_distribution(self):
+        for folder in self.root.glob('nats-*'):
+            path = folder / 'environment.json'
+            env = json.loads(path.read_text())
+            env['nats_leader_placement'] = 'balanced'
+            path.write_text(json.dumps(env))
+            for path in folder.glob('*-stream-state.json'):
+                state = json.loads(path.read_text())
+                for account in state['account_details']:
+                    for stream in account['stream_detail']:
+                        number = int(stream['name'].split('-')[-1])
+                        stream['cluster'] = {'leader': f'node-{number % 3}'}
+                path.write_text(json.dumps(state))
+        self.assertTrue(verify(self.root)[1])
+        self.assertEqual(verify(self.root, nats_leaders='balanced')[1], [])
+        for path in (self.root / 'nats-0').glob('*-stream-state.json'):
+            state = json.loads(path.read_text())
+            for account in state['account_details']:
+                for stream in account['stream_detail']:
+                    stream['cluster']['leader'] = 'node-0'
+            path.write_text(json.dumps(state))
+        self.assertTrue(verify(self.root, nats_leaders='balanced')[1])
+
+    def test_redis_rewrite_profile_requires_real_enabled_settings(self):
+        for folder in self.root.glob('redis-*'):
+            path = folder / 'environment.json'
+            env = json.loads(path.read_text())
+            env['redis_rewrite_min_mib'] = 1024
+            path.write_text(json.dumps(env))
+            path = folder / 'redis-durability-settings.txt'
+            path.write_text(path.read_text().rstrip() + '\nauto-aof-rewrite-min-size\n1073741824\nauto-aof-rewrite-percentage\n100')
+        self.assertTrue(verify(self.root)[1])
+        self.assertEqual(verify(self.root, redis_rewrite_min_mib=1024)[1], [])
+        path = self.root / 'redis-0/redis-durability-settings.txt'
+        path.write_text(path.read_text().replace('percentage\n100', 'percentage\n0'))
+        self.assertTrue(verify(self.root, redis_rewrite_min_mib=1024)[1])
+
+    def test_fair_scheduler_requires_matching_profile(self):
+        for folder in self.root.iterdir():
+            path = folder / 'environment.json'
+            env = json.loads(path.read_text())
+            env['fair_scheduler'] = True
+            path.write_text(json.dumps(env))
+        self.assertTrue(verify(self.root)[1])
+        self.assertEqual(verify(self.root, fair_scheduler=True)[1], [])
+
+    def test_paced_runtime_cannot_hide_delayed_dispatch(self):
+        for folder in self.root.iterdir():
+            env_path = folder / 'environment.json'
+            env = json.loads(env_path.read_text())
+            env['producer_runtime'] = 'paced'
+            env_path.write_text(json.dumps(env))
+            log = folder / 'capacity.log'
+            row = json.loads(log.read_text())
+            row.update(producer_runtime='paced', late_dispatches=0)
+            log.write_text(json.dumps(row))
+        self.assertEqual(verify(self.root, producer_runtime='paced')[1], [])
+        log = self.root / 'postgres-0/capacity.log'
+        original = json.loads(log.read_text())
+        for value in (1, None, False):
+            row = original | dict(late_dispatches=value)
+            log.write_text(json.dumps(row))
+            self.assertTrue(verify(self.root, producer_runtime='paced')[1])
+        del original['late_dispatches']
+        log.write_text(json.dumps(original))
+        self.assertTrue(verify(self.root, producer_runtime='paced')[1])
 
     def test_missing_or_duplicate_results_fail(self):
         log = self.root / 'postgres-0/capacity.log'

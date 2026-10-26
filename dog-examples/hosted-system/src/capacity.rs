@@ -53,6 +53,8 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     let completed = Arc::new(AtomicUsize::new(0));
     let overload = Arc::new(AtomicUsize::new(0));
     let late = Arc::new(AtomicUsize::new(0));
+    let late_dispatches = Arc::new(AtomicUsize::new(0));
+    let max_dispatch_us = Arc::new(AtomicUsize::new(0));
     let late_samples = Arc::new(Mutex::new(Vec::new()));
     let max_lateness_us = Arc::new(AtomicUsize::new(0));
     let errors = Arc::new(Mutex::new(Vec::new()));
@@ -143,102 +145,170 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
             });
         }
     }
-    let mut producers = tokio::task::JoinSet::new();
-    for t in 0..tenants {
+    let producer_runtime =
+        std::env::var("DOGRS_CAPACITY_PRODUCER_RUNTIME").unwrap_or_else(|_| "shared".into());
+    anyhow::ensure!(
+        matches!(producer_runtime.as_str(), "shared" | "isolated" | "paced"),
+        "invalid producer runtime"
+    );
+    // In paced mode only offer timers run on the separate runtime; provider
+    // work stays on the main runtime so serialization cannot delay the clock.
+    let enqueue_runtime = (producer_runtime == "paced").then(tokio::runtime::Handle::current);
+    let submit = {
         let backend = backend.clone();
-        let tenant = format!("{prefix}-{t}");
+        let prefix = prefix.clone();
         let accepted = accepted.clone();
         let overload = overload.clone();
         let late = late.clone();
+        let late_dispatches = late_dispatches.clone();
+        let max_dispatch_us = max_dispatch_us.clone();
         let late_samples = late_samples.clone();
         let max_lateness_us = max_lateness_us.clone();
         let errors = errors.clone();
         let latency = latency.clone();
         let ids = ids.clone();
-        producers.spawn(async move {
-            let slots = Arc::new(tokio::sync::Semaphore::new(inflight));
-            let mut requests = tokio::task::JoinSet::new();
-            for n in 0..seconds * rate {
-                let due = started
-                    + Duration::from_nanos(
-                        (n as u64 * tenants as u64 + t as u64) * 1_000_000_000
-                            / (rate as u64 * tenants as u64),
-                    );
-                tokio::time::sleep_until(tokio::time::Instant::from_std(due)).await;
-                let lateness = Instant::now().saturating_duration_since(due);
-                max_lateness_us.fetch_max(lateness.as_micros() as usize, Ordering::Relaxed);
-                if lateness > Duration::from_millis(100) {
-                    late.fetch_add(1, Ordering::SeqCst);
-                    // Keep bounded evidence of whether stalls occur at startup or
-                    // under sustained load; the acceptance threshold is unchanged.
-                    let mut samples = late_samples.lock().unwrap();
-                    if samples.len() < 10 {
-                        samples.push(json!({
-                            "tenant": t,
-                            "sequence": n,
-                            "due_offset_seconds": due.duration_since(started).as_secs_f64(),
-                            "lateness_ms": lateness.as_secs_f64() * 1000.0,
-                        }));
-                    }
-                }
-                let Ok(permit) = slots.clone().try_acquire_owned() else {
-                    overload.fetch_add(1, Ordering::SeqCst);
-                    continue;
-                };
+        async move {
+            let mut producers = tokio::task::JoinSet::new();
+            for t in 0..tenants {
                 let backend = backend.clone();
-                let tenant = tenant.clone();
+                let tenant = format!("{prefix}-{t}");
                 let accepted = accepted.clone();
+                let overload = overload.clone();
+                let late = late.clone();
+                let late_dispatches = late_dispatches.clone();
+                let max_dispatch_us = max_dispatch_us.clone();
+                let late_samples = late_samples.clone();
+                let max_lateness_us = max_lateness_us.clone();
                 let errors = errors.clone();
                 let latency = latency.clone();
                 let ids = ids.clone();
-                requests.spawn(async move {
-                    let _permit = permit;
-                    let begin = Instant::now();
-                    let message = JobMessage::new(
-                        "capacity",
-                        make_payload(((t as u64) << 32) | n as u64, bytes),
-                        "bytes",
-                        "capacity",
-                    )
-                    .with_idempotency_key(n.to_string());
-                    match backend.enqueue(QueueCtx::new(&tenant), message).await {
-                        Ok(id) => {
-                            accepted.fetch_add(1, Ordering::SeqCst);
-                            ids.lock().unwrap().push((tenant, id));
+                let enqueue_runtime = enqueue_runtime.clone();
+                producers.spawn(async move {
+                    let slots = Arc::new(tokio::sync::Semaphore::new(inflight));
+                    let mut requests = tokio::task::JoinSet::new();
+                    for n in 0..seconds * rate {
+                        let due = started
+                            + Duration::from_nanos(
+                                (n as u64 * tenants as u64 + t as u64) * 1_000_000_000
+                                    / (rate as u64 * tenants as u64),
+                            );
+                        tokio::time::sleep_until(tokio::time::Instant::from_std(due)).await;
+                        let lateness = Instant::now().saturating_duration_since(due);
+                        max_lateness_us.fetch_max(lateness.as_micros() as usize, Ordering::Relaxed);
+                        if lateness > Duration::from_millis(100) {
+                            late.fetch_add(1, Ordering::SeqCst);
+                            // Keep bounded evidence of whether stalls occur at startup or
+                            // under sustained load; the acceptance threshold is unchanged.
+                            let mut samples = late_samples.lock().unwrap();
+                            if samples.len() < 10 {
+                                samples.push(json!({
+                                    "tenant": t,
+                                    "sequence": n,
+                                    "due_offset_seconds": due.duration_since(started).as_secs_f64(),
+                                    "lateness_ms": lateness.as_secs_f64() * 1000.0,
+                                }));
+                            }
                         }
-                        Err(e) => errors.lock().unwrap().push(format!("enqueue: {e}")),
+                        let Ok(permit) = slots.clone().try_acquire_owned() else {
+                            overload.fetch_add(1, Ordering::SeqCst);
+                            continue;
+                        };
+                        let backend = backend.clone();
+                        let tenant = tenant.clone();
+                        let accepted = accepted.clone();
+                        let errors = errors.clone();
+                        let latency = latency.clone();
+                        let ids = ids.clone();
+                        let late_dispatches = late_dispatches.clone();
+                        let max_dispatch_us = max_dispatch_us.clone();
+                        let request = async move {
+                            let _permit = permit;
+                            let begin = Instant::now();
+                            let dispatch_delay = begin.saturating_duration_since(due);
+                            max_dispatch_us
+                                .fetch_max(dispatch_delay.as_micros() as usize, Ordering::Relaxed);
+                            if dispatch_delay > Duration::from_millis(100) {
+                                late_dispatches.fetch_add(1, Ordering::Relaxed);
+                            }
+                            let message = JobMessage::new(
+                                "capacity",
+                                make_payload(((t as u64) << 32) | n as u64, bytes),
+                                "bytes",
+                                "capacity",
+                            )
+                            .with_idempotency_key(n.to_string());
+                            match backend.enqueue(QueueCtx::new(&tenant), message).await {
+                                Ok(id) => {
+                                    accepted.fetch_add(1, Ordering::SeqCst);
+                                    ids.lock().unwrap().push((tenant, id));
+                                }
+                                Err(e) => errors.lock().unwrap().push(format!("enqueue: {e}")),
+                            }
+                            latency
+                                .lock()
+                                .unwrap()
+                                .push(begin.elapsed().as_secs_f64() * 1000.0);
+                        };
+                        if let Some(runtime) = &enqueue_runtime {
+                            requests.spawn_on(request, runtime);
+                        } else {
+                            requests.spawn(request);
+                        }
                     }
-                    latency
-                        .lock()
-                        .unwrap()
-                        .push(begin.elapsed().as_secs_f64() * 1000.0);
+                    while let Some(result) = requests.join_next().await {
+                        result.unwrap();
+                    }
                 });
             }
-            while let Some(result) = requests.join_next().await {
-                result.unwrap();
+            eprintln!("CAPACITY_PROGRESS phase=offering");
+            let submissions =
+                tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+                    while let Some(result) = producers.join_next().await {
+                        result?;
+                    }
+                    Ok::<(), tokio::task::JoinError>(())
+                })
+                .await;
+            match submissions {
+                Ok(result) => result?,
+                Err(_) => {
+                    // Cancellation cannot establish whether a dispatched write committed.
+                    // Keep that uncertainty visible, and fail rather than hanging before
+                    // the workload can emit its measurements.
+                    errors.lock().unwrap().push(
+                        "submission deadline expired; unfinished commit outcomes may be unknown"
+                            .into(),
+                    );
+                    producers.abort_all();
+                    while producers.join_next().await.is_some() {}
+                }
             }
-        });
-    }
-    eprintln!("CAPACITY_PROGRESS phase=offering");
-    let submissions = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
-        while let Some(result) = producers.join_next().await {
-            result?;
+            Ok::<(), anyhow::Error>(())
         }
-        Ok::<(), tokio::task::JoinError>(())
-    })
-    .await;
-    match submissions {
-        Ok(result) => result?,
-        Err(_) => {
-            // Cancellation cannot establish whether a dispatched write committed.
-            // Keep that uncertainty visible, and fail rather than hanging before
-            // the workload can emit its measurements.
-            errors.lock().unwrap().push(
-                "submission deadline expired; unfinished commit outcomes may be unknown".into(),
-            );
-            producers.abort_all();
-            while producers.join_next().await.is_some() {}
-        }
+    };
+    let mut producer_shutdown = None;
+    let mut producer_thread = None;
+    if producer_runtime != "shared" {
+        // Keep the runtime alive through terminal verification: provider tasks
+        // may be initialized lazily by enqueue and must not disappear at the
+        // end of the offering phase. Dropping the shutdown sender also releases
+        // the thread on an early error.
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        producer_shutdown = Some(shutdown_tx);
+        producer_thread = Some(tokio::task::spawn_blocking(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(async move {
+                    let _ = finished_tx.send(submit.await);
+                    let _ = shutdown_rx.await;
+                });
+            Ok::<(), anyhow::Error>(())
+        }));
+        finished_rx.await??;
+    } else {
+        submit.await?;
     }
     eprintln!(
         "CAPACITY_PROGRESS phase=offering_finished accepted={} completed={}",
@@ -308,6 +378,10 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
             }
         }
     }
+    drop(producer_shutdown);
+    if let Some(thread) = producer_thread {
+        thread.await??;
+    }
     let mut latencies = latency.lock().unwrap();
     latencies.sort_by(f64::total_cmp);
     let p95 = latencies
@@ -320,6 +394,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
         && errors.is_empty()
         && overload.load(Ordering::SeqCst) == 0
         && late.load(Ordering::SeqCst) == 0
+        && (producer_runtime != "paced" || late_dispatches.load(Ordering::SeqCst) == 0)
         && elapsed <= seconds as f64 + 5.0;
     let overload_recovery = if recovery_seconds > 0 {
         Some(json!({"extra_seconds_allowed":recovery_seconds,
@@ -334,7 +409,7 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     };
     println!(
         "{}",
-        json!({"nats_connections":std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_|"shared".into()),"payload_pattern":"unique-per-tenant-and-sequence","stage_timings":stage_timings,"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":rate,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed_in_capacity_phase,"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"max_offer_lateness_ms":max_lateness_us.load(Ordering::Relaxed) as f64 / 1000.0,"late_offer_samples":*late_samples.lock().unwrap(),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed,"overload_recovery":overload_recovery,"latency_includes_recovery":recovery_seconds>0})
+        json!({"late_dispatches":late_dispatches.load(Ordering::Relaxed),"max_dispatch_lateness_ms":max_dispatch_us.load(Ordering::Relaxed) as f64 / 1000.0,"producer_runtime":producer_runtime,"nats_connections":std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_|"shared".into()),"payload_pattern":"unique-per-tenant-and-sequence","stage_timings":stage_timings,"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":rate,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed_in_capacity_phase,"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"max_offer_lateness_ms":max_lateness_us.load(Ordering::Relaxed) as f64 / 1000.0,"late_offer_samples":*late_samples.lock().unwrap(),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed,"overload_recovery":overload_recovery,"latency_includes_recovery":recovery_seconds>0})
     );
     anyhow::ensure!(passed, "queue capacity gate failed");
     Ok(())

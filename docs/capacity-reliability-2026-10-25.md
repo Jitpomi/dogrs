@@ -1,6 +1,6 @@
 # Capacity reliability investigation — 2026-10-25
 
-Status: **18/18 passed at 900/s on the Mac VM with `compact-4`; 18/18 previously passed on the AMD EPYC 7763 x64 runner with the original layout**. This is an environment-specific workload qualification, not a guarantee for every runner or production deployment. Failures from the earlier ARM and original-layout Mac runs below remain valid.
+Status: **The stricter Mac headroom qualification has not yet passed.** The earlier original gate passed 18/18 at 900/s on the Mac VM with `compact-4`, and 18/18 on the AMD EPYC 7763 x64 runner with the original layout. This is an environment-specific workload qualification, not a guarantee for every runner or production deployment. Failures from the earlier ARM and original-layout Mac runs below remain valid.
 
 All measurements below offer 54,000 unique 64 KiB jobs across 100 tenants over 60 seconds, with the existing five-second drain and 100 ms late-offer threshold. PostgreSQL durable commits, Redis always-fsync, and NATS three file-backed always-fsync replicas remain enabled.
 
@@ -277,3 +277,131 @@ Machine-readable results and raw-log checksums are in
 [evidence/mac-headroom-followup-2026-10-25.json](evidence/mac-headroom-followup-2026-10-25.json).
 The local archive is `artifacts/dogrs-mac-capacity-2026-10-25/headroom-followup.tar.gz`
 in the parent task workspace, retaining failures and incomplete fixtures.
+
+
+### Further diagnosis: server OOM and scheduler isolation
+
+The subsequent 8 GiB experiment is rejected. Linux recorded global OOM kills of
+`nats-server` at 23:06:11, 23:10:01 and 23:18:15 UTC. The last timestamp matches
+fixture `c3182d7bea` losing its first node during terminal verification. Its
+snapshot timeout was a server failure, not evidence that terminal records were
+missing. The fixture had also missed the lateness and 62-second headroom gates.
+The VM was returned to 16 GiB for comparison. A later 8 GiB experiment applies an explicit per-server Go memory budget; neither size is yet a qualified headroom profile.
+
+Capacity fixtures now save each container's state before cleanup. The verifier
+rejects OOM kills, exited servers and missing state evidence when the fixture
+advertises this evidence format. It never serializes container credentials.
+
+Two explicit experimental controls are available, with defaults unchanged:
+`DOGRS_NATS_LEADER_PLACEMENT=balanced` distributes the four fixture stream leaders
+2/1/1 across the three servers before timing; `DOGRS_CAPACITY_PRODUCER_RUNTIME=isolated`
+drives the same open-loop workload on a separate current-thread Tokio runtime.
+That runtime stays alive through terminal verification to preserve lazily spawned
+provider tasks. Rate, payload, admission limit, absolute deadlines and late-offer
+checks remain unchanged. Verification requires the chosen runtime and leader
+profile to match the recorded evidence; these results cannot silently substitute
+for the shared-runtime, naturally elected baseline.
+
+The 16 GiB diagnostic fixture `c52b5cb9de` retained all three servers and verified
+54,000 jobs in 60.357 seconds with enqueue p95 367.12 ms, but had 52 late offers.
+It therefore failed, and its instrumentation also excludes it from qualification.
+No new headroom qualification is claimed from these diagnostics.
+
+
+The next 8 GiB profile sets `DOGRS_NATS_GOMEMLIMIT_MIB=1536` for each
+NATS process. This is a Go soft memory budget, not a container hard limit.
+Three initial NATS measurements passed without server death, including two in
+`headroom-qualification-budget8`. That sequence failed at PostgreSQL fixture
+`540875778d`: 51,285 admitted/completed, 2,715 overload rejections, 1,730 late
+offers, 65.012 seconds, and enqueue p95 4,715.69 ms. Its already-started next
+PostgreSQL fixture `4e75f84375` also failed (287 late offers, 62.490 seconds).
+Those failures remain part of the evidence.
+
+A diagnostic PostgreSQL run with 16 concurrent inserts retained all 54,000 jobs
+and enqueue p95 80.04 ms, but recorded 44 late offers and is a failure. Sampling
+showed most observed active enqueue waits on WAL writes or sync. The following
+uninstrumented trial `3f5e44c4e1` passed in 60.047 seconds with enqueue p95
+48.57 ms and maximum offer lateness 78.05 ms. This motivates a separate fixed
+18-case sequence with the explicit 16-insert limit; it does not establish
+reliability by itself. RustRover and the separate macOS build are left running
+at the user's request. Docker Desktop is temporarily stopped.
+
+Only regenerable package/build caches and unused registry-pulled Docker images
+were removed to recover host disk space. Existing containers, volumes, projects
+and personal files were preserved. The image-removal manifest is retained with
+the local evidence. Disk reclamation is not claimed as a demonstrated cause of
+any performance improvement.
+
+
+The 16-insert qualification attempt stopped on its third fixture, NATS
+`5d91478f59`: all 54,000 jobs verified in 61.090 seconds with enqueue p95
+176.79 ms, healthy servers, but 35 late offers (maximum 128.487 ms). It failed.
+
+A further opt-in `DOGRS_CAPACITY_PRODUCER_RUNTIME=paced` profile isolates only
+the offer timers and dispatches enqueue tasks onto the main Tokio runtime.
+The earlier `isolated` experiment placed enqueue work on the timer runtime too.
+The new binary also records actual enqueue-start lateness. The paced profile rejects any
+`late_dispatches` over the same 100 ms threshold, preserving the original shared-profile gate. This prevents the separated
+timer from hiding delayed execution. No workload or deadline is relaxed.
+NATS trial `0cb4ea0279` passed with 54,000 verified jobs, elapsed 60.061 seconds,
+enqueue p95 63.54 ms, no late offers or dispatches, and maximum dispatch lateness
+76.68 ms. The distinct 18-case `headroom-qualification-paced-pg16` sequence is
+being evaluated; the trial alone is not qualification.
+
+
+The paced sequence failed on Redis `b54dcee210` despite no late offers: 31
+actual enqueue dispatches exceeded 100 ms. The new check prevents that result
+from being treated as a pass. Reducing Tokio worker threads to two also failed
+a standalone trial. A separate three-case heartbeat diagnostic failed all
+three cases; an independent 10 ms heartbeat recorded a 125.17 ms scheduling
+delay during the first case. This demonstrates delays outside the queue tasks,
+not a proven exclusive cause or a reason to waive the timing requirement.
+
+One of those Redis fixtures completed only 37,889 jobs by its original deadline.
+Its server log recorded six completed AOF rewrites and the start of a normal
+RDB snapshot. A separate `DOGRS_REDIS_REWRITE_MIN_MIB=1024` experiment raised the
+minimum rewrite size from 64 MiB to 1 GiB, retaining the 100% growth trigger,
+normal snapshots, always-fsync and fsync during rewrites. Trial `9333c88c5b`
+completed two rewrites, started a snapshot, and passed with 54,000 verified jobs
+in 60.075 seconds, enqueue p95 34.11 ms and maximum dispatch lateness 41.91 ms.
+The [Redis persistence guidance](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)
+explains that rewrite frequency can be tuned independently of the fsync policy.
+The verifier checks the actual enabled rewrite settings for this profile.
+
+An opt-in capacity-only `DOGRS_CAPACITY_FAIR_SCHEDULER=1` asks Tokio to check its
+global task queue each scheduling tick. This evaluates dispatch fairness for
+cross-runtime enqueue tasks; production runtime defaults remain unchanged.
+NATS trial `c9f31fd4e4` used two Tokio threads, two Go execution threads per
+server, the 1536 MiB Go budgets and balanced leaders. It passed with 54,000
+verified jobs in 60.048 seconds, enqueue p95 264.80 ms and maximum dispatch
+lateness 29.375 ms. The separate `headroom-qualification-fair-bounded` sequence
+uses these fixed settings plus PostgreSQL enqueue concurrency 16 and the Redis
+1 GiB rewrite minimum. Its verdict is failed/incomplete: PostgreSQL and Redis passed once and NATS passed once, but the second NATS case failed. No identical failed case was retried to replace that evidence.
+
+
+### Final verdict for this experiment set
+
+The last NATS fixture `21e2a10e41` accepted, completed and terminal-verified all
+54,000 jobs, with no overload or operation errors. It nevertheless failed:
+75 enqueue dispatches exceeded 100 ms (maximum 160.616 ms), and completion took
+62.462 seconds, above the 62-second headroom limit. Enqueue p95 was 698.90 ms.
+The sequence stopped after four of eighteen cases. The independent verifier
+rejected the timing failure and the incomplete backend counts.
+
+**No new Mac headroom qualification is claimed.** These are opt-in experiments
+and evidence improvements, not adopted production defaults. The remaining
+intermittent dispatch and drain delays are unresolved. The independent heartbeat
+and Redis maintenance observations do not establish a single exclusive cause.
+The user's IDE and build processes were not paused or stopped.
+
+All 67 retained fixtures, including incomplete setup attempts and failures, are
+indexed in [the experiment evidence](evidence/mac-headroom-experiments-2026-10-25.json).
+Raw logs are retained in the parent task workspace at
+`artifacts/dogrs-mac-capacity-2026-10-25/headroom-final-retained.tar`, with the
+archive checksum in the index. The release binary built successfully and all
+30 capacity workflow/verifier tests passed. The library test target contains
+zero tests, so it is not claimed as additional runtime test coverage.
+
+The capacity VM was stopped and returned to its original 16 GiB configuration.
+Docker Desktop was restarted after the experiments; the temporary sleep
+inhibitors were removed. No IDE or user build process was stopped.

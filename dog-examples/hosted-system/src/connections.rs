@@ -636,6 +636,21 @@ pub async fn dispatch_local(role: &str) -> Result<()> {
                         .with_lease_duration(Duration::from_secs(300)),
                     ));
                 }
+                if let Ok(leaders) = std::env::var("DOGRS_NATS_FIXTURE_LEADERS") {
+                    let leaders: Vec<_> = leaders.split(',').collect();
+                    anyhow::ensure!(
+                        leaders.len() == 3 && leaders.iter().all(|s| !s.is_empty()),
+                        "fixture requires three explicit server names"
+                    );
+                    for shard in 0..shards {
+                        place_fixture_leader(
+                            &js,
+                            &format!("KV_{name}_{shard}"),
+                            leaders[shard % leaders.len()],
+                        )
+                        .await?;
+                    }
+                }
                 return crate::capacity::run(dog_queue::backend::sharded::ShardedBackend::new(
                     backends,
                 )?)
@@ -675,4 +690,46 @@ pub async fn dispatch_local(role: &str) -> Result<()> {
         }
         _ => bail!("unsupported local capacity backend"),
     }
+}
+
+// Capacity-fixture setup only. Never moves a live application's leaders.
+#[cfg(feature = "nats")]
+async fn place_fixture_leader(
+    js: &async_nats::jetstream::Context,
+    name: &str,
+    preferred: &str,
+) -> Result<()> {
+    let mut stream = js.get_stream(name).await?;
+    let current = stream
+        .cached_info()
+        .cluster
+        .as_ref()
+        .and_then(|c| c.leader.as_deref());
+    if current == Some(preferred) {
+        return Ok(());
+    }
+    let response: serde_json::Value = js
+        .request(
+            format!("STREAM.LEADER.STEPDOWN.{name}"),
+            &json!({"placement":{"preferred":preferred}}),
+        )
+        .await?;
+    anyhow::ensure!(
+        response.get("error").is_none() && response["success"] == true,
+        "leader placement rejected: {response}"
+    );
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            // Information requests can time out during the election. Retry only
+            // this read; never repeat the leadership mutation on an unknown outcome.
+            if let Ok(info) = stream.info().await {
+                if info.cluster.as_ref().and_then(|c| c.leader.as_deref()) == Some(preferred) {
+                    return Ok::<_, anyhow::Error>(());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await??;
+    Ok(())
 }
