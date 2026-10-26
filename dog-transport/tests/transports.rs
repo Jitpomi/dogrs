@@ -1,3 +1,4 @@
+#![cfg(any(feature = "cli", feature = "http", feature = "grpc"))]
 use dog_auth::AuthParams;
 use dog_core::{DogApp, DogAppBuilder, DogService, TenantContext};
 #[cfg(any(feature = "grpc", feature = "cli"))]

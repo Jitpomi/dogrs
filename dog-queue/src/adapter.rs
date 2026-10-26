@@ -958,7 +958,11 @@ impl<C: Send + Sync + 'static> Worker<C> {
                     "Lease supervisor stopped before execution finished".into(),
                 ));
                 if matches!(error, QueueError::JobCanceled | QueueError::JobAlreadyTerminal) {
-                    if matches!(error, QueueError::JobCanceled) { job_span.record_canceled(); }
+                    if matches!(error, QueueError::JobCanceled) {
+                        job_span.record_canceled();
+                    } else {
+                        job_span.record_terminal();
+                    }
                     // Match the acknowledgement path: cancellation is a handled
                     // lifecycle event, not a backend outage or another failure.
                     return Ok(true);

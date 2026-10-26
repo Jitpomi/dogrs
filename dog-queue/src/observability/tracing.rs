@@ -96,6 +96,9 @@ impl JobSpan {
     pub fn record_canceled(&mut self) {
         self.finish("canceled", false);
     }
+    pub fn record_terminal(&mut self) {
+        self.finish("already_terminal", false);
+    }
     /// Caller is responsible for ensuring custom attributes contain no secrets.
     pub fn set_attribute(&mut self, key: &str, value: &str) {
         #[cfg(feature = "tracing-opentelemetry")]
@@ -270,10 +273,9 @@ fn parse_parent(value: &str) -> Option<Context> {
         || parts[1].len() != 32
         || parts[2].len() != 16
         || parts[3].len() != 2
-        || !parts[1..].iter().all(|p| {
-            p.bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        })
+        || !parts[1..]
+            .iter()
+            .all(|p| p.bytes().all(|b| b.is_ascii_hexdigit()))
     {
         return None;
     }
@@ -299,10 +301,12 @@ mod propagation_tests {
             "é",
             "00-00000000000000000000000000000000-2222222222222222-01",
             "00-11111111111111111111111111111111-0000000000000000-01",
+            "00-1111111111111111111111111111111g-2222222222222222-01",
         ] {
             assert!(parse_parent(bad).is_none());
         }
         assert!(parse_parent("00-11111111111111111111111111111111-2222222222222222-01").is_some());
+        assert!(parse_parent("00-4BF92F3577B34DA6A3CE929D0E0E4736-00F067AA0BA902B7-01").is_some());
         let message = crate::JobMessage::new("j", vec![], "json", "q");
         let json = serde_json::to_value(message).unwrap();
         assert!(json.get("traceparent").is_none());

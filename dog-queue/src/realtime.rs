@@ -76,88 +76,150 @@ pub fn watch_jobs(
         jobs,
         options,
         HashMap::<JobId, JobUpdate>::new(),
-        0usize,
+        std::collections::VecDeque::<QueueResult<JobUpdate>>::new(),
+        None::<tokio::time::Instant>,
         deadline,
         false,
     );
     Ok(Box::pin(stream::unfold(
         state,
-        |(backend, ctx, jobs, options, mut previous, mut index, deadline, mut done)| async move {
+        |(
+            backend,
+            ctx,
+            mut active_jobs,
+            options,
+            mut previous,
+            mut pending,
+            mut last_polled,
+            deadline,
+            mut done,
+        )| async move {
             if done {
                 return None;
             }
             loop {
-                if tokio::time::Instant::now() >= deadline {
+                if let Some(item) = pending.pop_front() {
+                    if item.is_err() {
+                        done = true;
+                    }
+                    return Some((
+                        item,
+                        (
+                            backend,
+                            ctx,
+                            active_jobs,
+                            options,
+                            previous,
+                            pending,
+                            last_polled,
+                            deadline,
+                            done,
+                        ),
+                    ));
+                }
+
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
                     return None;
                 }
-                if index == jobs.len() {
-                    tokio::time::sleep_until(
-                        (tokio::time::Instant::now() + options.interval).min(deadline),
-                    )
-                    .await;
-                    index = 0;
-                    continue;
+
+                if active_jobs.is_empty() {
+                    tokio::time::sleep_until(deadline).await;
+                    return None;
                 }
-                let id = jobs[index].clone();
-                index += 1;
+
+                if let Some(prev) = last_polled {
+                    let next_poll = prev + options.interval;
+                    if next_poll > now {
+                        tokio::time::sleep_until(next_poll.min(deadline)).await;
+                        if tokio::time::Instant::now() >= deadline {
+                            return None;
+                        }
+                    }
+                }
+                last_polled = Some(tokio::time::Instant::now());
+
                 let read_deadline =
                     (tokio::time::Instant::now() + options.read_timeout).min(deadline);
                 let result = tokio::time::timeout_at(
                     read_deadline,
-                    backend.get_snapshot(ctx.clone(), id.clone()),
+                    backend.get_snapshots(ctx.clone(), &active_jobs),
                 )
                 .await;
-                let item = match result {
-                    Ok(Ok(snapshot)) => {
-                        // Fail closed even if a custom backend violates its scope contract.
-                        if snapshot.tenant_id != ctx.tenant_id || snapshot.job_id != id {
+
+                match result {
+                    Ok(Ok(snapshots)) => {
+                        if snapshots.len() != active_jobs.len() {
                             done = true;
-                            Err(QueueError::Internal("snapshot scope mismatch".into()))
-                        } else if options.include_results
-                            && snapshot.result.as_ref().is_some_and(|r| r.len() > 4096)
-                        {
-                            done = true;
-                            Err(QueueError::InvalidConfig(
-                                "streamed result exceeds 4 KiB; use an authorized result reference"
-                                    .into(),
-                            ))
-                        } else {
-                            let update = JobUpdate {
-                                job_id: id.clone(),
-                                status: snapshot.status.name().to_owned(),
-                                attempt: snapshot.attempt,
-                                progress: snapshot.progress,
-                                result: if options.include_results
-                                    && matches!(snapshot.status, crate::JobStatus::Completed { .. })
-                                {
-                                    snapshot.result
-                                } else {
-                                    None
-                                },
-                                updated_at: snapshot.updated_at,
-                            };
-                            if previous.get(&id) == Some(&update) {
-                                continue;
+                            pending.push_back(Err(QueueError::Internal(
+                                "snapshot count mismatch".into(),
+                            )));
+                            continue;
+                        }
+                        let mut new_terminal_ids = Vec::new();
+                        for (idx, snapshot) in snapshots.into_iter().enumerate() {
+                            let expected_id = &active_jobs[idx];
+                            // Fail closed even if a custom backend violates its scope contract.
+                            if snapshot.tenant_id != ctx.tenant_id
+                                || &snapshot.job_id != expected_id
+                            {
+                                done = true;
+                                pending.push_back(Err(QueueError::Internal(
+                                    "snapshot scope mismatch".into(),
+                                )));
+                                break;
+                            } else if options.include_results
+                                && snapshot.result.as_ref().is_some_and(|r| r.len() > 4096)
+                            {
+                                done = true;
+                                pending.push_back(Err(QueueError::InvalidConfig(
+                                    "streamed result exceeds 4 KiB; use an authorized result reference"
+                                        .into(),
+                                )));
+                                break;
+                            } else {
+                                let is_terminal = snapshot.status.is_terminal();
+                                let id = snapshot.job_id.clone();
+                                let update = JobUpdate {
+                                    job_id: id.clone(),
+                                    status: snapshot.status.name().to_owned(),
+                                    attempt: snapshot.attempt,
+                                    progress: snapshot.progress,
+                                    result: if options.include_results
+                                        && matches!(
+                                            snapshot.status,
+                                            crate::JobStatus::Completed { .. }
+                                        ) {
+                                        snapshot.result
+                                    } else {
+                                        None
+                                    },
+                                    updated_at: snapshot.updated_at,
+                                };
+                                if previous.get(&id) != Some(&update) {
+                                    previous.insert(id.clone(), update.clone());
+                                    pending.push_back(Ok(update));
+                                }
+                                if is_terminal {
+                                    new_terminal_ids.push(id);
+                                }
                             }
-                            previous.insert(id, update.clone());
-                            Ok(update)
+                        }
+                        if !new_terminal_ids.is_empty() {
+                            active_jobs.retain(|id| !new_terminal_ids.contains(id));
                         }
                     }
                     Ok(Err(error)) => {
                         done = true;
-                        Err(error)
+                        pending.push_back(Err(error));
                     }
                     Err(_) => {
                         done = true;
-                        Err(QueueError::Internal(
+                        pending.push_back(Err(QueueError::Internal(
                             "status read timed out; reconnect and resynchronize".into(),
-                        ))
+                        )));
                     }
-                };
-                return Some((
-                    item,
-                    (backend, ctx, jobs, options, previous, index, deadline, done),
-                ));
+                }
             }
         },
     )))
