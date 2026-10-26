@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — coordinated release
+
+- `dog-queue`: persist W3C `traceparent` metadata on `JobMessage` for end-to-end distributed tracing across execution attempts; restore `JobSpan` trait and `tracing-opentelemetry` feature with dynamic compatibility.
+- `dog-transport`: add native real-time streaming (WebSocket and Server-Sent Events) with reconnectable subscriptions; add snapshot-based `DogEventHub` bridge supporting lease-fenced progress reporting and authorized completed-result delivery.
+- `dog-blob`: add file-journal Arc lock guards to guarantee OS-level release upon lease completion; harden upload bounds and staging isolation.
+- Security & Supply Chain: remove vulnerable transitive `zstd` compression dependencies; resolve all `cargo-audit` CVE advisories across the workspace.
+- Coordinated 0.4.0 release across all twelve DogRS workspace member crates.
+
 ## 0.3.0 — coordinated release
 
 Published 0.2.0 archives identify commit `46f17ed`. The older sections below are

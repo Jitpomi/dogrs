@@ -2498,7 +2498,7 @@ checksum = "780955b8b195a21ab8e4ac6b60dd1dbdcec1dc6c51c0617964b08c81785e12c9"
 
 [[package]]
 name = "dog-auth"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2516,7 +2516,7 @@ dependencies = [
 
 [[package]]
 name = "dog-auth-local"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2529,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "dog-auth-oauth"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "dog-axum"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2568,7 +2568,7 @@ dependencies = [
 
 [[package]]
 name = "dog-blob"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -2594,7 +2594,7 @@ dependencies = [
 
 [[package]]
 name = "dog-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2605,7 +2605,7 @@ dependencies = [
 
 [[package]]
 name = "dog-queue"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-nats",
  "async-trait",
@@ -2655,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "dog-schema"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "dog-schema-macros"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2676,7 +2676,7 @@ dependencies = [
 
 [[package]]
 name = "dog-schema-validator"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "dog-core",
@@ -2688,7 +2688,7 @@ dependencies = [
 
 [[package]]
 name = "dog-transport"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2724,7 +2724,7 @@ dependencies = [
 
 [[package]]
 name = "dog-typedb"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
