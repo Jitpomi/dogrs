@@ -64,9 +64,11 @@ impl CalendarQueue {
     /// Creates a new in-memory queue adapter and registers the reminder job.
     pub async fn new() -> anyhow::Result<Self> {
         let backend = MemoryBackend::new();
-        let mut config = QueueConfig::default();
         // Keep workers active indefinitely for long-running service execution
-        config.worker_idle_timeout = std::time::Duration::from_secs(86400 * 365);
+        let config = QueueConfig {
+            worker_idle_timeout: std::time::Duration::from_secs(86400 * 365),
+            ..Default::default()
+        };
         let adapter = Arc::new(QueueAdapter::with_config(backend, config));
         adapter.register_job::<EventReminderJob>().await?;
 
