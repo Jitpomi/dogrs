@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dog_queue::backend::memory::MemoryBackend;
-use dog_queue::{Job, JobError, JobPriority, QueueAdapter, QueueCtx, WorkerHandle};
+use dog_queue::{Job, JobError, JobPriority, QueueAdapter, QueueConfig, QueueCtx, WorkerHandle};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex};
 
@@ -64,7 +64,10 @@ impl CalendarQueue {
     /// Creates a new in-memory queue adapter and registers the reminder job.
     pub async fn new() -> anyhow::Result<Self> {
         let backend = MemoryBackend::new();
-        let adapter = Arc::new(QueueAdapter::new(backend));
+        let mut config = QueueConfig::default();
+        // Keep workers active indefinitely for long-running service execution
+        config.worker_idle_timeout = std::time::Duration::from_secs(86400 * 365);
+        let adapter = Arc::new(QueueAdapter::with_config(backend, config));
         adapter.register_job::<EventReminderJob>().await?;
 
         Ok(Self {

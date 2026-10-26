@@ -85,6 +85,25 @@
                     <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
                 </button>
 
+                <!-- Notifications Bell Button -->
+                <div class="notifications-wrapper">
+                    <button id="btn-notifications" class="btn-icon subtle" title="Reminders & Notifications" aria-label="Reminders and notifications">
+                        <!-- icones: lucide:bell -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="bell-icon" id="header-bell-icon"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+                        <span id="notifications-badge" class="notifications-badge hidden">0</span>
+                    </button>
+                    <!-- Notifications Dropdown Popover -->
+                    <div id="notifications-dropdown" class="notifications-dropdown hidden">
+                        <div class="notif-dropdown-header">
+                            <span class="notif-header-title">Reminders</span>
+                            <button id="btn-clear-notifications" class="notif-clear-btn" type="button">Clear</button>
+                        </div>
+                        <div id="notifications-list" class="notifications-list">
+                            <div class="notif-empty">No active reminders</div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Create Event CTA -->
                 <button id="btn-create-event" class="btn-create">
                     <!-- icones: lucide:plus -->
@@ -445,6 +464,6 @@
     <!-- TOAST ALERTS (Reminders & Live updates) -->
     <div id="toast-shelf" class="toast-shelf" aria-live="polite"></div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=20261026_bell_1"></script>
 </body>
 </html>

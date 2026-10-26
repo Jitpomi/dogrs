@@ -24,6 +24,8 @@ class CalendarApp {
         this.selectedEvent = null;
         this.ws = null;
         this.enabledColors = new Set(['indigo', 'emerald', 'amber', 'rose']);
+        this.notifications = [];
+        this.unreadNotificationsCount = 0;
 
         this.initElements();
         this.initEventListeners();
@@ -43,6 +45,12 @@ class CalendarApp {
         this.elSyncLabel = document.getElementById('sync-label');
         this.elSelectWorkspace = document.getElementById('select-workspace');
         this.elBtnToggleDev = document.getElementById('btn-toggle-dev');
+        this.elBtnNotifications = document.getElementById('btn-notifications');
+        this.elNotificationsBadge = document.getElementById('notifications-badge');
+        this.elNotificationsDropdown = document.getElementById('notifications-dropdown');
+        this.elNotificationsList = document.getElementById('notifications-list');
+        this.elBtnClearNotifications = document.getElementById('btn-clear-notifications');
+        this.elHeaderBellIcon = document.getElementById('header-bell-icon');
         this.elBtnCreateEvent = document.getElementById('btn-create-event');
 
         // Sidebar & Mobile
@@ -159,14 +167,48 @@ class CalendarApp {
         });
 
         // Dev Inspector Toggle
-        this.elBtnToggleDev.addEventListener('click', () => {
-            this.elDevInspector.classList.toggle('hidden');
+        this.elBtnToggleDev?.addEventListener('click', () => {
+            this.elDevInspector?.classList.toggle('hidden');
         });
-        this.elBtnCloseInspector.addEventListener('click', () => {
-            this.elDevInspector.classList.add('hidden');
+        this.elBtnCloseInspector?.addEventListener('click', () => {
+            this.elDevInspector?.classList.add('hidden');
         });
-        this.elBtnClearInspector.addEventListener('click', () => {
-            this.elInspectorFeed.innerHTML = '';
+        this.elBtnClearInspector?.addEventListener('click', () => {
+            if (this.elInspectorFeed) this.elInspectorFeed.innerHTML = '';
+        });
+
+        // Notifications Dropdown Toggle
+        if (this.elBtnNotifications) {
+            this.elBtnNotifications.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isOpen = !this.elNotificationsDropdown.classList.contains('hidden');
+                if (isOpen) {
+                    this.elNotificationsDropdown.classList.add('hidden');
+                } else {
+                    this.elNotificationsDropdown.classList.remove('hidden');
+                    this.markNotificationsAsRead();
+                    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+                        Notification.requestPermission();
+                    }
+                }
+            });
+        }
+
+        if (this.elBtnClearNotifications) {
+            this.elBtnClearNotifications.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.notifications = [];
+                this.renderNotificationsList();
+            });
+        }
+
+        // Close notifications dropdown on outside click
+        document.addEventListener('click', (e) => {
+            if (this.elNotificationsDropdown && !this.elNotificationsDropdown.classList.contains('hidden')) {
+                if (!this.elNotificationsDropdown.contains(e.target) && !this.elBtnNotifications.contains(e.target)) {
+                    this.elNotificationsDropdown.classList.add('hidden');
+                }
+            }
         });
 
         // Color Layer Checkboxes
@@ -569,7 +611,7 @@ class CalendarApp {
             this.logDev('WS-PACKET', `[${event}] ${JSON.stringify(payload)}`);
 
             if (event === 'reminder') {
-                this.showToast('Meeting Reminder', payload.message || payload.title, 'reminder');
+                this.handleReminderNotification(payload);
                 return;
             }
 
@@ -1579,6 +1621,121 @@ class CalendarApp {
         this.elSidebarRail.classList.remove('open');
         if (this.elSidebarBackdrop) {
             this.elSidebarBackdrop.classList.remove('active');
+        }
+    }
+
+    handleReminderNotification(payload) {
+        // 1. Play synthesized bell chime
+        this.playBellChime();
+
+        // 2. Animate the header bell icon
+        if (this.elHeaderBellIcon) {
+            this.elHeaderBellIcon.classList.remove('ringing');
+            void this.elHeaderBellIcon.offsetWidth; // trigger reflow
+            this.elHeaderBellIcon.classList.add('ringing');
+            setTimeout(() => this.elHeaderBellIcon.classList.remove('ringing'), 900);
+        }
+
+        // 3. Store notification record
+        const notifItem = {
+            id: payload.event_id || `notif-${Date.now()}`,
+            title: payload.title || 'Event Reminder',
+            message: payload.message || `Upcoming reminder for ${payload.title}`,
+            start_time: payload.start_time,
+            timestamp: new Date(),
+            unread: true,
+        };
+        this.notifications.unshift(notifItem);
+        this.unreadNotificationsCount++;
+        this.updateNotificationsBadge();
+        this.renderNotificationsList();
+
+        // 4. Prominent toast alert with ringing bell icon
+        this.showToast('Upcoming Event Reminder', payload.message || payload.title, 'reminder');
+
+        // 5. Native OS/Browser notification if permitted
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            try {
+                new Notification(payload.title || 'Calendar Reminder', {
+                    body: payload.message || 'Your event starts soon.',
+                    icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="%23f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"%3E%3Cpath d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/%3E%3Cpath d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/%3E%3C/svg%3E'
+                });
+            } catch (err) {
+                console.warn('Native notification failed', err);
+            }
+        }
+    }
+
+    markNotificationsAsRead() {
+        this.unreadNotificationsCount = 0;
+        this.updateNotificationsBadge();
+        this.notifications.forEach(n => n.unread = false);
+        this.renderNotificationsList();
+    }
+
+    updateNotificationsBadge() {
+        if (!this.elNotificationsBadge) return;
+        if (this.unreadNotificationsCount > 0) {
+            this.elNotificationsBadge.textContent = this.unreadNotificationsCount > 99 ? '99+' : this.unreadNotificationsCount;
+            this.elNotificationsBadge.classList.remove('hidden');
+        } else {
+            this.elNotificationsBadge.classList.add('hidden');
+        }
+    }
+
+    renderNotificationsList() {
+        if (!this.elNotificationsList) return;
+        if (this.notifications.length === 0) {
+            this.elNotificationsList.innerHTML = `<div class="notif-empty">No active reminders</div>`;
+            return;
+        }
+
+        this.elNotificationsList.innerHTML = this.notifications.map(n => {
+            const timeAgo = n.timestamp ? n.timestamp.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+            return `
+                <div class="notif-item ${n.unread ? 'unread' : ''}">
+                    <div class="notif-icon-wrap">${Icons.bell(14)}</div>
+                    <div class="notif-content">
+                        <div class="notif-title">${this.escapeHtml(n.title)}</div>
+                        <div class="notif-subtitle">${this.escapeHtml(n.message)}</div>
+                        <div class="notif-time-ago">${timeAgo}</div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    playBellChime() {
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+            const ctx = new AudioCtx();
+            const now = ctx.currentTime;
+
+            // Two-tone bell harmonic (E5: 659.25Hz -> G#5: 830.6Hz)
+            const osc1 = ctx.createOscillator();
+            const gain1 = ctx.createGain();
+            osc1.type = 'sine';
+            osc1.frequency.setValueAtTime(659.25, now);
+            gain1.gain.setValueAtTime(0.12, now);
+            gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+            osc1.connect(gain1);
+            gain1.connect(ctx.destination);
+            osc1.start(now);
+            osc1.stop(now + 0.55);
+
+            const osc2 = ctx.createOscillator();
+            const gain2 = ctx.createGain();
+            osc2.type = 'sine';
+            osc2.frequency.setValueAtTime(830.6, now + 0.1);
+            gain2.gain.setValueAtTime(0.16, now + 0.1);
+            gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.75);
+            osc2.connect(gain2);
+            gain2.connect(ctx.destination);
+            osc2.start(now + 0.1);
+            osc2.stop(now + 0.75);
+        } catch (e) {
+            // Audio context policy fallback
         }
     }
 
