@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DogRS Calendar — Collaborative Workspace</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=20261026_custom_rec">
+</head>
+<body>
+    <div class="calendar-app">
+        <!-- TOP NAVIGATION BAR -->
+        <header class="app-topbar">
+            <!-- Left: Brand & Date Navigator -->
+            <div class="topbar-section left">
+                <button id="btn-toggle-sidebar" class="btn-icon sidebar-toggle-btn" aria-label="Toggle Sidebar Menu" title="Toggle Sidebar">
+                    <!-- icones: lucide:menu -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+                </button>
+                <div class="brand-cluster">
+                    <div class="brand-logo" title="DogRS Collaborative Calendar">
+                        <!-- icones: lucide:calendar-days -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>
+                    </div>
+                    <span class="brand-title">Calendar</span>
+                </div>
+
+                <div class="nav-controls">
+                    <button id="btn-today" class="btn-today">Today</button>
+                    <div class="btn-group-nav">
+                        <button id="btn-prev" class="btn-icon" aria-label="Previous">
+                            <!-- icones: lucide:chevron-left -->
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                        </button>
+                        <button id="btn-next" class="btn-icon" aria-label="Next">
+                            <!-- icones: lucide:chevron-right -->
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                        </button>
+                    </div>
+                    <h1 id="current-month-heading" class="current-month-heading">October 2026</h1>
+                </div>
+            </div>
+
+            <!-- Center: Universal Search -->
+            <div class="topbar-section center">
+                <div class="search-bar">
+                    <!-- icones: lucide:search -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                    <input type="text" id="input-search" placeholder="Search events, people, meeting links..." autocomplete="off" />
+                    <kbd class="kbd-badge">⌘K</kbd>
+                </div>
+            </div>
+
+            <!-- Right: View switchers, Sync status, Workspace & Create -->
+            <div class="topbar-section right">
+                <!-- View Switcher -->
+                <div class="view-selector">
+                    <button class="view-tab" data-view="day">Day</button>
+                    <button class="view-tab active" data-view="week">Week</button>
+                    <button class="view-tab" data-view="month">Month</button>
+                    <button class="view-tab" data-view="agenda">Agenda</button>
+                </div>
+
+                <!-- Sync status badge -->
+                <div class="sync-indicator" id="sync-indicator" title="Connected to real-time sync engine">
+                    <span class="sync-dot"></span>
+                    <span id="sync-label" class="sync-label">Synced</span>
+                </div>
+
+                <!-- Workspace / Tenant Dropdown -->
+                <div class="workspace-chip">
+                    <div class="avatar-circle">AR</div>
+                    <select id="select-workspace" class="workspace-select" title="Switch workspace">
+                        <option value="default">Personal & Work</option>
+                        <option value="engineering">Engineering Team</option>
+                        <option value="design">Design Studio</option>
+                    </select>
+                </div>
+
+                <!-- Quick Dev Telemetry Toggle -->
+                <button id="btn-toggle-dev" class="btn-icon subtle" title="Developer Telemetry Console">
+                    <!-- icones: lucide:terminal -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+                </button>
+
+                <!-- Notifications Bell Button -->
+                <div class="notifications-wrapper">
+                    <button id="btn-notifications" class="btn-icon subtle" title="Reminders & Notifications" aria-label="Reminders and notifications">
+                        <!-- icones: lucide:bell -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="bell-icon" id="header-bell-icon"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+                        <span id="notifications-badge" class="notifications-badge hidden">0</span>
+                    </button>
+                    <!-- Notifications Dropdown Popover -->
+                    <div id="notifications-dropdown" class="notifications-dropdown hidden">
+                        <div class="notif-dropdown-header">
+                            <span class="notif-header-title">Reminders</span>
+                            <button id="btn-clear-notifications" class="notif-clear-btn" type="button">Clear</button>
+                        </div>
+                        <div id="notifications-list" class="notifications-list">
+                            <div class="notif-empty">No active reminders</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Create Event CTA -->
+                <button id="btn-create-event" class="btn-create">
+                    <!-- icones: lucide:plus -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                    <span>Create</span>
+                    <kbd class="kbd-btn">C</kbd>
+                </button>
+            </div>
+        </header>
+
+        <!-- APP BODY (SIDEBAR + MAIN CANVAS) -->
+        <div class="app-body">
+            <!-- SIDEBAR -->
+            <aside class="sidebar-rail" id="sidebar-rail">
+                <!-- Mobile Drawer Header -->
+                <div class="sidebar-mobile-header">
+                    <div class="sidebar-mobile-title">
+                        <!-- icones: lucide:calendar-days -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>
+                        <span>Workspace & Calendars</span>
+                    </div>
+                    <button id="btn-close-sidebar" class="btn-icon subtle" aria-label="Close sidebar">
+                        <!-- icones: lucide:x -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                    </button>
+                </div>
+
+                <!-- Mini Month Picker -->
+                <div class="mini-month-picker">
+                    <div class="mini-month-header">
+                        <span id="mini-month-label" class="mini-month-title">October 2026</span>
+                    </div>
+                    <div class="mini-month-grid" id="mini-month-grid">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- UPCOMING MEETING CALLOUT -->
+                <div class="upcoming-callout" id="upcoming-callout">
+                    <div class="callout-header">
+                        <span class="pulse-ring"></span>
+                        <span class="callout-badge">UPCOMING NEXT</span>
+                    </div>
+                    <h3 id="next-meeting-title" class="callout-title">Daily Engineering Standup</h3>
+                    <p id="next-meeting-time" class="callout-time">Today, 09:30 AM (in 15m)</p>
+                    <a id="next-meeting-link" href="#" target="_blank" class="btn-join-call">
+                        <!-- icones: lucide:video -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.934a.5.5 0 0 0-.777-.416L16 11"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>
+                        <span>Join Video Call</span>
+                    </a>
+                </div>
+
+                <!-- MY CALENDARS / LAYERS -->
+                <div class="sidebar-section">
+                    <h4 class="sidebar-heading">My Calendars</h4>
+                    <div class="calendar-layers">
+                        <label class="layer-item">
+                            <input type="checkbox" checked data-color="indigo" class="layer-check" />
+                            <span class="swatch swatch-indigo"></span>
+                            <span class="layer-label">Engineering & Sprints</span>
+                        </label>
+                        <label class="layer-item">
+                            <input type="checkbox" checked data-color="emerald" class="layer-check" />
+                            <span class="swatch swatch-emerald"></span>
+                            <span class="layer-label">Product Reviews & 1:1s</span>
+                        </label>
+                        <label class="layer-item">
+                            <input type="checkbox" checked data-color="amber" class="layer-check" />
+                            <span class="swatch swatch-amber"></span>
+                            <span class="layer-label">Releases & Milestones</span>
+                        </label>
+                        <label class="layer-item">
+                            <input type="checkbox" checked data-color="rose" class="layer-check" />
+                            <span class="swatch swatch-rose"></span>
+                            <span class="layer-label">Focus & Personal</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- UPCOMING REMINDERS -->
+                <div class="sidebar-section">
+                    <h4 class="sidebar-heading">Smart Reminders</h4>
+                    <div id="reminders-list" class="reminders-list">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- KEYBOARD CHEAT SHEET -->
+                <div class="sidebar-footer">
+                    <div class="footer-tip">
+                        <span>Press <kbd>C</kbd> to schedule, <kbd>T</kbd> for today, <kbd>/</kbd> to search</span>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- MAIN CALENDAR CANVAS -->
+            <main class="calendar-viewport" id="calendar-viewport">
+                <!-- Dynamically renders Day, Week, Month, or Agenda -->
+                <div id="canvas-content" class="canvas-content"></div>
+            </main>
+        </div>
+
+        <!-- Mobile Sidebar Backdrop Overlay -->
+        <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+
+        <!-- COLLAPSIBLE TELEMETRY / DEV INSPECTOR -->
+        <div id="dev-inspector" class="dev-inspector hidden">
+            <div class="inspector-header">
+                <div class="inspector-title">
+                    <span class="inspector-dot"></span>
+                    <span>Real-Time WebSocket & Queue Telemetry</span>
+                </div>
+                <div class="inspector-actions">
+                    <button id="btn-clear-inspector" class="btn-mini">Clear</button>
+                    <button id="btn-close-inspector" class="btn-icon mini">
+                        <!-- icones: lucide:x -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div id="inspector-feed" class="inspector-feed"></div>
+        </div>
+    </div>
+
+    <!-- MODAL: SCHEDULE / EDIT EVENT (Native <dialog>) -->
+    <dialog id="modal-event" class="event-dialog">
+        <form id="form-event" class="event-form">
+            <div class="event-dialog-header">
+                <div class="modal-header-meta">
+                    <h3 id="modal-heading-title" class="modal-dialog-heading">Schedule Event</h3>
+                    <div class="color-picker-chips">
+                        <label class="chip-color" title="Indigo (Engineering)">
+                            <input type="radio" name="color" value="indigo" checked />
+                            <span class="swatch swatch-indigo"></span>
+                        </label>
+                        <label class="chip-color" title="Emerald (Product)">
+                            <input type="radio" name="color" value="emerald" />
+                            <span class="swatch swatch-emerald"></span>
+                        </label>
+                        <label class="chip-color" title="Amber (Release)">
+                            <input type="radio" name="color" value="amber" />
+                            <span class="swatch swatch-amber"></span>
+                        </label>
+                        <label class="chip-color" title="Rose (Personal)">
+                            <input type="radio" name="color" value="rose" />
+                            <span class="swatch swatch-rose"></span>
+                        </label>
+                    </div>
+                </div>
+                <button type="button" id="btn-close-modal" class="btn-icon" aria-label="Close">
+                    <!-- icones: lucide:x -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+
+            <div class="event-dialog-body">
+                <!-- Title -->
+                <div class="dialog-field title-field">
+                    <input type="text" id="input-title" required class="input-title" placeholder="Add event title..." autocomplete="off" />
+                </div>
+
+                <!-- Date & Times -->
+                <div class="dialog-row">
+                    <div class="dialog-field flex-1">
+                        <label for="input-start" class="field-caption">Starts</label>
+                        <input type="datetime-local" id="input-start" class="input-datetime" required />
+                    </div>
+                    <div class="dialog-field flex-1">
+                        <label for="input-end" class="field-caption">Ends</label>
+                        <input type="datetime-local" id="input-end" class="input-datetime" />
+                    </div>
+                </div>
+
+                <!-- Quick Presets -->
+                <div class="duration-row">
+                    <span class="caption-label">Quick duration:</span>
+                    <button type="button" class="btn-duration" data-min="15">15m</button>
+                    <button type="button" class="btn-duration" data-min="30">30m</button>
+                    <button type="button" class="btn-duration" data-min="45">45m</button>
+                    <button type="button" class="btn-duration active" data-min="60">1h</button>
+                </div>
+
+                <!-- Recurrence / Repeat Rule -->
+                <div class="dialog-field">
+                    <label for="select-recurrence" class="field-caption">Repeat</label>
+                    <div class="input-with-icon">
+                        <!-- icones: lucide:repeat -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+                        <select id="select-recurrence" class="input-select">
+                            <option value="none" selected>Does not repeat (Only on this day)</option>
+                            <option value="daily">Daily (Every day)</option>
+                            <option value="weekdays">Every weekday (Monday to Friday)</option>
+                            <option value="weekly" id="opt-weekly">Weekly on this day</option>
+                            <option value="biweekly" id="opt-biweekly">Every 2 weeks</option>
+                            <option value="monthly" id="opt-monthly">Monthly on this date</option>
+                            <option value="custom" id="opt-custom">Custom...</option>
+                        </select>
+                    </div>
+
+                    <!-- Custom Recurrence Configuration Panel -->
+                    <div id="custom-recurrence-panel" class="custom-recurrence-panel hidden">
+                        <!-- Repeat every interval & frequency -->
+                        <div class="custom-rec-row">
+                            <span class="custom-rec-label">Repeat every</span>
+                            <div class="custom-rec-inputs">
+                                <input type="number" id="input-custom-interval" class="input-custom-num" min="1" max="99" value="1" />
+                                <select id="select-custom-freq" class="input-custom-select">
+                                    <option value="day">day(s)</option>
+                                    <option value="week" selected>week(s)</option>
+                                    <option value="month">month(s)</option>
+                                    <option value="year">year(s)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Days of week (shown when frequency is week) -->
+                        <div id="custom-weekdays-group" class="custom-rec-row">
+                            <span class="custom-rec-label">Repeat on</span>
+                            <div class="weekday-chips" role="group" aria-label="Select repeat days">
+                                <button type="button" class="btn-weekday" data-day="0" title="Sunday">S</button>
+                                <button type="button" class="btn-weekday" data-day="1" title="Monday">M</button>
+                                <button type="button" class="btn-weekday" data-day="2" title="Tuesday">T</button>
+                                <button type="button" class="btn-weekday" data-day="3" title="Wednesday">W</button>
+                                <button type="button" class="btn-weekday" data-day="4" title="Thursday">T</button>
+                                <button type="button" class="btn-weekday" data-day="5" title="Friday">F</button>
+                                <button type="button" class="btn-weekday" data-day="6" title="Saturday">S</button>
+                            </div>
+                        </div>
+
+                        <!-- Ends options -->
+                        <div class="custom-rec-row column">
+                            <span class="custom-rec-label">Ends</span>
+                            <div class="custom-ends-options">
+                                <label class="radio-option">
+                                    <input type="radio" name="custom-ends" value="never" checked />
+                                    <span>Never</span>
+                                </label>
+                                <label class="radio-option">
+                                    <input type="radio" name="custom-ends" value="until" />
+                                    <span>On</span>
+                                    <input type="date" id="input-custom-until" class="input-custom-date" disabled />
+                                </label>
+                                <label class="radio-option">
+                                    <input type="radio" name="custom-ends" value="count" />
+                                    <span>After</span>
+                                    <input type="number" id="input-custom-count" class="input-custom-num" min="1" max="999" value="10" disabled />
+                                    <span>occurrences</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Live Summary -->
+                        <div id="custom-recurrence-summary" class="custom-recurrence-summary">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                            <span id="custom-summary-text">Repeats every week on Monday</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Video Meeting Link -->
+                <div class="dialog-field">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <label for="input-meeting" class="field-caption" style="margin-bottom: 0;">Video Call Link</label>
+                        <button type="button" id="btn-add-meet" class="btn-duration" style="font-size: 0.72rem; padding: 2px 8px; border-radius: 4px;">+ Google Meet</button>
+                    </div>
+                    <div class="input-with-icon">
+                        <!-- icones: lucide:video -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.934a.5.5 0 0 0-.777-.416L16 11"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>
+                        <input type="text" id="input-meeting" placeholder="e.g. https://meet.google.com/new" class="input-text" />
+                    </div>
+                </div>
+
+                <!-- Location -->
+                <div class="dialog-field">
+                    <label for="input-location" class="field-caption">Location or Room</label>
+                    <div class="input-with-icon">
+                        <!-- icones: lucide:map-pin -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
+                        <input type="text" id="input-location" placeholder="e.g. Conference Room A or Remote" class="input-text" />
+                    </div>
+                </div>
+
+                <!-- Description / Agenda -->
+                <div class="dialog-field">
+                    <label for="input-desc" class="field-caption">Description / Meeting Notes</label>
+                    <textarea id="input-desc" rows="3" class="input-textarea" placeholder="Add meeting agenda, documents, or topics..."></textarea>
+                </div>
+            </div>
+
+            <div class="event-dialog-footer">
+                <button type="button" id="btn-cancel-modal" class="btn-secondary">Cancel</button>
+                <button type="submit" id="btn-save-event" class="btn-submit">Save Event</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- EVENT DETAILS FLYOUT -->
+    <div id="event-popover" class="event-popover hidden">
+        <div class="popover-header">
+            <span id="popover-swatch" class="popover-swatch swatch-indigo"></span>
+            <div class="popover-actions">
+                <button id="btn-popover-edit" class="btn-icon" title="Edit event (E)" aria-label="Edit meeting">
+                    <!-- icones: lucide:pencil -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                </button>
+                <button id="btn-popover-delete" class="btn-icon" title="Delete meeting">
+                    <!-- icones: lucide:trash-2 -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                </button>
+                <button id="btn-popover-close" class="btn-icon" title="Close">
+                    <!-- icones: lucide:x -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="popover-body">
+            <h2 id="popover-title" class="popover-title">Meeting Title</h2>
+            <div class="popover-time" id="popover-time">Wednesday, Oct 28 • 10:00 AM - 11:00 AM</div>
+
+            <!-- Join Call Button -->
+            <a id="popover-join-btn" href="#" target="_blank" class="btn-join-call main-cta">
+                <!-- icones: lucide:video -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.934a.5.5 0 0 0-.777-.416L16 11"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>
+                <span>Join with Video Call</span>
+            </a>
+
+            <!-- Location info -->
+            <div id="popover-location-row" class="popover-meta-row hidden">
+                <!-- icones: lucide:map-pin -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
+                <span id="popover-location">Room 4B</span>
+            </div>
+
+            <!-- Recurrence info -->
+            <div id="popover-repeat-row" class="popover-meta-row hidden">
+                <!-- icones: lucide:repeat -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+                <span id="popover-repeat-text">Repeats: Daily</span>
+            </div>
+
+            <!-- Description -->
+            <div id="popover-desc-row" class="popover-desc">
+                <p id="popover-desc">Meeting description</p>
+            </div>
+
+            <!-- Reminder status -->
+            <div class="popover-reminder-status">
+                <!-- icones: lucide:bell -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+                <span id="popover-reminder-text">Reminder set 15 minutes before start</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Popover Backdrop -->
+    <div id="popover-backdrop" class="popover-backdrop hidden"></div>
+
+    <!-- Mobile Floating Action Button (FAB) for Scheduling -->
+    <button id="btn-mobile-fab" class="btn-mobile-fab" aria-label="Create Event" title="Create Event">
+        <!-- icones: lucide:plus -->
+        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+    </button>
+
+    <!-- TOAST ALERTS (Reminders & Live updates) -->
+    <div id="toast-shelf" class="toast-shelf" aria-live="polite"></div>
+
+    <script src="app.js?v=20261026_edit_4"></script>
+</body>
+</html>
