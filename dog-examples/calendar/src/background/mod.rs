@@ -27,6 +27,10 @@ pub struct EventReminderJob {
     pub event_id: String,
     pub title: String,
     pub start_time: String,
+    #[serde(default)]
+    pub location: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[async_trait]
@@ -39,6 +43,28 @@ impl Job for EventReminderJob {
     const MAX_RETRIES: u32 = 2;
 
     async fn execute(&self, ctx: Self::Context) -> Result<Self::Result, JobError> {
+        let reminder_message = if let Some(desc) = &self.description {
+            if !desc.trim().is_empty() {
+                desc.clone()
+            } else if let Some(loc) = &self.location {
+                if !loc.trim().is_empty() {
+                    format!("Starts in 15 minutes • {}", loc)
+                } else {
+                    "Starts in 15 minutes".to_string()
+                }
+            } else {
+                "Starts in 15 minutes".to_string()
+            }
+        } else if let Some(loc) = &self.location {
+            if !loc.trim().is_empty() {
+                format!("Starts in 15 minutes • {}", loc)
+            } else {
+                "Starts in 15 minutes".to_string()
+            }
+        } else {
+            "Starts in 15 minutes".to_string()
+        };
+
         let reminder_event = serde_json::json!({
             "tenant": self.tenant,
             "event": "reminder",
@@ -47,7 +73,9 @@ impl Job for EventReminderJob {
                 "event_id": self.event_id,
                 "title": self.title,
                 "start_time": self.start_time,
-                "message": format!("Upcoming Event Reminder: {}", self.title)
+                "location": self.location,
+                "description": self.description,
+                "message": reminder_message
             }
         });
 

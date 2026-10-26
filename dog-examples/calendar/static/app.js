@@ -592,6 +592,17 @@ class CalendarApp {
                 } else {
                     this.events.push(result);
                 }
+                this.notifications = this.notifications.map(n => {
+                    if (n.id === wasEditingId) {
+                        return {
+                            ...n,
+                            title: result.title || title,
+                            message: result.description || n.message
+                        };
+                    }
+                    return n;
+                });
+                this.renderNotificationsList();
                 this.showToast('Event Updated', title, 'created');
             } else {
                 if (!this.events.some(e => e.id === result.id)) {
@@ -690,8 +701,21 @@ class CalendarApp {
                 } else {
                     this.events.push(payload);
                 }
+                this.notifications = this.notifications.map(n => {
+                    if (n.id === payload.id) {
+                        return {
+                            ...n,
+                            title: payload.title || n.title,
+                            message: payload.description || n.message
+                        };
+                    }
+                    return n;
+                });
+                this.renderNotificationsList();
             } else if (event === 'removed') {
                 this.events = this.events.filter(x => x.id !== payload.id);
+                this.notifications = this.notifications.filter(x => x.id !== payload.id);
+                this.renderNotificationsList();
             }
 
             this.render();
@@ -1795,11 +1819,29 @@ class CalendarApp {
             setTimeout(() => this.elHeaderBellIcon.classList.remove('ringing'), 900);
         }
 
-        // 3. Store notification record
+        // 3. Resolve live event details if present in current workspace
+        const matched = this.events.find(x => x.id === payload.event_id);
+        const resolvedTitle = matched ? matched.title : (payload.title || 'Event Reminder');
+
+        let resolvedMessage = '';
+        if (matched?.description) {
+            resolvedMessage = matched.description;
+        } else if (payload.message && !payload.message.startsWith('Upcoming Event Reminder:')) {
+            resolvedMessage = payload.message;
+        } else if (matched?.location || payload.location) {
+            resolvedMessage = `Location: ${matched?.location || payload.location}`;
+        } else if (matched?.start_time || payload.start_time) {
+            const timeStr = new Date(matched?.start_time || payload.start_time).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+            resolvedMessage = `Starts at ${timeStr}`;
+        } else {
+            resolvedMessage = 'Starts in 15 minutes';
+        }
+
+        // Store notification record
         const notifItem = {
             id: payload.event_id || `notif-${Date.now()}`,
-            title: payload.title || 'Event Reminder',
-            message: payload.message || `Upcoming reminder for ${payload.title}`,
+            title: resolvedTitle,
+            message: resolvedMessage,
             start_time: payload.start_time,
             timestamp: new Date(),
             unread: true,
@@ -1810,13 +1852,13 @@ class CalendarApp {
         this.renderNotificationsList();
 
         // 4. Prominent toast alert with ringing bell icon
-        this.showToast('Upcoming Event Reminder', payload.message || payload.title, 'reminder');
+        this.showToast(resolvedTitle, resolvedMessage, 'reminder');
 
         // 5. Native OS/Browser notification if permitted
         if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             try {
-                new Notification(payload.title || 'Calendar Reminder', {
-                    body: payload.message || 'Your event starts soon.',
+                new Notification(resolvedTitle, {
+                    body: resolvedMessage,
                     icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="%23f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"%3E%3Cpath d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/%3E%3Cpath d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/%3E%3C/svg%3E'
                 });
             } catch (err) {

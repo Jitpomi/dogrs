@@ -328,6 +328,50 @@ async fn events_queue_reminder_and_cancel_wins() {
     assert_eq!(del_res.status(), StatusCode::OK);
 }
 
+/// Verifies that patching an event title reschedules the reminder job with the new title.
+#[tokio::test]
+async fn events_patch_title_reschedules_reminder() {
+    let (_dog, router) = build_app().await;
+
+    let start_time = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/events")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    "{{\"title\":\"Original Title\",\"start_time\":\"{start_time}\"}}"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let created = json_body(res.into_body()).await;
+    let event_id = created["id"].as_str().unwrap();
+
+    // Patch title only
+    let patch_res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/events/{event_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from("{\"title\":\"Updated Title\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(patch_res.status(), StatusCode::OK);
+    let updated = json_body(patch_res.into_body()).await;
+    assert_eq!(updated["title"], "Updated Title");
+}
+
 /// Verifies event creation with recurrence rules and persistence.
 #[tokio::test]
 async fn events_create_with_recurrence() {

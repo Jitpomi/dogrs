@@ -96,12 +96,23 @@ impl CalendarAdapter {
                     .unwrap_or(start_utc))
                 .max(now);
 
+                let location = value
+                    .get("location")
+                    .and_then(Value::as_str)
+                    .map(|s| s.to_string());
+                let description = value
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(|s| s.to_string());
+
                 let reminder_key = format!("{}:{}", tenant, id);
                 let job = EventReminderJob {
                     tenant: tenant.clone(),
                     event_id: id.clone(),
                     title,
                     start_time: start_time_str,
+                    location,
+                    description,
                 };
 
                 let queue_ctx = QueueCtx::new(tenant);
@@ -172,7 +183,7 @@ impl CalendarAdapter {
         let reminder_key = format!("{}:{}", tenant, id);
 
         // Scope the in-memory write lock so it's dropped before awaiting queue operations
-        let (value, start_utc_opt, title, start_time_str) = {
+        let (value, start_utc_opt, title, start_time_str, location, description) = {
             let mut by_tenant = self.state.events_by_tenant.write().await;
             let map = by_tenant.entry(tenant.clone()).or_default();
 
@@ -192,11 +203,7 @@ impl CalendarAdapter {
             let value = Value::Object(record);
             map.insert(id.to_string(), value.clone());
 
-            let start_utc_opt = if data.get("start_time").is_some() {
-                Self::parse_start_time(value.get("start_time"))
-            } else {
-                None
-            };
+            let start_utc_opt = Self::parse_start_time(value.get("start_time"));
             let title = value
                 .get("title")
                 .and_then(Value::as_str)
@@ -207,12 +214,31 @@ impl CalendarAdapter {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
+            let location = value
+                .get("location")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string());
+            let description = value
+                .get("description")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string());
 
-            (value, start_utc_opt, title, start_time_str)
+            (
+                value,
+                start_utc_opt,
+                title,
+                start_time_str,
+                location,
+                description,
+            )
         };
 
-        // Reschedule reminder if start_time was updated
-        if data.get("start_time").is_some() {
+        // Reschedule reminder if start_time, title, location, or description was updated
+        if data.get("start_time").is_some()
+            || data.get("title").is_some()
+            || data.get("location").is_some()
+            || data.get("description").is_some()
+        {
             // Cancel-wins: cancel existing reminder
             let old_job_id = self.state.reminder_jobs.write().await.remove(&reminder_key);
             if let Some(old_job_id) = old_job_id {
@@ -233,6 +259,8 @@ impl CalendarAdapter {
                         event_id: id.to_string(),
                         title,
                         start_time: start_time_str,
+                        location,
+                        description,
                     };
 
                     let queue_ctx = QueueCtx::new(tenant);
