@@ -169,9 +169,12 @@ impl BatchWriter {
                     count >= MAX_MESSAGES
                 };
                 if !target_reached && deferred.is_none() && count < MAX_MESSAGES {
-                    // Collect metadata transitions for a bounded window so claim and
-                    // completion writes can amortize a durable commit across jobs.
-                    let window = if enqueue { 1 } else { 8 };
+                    // Collect both payload and metadata operations for a bounded window.
+                    // A 1 ms enqueue window often commits single jobs at moderate
+                    // arrival rates, multiplying durable commits and backlog.
+                    // Full batches still dispatch immediately; acknowledgements
+                    // are released only after the same durable commit as before.
+                    let window = if enqueue { 16 } else { 8 };
                     let deadline = tokio::time::Instant::now() + Duration::from_millis(window);
                     while count < MAX_MESSAGES {
                         match tokio::time::timeout_at(deadline, receiver.recv()).await {
@@ -1229,6 +1232,26 @@ mod tests {
             }
         }
         assert_eq!(ids, completed);
+        // Cross the read fan-out boundary and preserve caller order, including
+        // repeated IDs. Read through an independent backend, not the writer's cache.
+        let mut requested: Vec<_> = ids.iter().cloned().collect();
+        requested.reverse();
+        requested.push(requested[0].clone());
+        let snapshots = peer
+            .get_snapshots(QueueCtx::new("t"), &requested)
+            .await
+            .unwrap();
+        assert_eq!(snapshots.len(), requested.len());
+        for (snapshot, id) in snapshots.iter().zip(&requested) {
+            assert_eq!(&snapshot.job_id, id);
+            assert_eq!(snapshot.tenant_id, "t");
+            assert!(snapshot.status.is_terminal());
+            assert_eq!(snapshot.attempt, 1);
+        }
+        assert!(peer
+            .get_snapshots(QueueCtx::new("foreign"), &requested)
+            .await
+            .is_err());
         let legacy =
             NatsBackend::from_store(js.get_key_value(&bucket.name).await.unwrap()).unwrap();
         for id in ids {

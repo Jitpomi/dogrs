@@ -1,10 +1,12 @@
 # Capacity reliability investigation — 2026-10-25
 
-Status: **The stricter Mac headroom qualification has not yet passed.** The earlier original gate passed 18/18 at 900/s on the Mac VM with `compact-4`, and 18/18 on the AMD EPYC 7763 x64 runner with the original layout. This is an environment-specific workload qualification, not a guarantee for every runner or production deployment. Failures from the earlier ARM and original-layout Mac runs below remain valid.
+Status: **The stricter Mac headroom qualification passed all 18 fresh runs: six each for PostgreSQL, Redis and NATS at 900 jobs/s.** The independent verifier passed every fixture with the stricter 62-second elapsed and 1,000 ms enqueue-p95 limits, zero late offers/dispatches, and all 54,000 jobs verified exactly once. The IDE and user build remained running. See the final qualification below and [machine-readable evidence](evidence/mac-capacity-6g-batch16-2026-10-26.json).
+
+This qualifies the documented workload and Mac VM configuration; it does not establish a higher throughput ceiling or guarantee arbitrary host contention. Earlier failed experiments below remain valid historical evidence.
 
 All measurements below offer 54,000 unique 64 KiB jobs across 100 tenants over 60 seconds, with the existing five-second drain and 100 ms late-offer threshold. PostgreSQL durable commits, Redis always-fsync, and NATS three file-backed always-fsync replicas remain enabled.
 
-The local environment was the eight-vCPU/16 GiB Lima VM on an actively used Mac. Host CPU contention and approximately 98% disk utilisation were observed. Docker Desktop was stopped before the `qualification-quiet` and subsequent experiments, but this does not make the Mac a physically dedicated host. The original queue implementation is retained: longer enqueue collection windows did not establish reliability.
+The initial local environment was the eight-vCPU/16 GiB Lima VM on an actively used Mac. Host CPU contention and approximately 98% disk utilisation were observed. Docker Desktop was stopped before the `qualification-quiet` and subsequent experiments, but this does not make the Mac a physically dedicated host. Those early collection-window experiments did not establish reliability on their own. The final configuration and retained changes are documented below.
 
 | Experiment / fixture | Accepted | Completed | Late offers | Overload | Errors | Passed |
 |---|---:|---:|---:|---:|---:|---|
@@ -405,3 +407,169 @@ zero tests, so it is not claimed as additional runtime test coverage.
 The capacity VM was stopped and returned to its original 16 GiB configuration.
 Docker Desktop was restarted after the experiments; the temporary sleep
 inhibitors were removed. No IDE or user build process was stopped.
+
+
+### Scheduler and commit-path follow-up (2026-10-26 UTC)
+
+The IDE and the user's macOS build remain running. The eight-CPU/eight-GiB
+VM was restarted, with Docker Desktop temporarily stopped as authorized.
+A system-wide scheduler trace in `headroom-scheduler-diagnostic/bf5149a109`
+(the fixture directory includes the `dogrs-fault-` prefix) found a maximum
+runnable delay of 12.84 ms for Tokio workers and 47.87 ms for NATS workers.
+This instrumented fixture completed all jobs in 61.774 s, with no late offers
+or dispatches, but enqueue p95 was 1753.90 ms. The trace adds overhead and is
+not qualification evidence or proof that host contention never matters.
+
+A lower-overhead CPU/stage diagnostic, `7dc6f067bd`, completed in 61.628 s
+with 1013.64 ms enqueue p95. It made 35,688 enqueue batches for 54,000 jobs,
+about 1.51 jobs per batch. Mean enqueue batch queue time was 78.63 ms and
+mean batch execution time 36.49 ms. Mean time after the first staging response
+was 29.30 ms; this includes client/network scheduling and durable provider work,
+not an isolated fsync measurement. Candidate selection averaged 0.0081 ms.
+All jobs were verified, with no operation errors or late dispatches.
+
+A candidate changes the bounded enqueue collection window from 1 ms to 8 ms,
+matching the existing metadata window. Full batches still dispatch immediately;
+size bounds, independent metadata lanes, conditional revisions, uncertain-write
+handling and final durable acknowledgements remain unchanged. Earlier window
+experiments remain failed evidence; this comparison uses the newer paced/fair
+runtime and bounded NATS memory profile rather than reclassifying them.
+
+Two fresh candidate trials passed the stricter timing limits:
+
+| Fixture | Completion | Enqueue p95 | Late offers / dispatches |
+|---|---:|---:|---:|
+| 310c59666d | 60.896 s | 620.62 ms | 0 / 0 |
+| 7c723de929 | 60.130 s | 236.08 ms | 0 / 0 |
+
+Both accepted, completed and verified all 54,000 jobs with no errors or overload.
+Five writer unit tests and five live NATS writer tests passed, including atomic
+visibility, delayed reply correlation, conflict splitting, deduplication and
+metadata progress under saturated admission. The 30 capacity workflow/verifier
+regression tests also passed. These two trials alone do not qualify headroom.
+
+A separate fixed eighteen-case qualification uses binary SHA256
+`f1a32ebe803414609eaeab8afe93bef8a625f10df5b2f46183f417ec91cc5316`,
+under `headroom-qualification-batch8`. It checks the stricter per-case limits
+immediately and stops on failure; no retries or replacement cases are allowed.
+It stopped at the first PostgreSQL fixture, `55711f969e`: all 54,000 jobs
+completed and verified in 60.071 s, enqueue p95 428.43 ms, no errors or overload,
+but 200 enqueue dispatches exceeded 100 ms (maximum 210.983 ms). The offer clock
+had no late offers (maximum 88.255 ms). This is a failed/incomplete sequence,
+not a qualified batching change. The separate dispatch-worker diagnostic runs
+four/two/two/four Tokio workers against fresh PostgreSQL fixtures to distinguish
+the bounded runtime's dispatch backlog from provider throughput.
+
+
+The PostgreSQL four/two/two/four-worker diagnostic completed without replacement
+runs. Four-worker fixtures `ce14909bab` and `c338d17651` passed (60.143/60.056 s;
+459.90/27.07 ms enqueue p95; no late offers/dispatches). Two-worker fixture
+`f4cb1b8667` had 54 late dispatches, maximum 133.388 ms, despite completing all
+jobs in 60.544 s with 85.79 ms p95; `9abc50b035` passed. This supports testing
+more worker capacity, but does not prove the exclusive cause of every host stall.
+A new eighteen-case sequence, `headroom-qualification-batch8-workers4`, uses four
+Tokio workers for PostgreSQL/Redis and two for NATS. Other settings and limits
+are unchanged. The prior failed sequence remains separate evidence.
+
+
+The workers4 qualification stopped on its first NATS case, `547e6644b4`, after
+PostgreSQL `fdd61095cf` and Redis `b2a2e29d7f` passed. NATS completed and verified
+all jobs in 61.172 s with 190.33 ms enqueue p95, but recorded 104 late offers
+(maximum 214.993 ms) and 161 late dispatches. The separate clock also stalled;
+this cannot be described solely as a queue dispatch backlog.
+
+A four-GiB VM with a 768 MiB Go budget per NATS server was rejected. Fixture
+`99cffcf7d9` completed every job in 60.360 s, p95 92.73 ms and no late offers or
+dispatches, but only 35,640 terminal snapshots were checked before the unchanged
+30-second verification deadline. All three servers remained healthy. Increasing
+snapshot read concurrency from 16 to 32 did not fix this: `df5c252386` verified
+only 35,100 snapshots and also had 34 late offers/171 late dispatches. That read
+concurrency experiment was reverted. The added test of large ordered snapshot
+batches, repeated IDs and foreign-tenant rejection is retained.
+
+Independent ten-millisecond heartbeat probes on macOS and Linux recorded the
+same approximately 44.4 ms delay around UTC timestamp 1792975630.60 during the
+first four-GiB experiment. This supports a shared scheduling effect, but does
+not prove every observed stall has the same cause. Their later samples overlap
+compilation and are not capacity evidence. A six-GiB/1024-MiB-per-server diagnostic
+with four Tokio workers is under evaluation; no memory profile is qualified yet.
+
+
+The six-GiB/eight-ms-batch diagnostic `12b85e85e8` completed all checks with no
+late work, but elapsed 62.034 s exceeds the 62 s headroom limit. A sixteen-ms
+enqueue collection window (metadata remains eight ms) reduced the timed workload
+to 60.071 s and p95 35.53 ms in `1baa5cb642`, with zero late work; however the
+sequential post-run readback verified only 52,380 jobs within its 30 s budget.
+
+The readback implementation now overlaps four independent tenant checks after
+freezing the timed capacity verdict. Each request retains the original batch
+limit and one shared 30 s deadline. It now also checks returned count, exact
+requested job IDs, tenant, Completed status and attempt=1, strengthening the
+previous status/count-only verification. No drain deadline, workload, or offer
+limit changes. Tests reject missing, duplicated, foreign and incorrectly completed
+snapshots. The independent verifier rejects changed readback bounds or disabled
+identity checks when the new evidence fields are present.
+
+Diagnostic `4231905f97` with bounded parallel readback verified all 54,000 jobs:
+60.056 s, enqueue p95 38.57 ms, maximum dispatch delay 24.969 ms, no late offers,
+late dispatches, overload or errors. This remains one diagnostic, not qualification.
+The new fixed sequence `headroom-qualification-6g-batch16` uses six GiB guest RAM,
+four Tokio workers, two Go processors/server, 1024 MiB Go budget/server, the same
+compact-four balanced streams and durability, PostgreSQL enqueue concurrency 16,
+Redis rewrite minimum 1024 MiB, and the sixteen-ms enqueue window. All eighteen
+fresh fixtures and their independent headroom checks are required.
+
+
+## Final six-GiB Mac qualification — passed
+
+The fixed sequence `postgres, redis, nats, nats, redis, postgres` ran three times
+with fresh fixtures, no retries or replacement runs, and stopped-on-failure logic.
+All 18 passed, covering 972,000 unique 64 KiB jobs. Each run admitted, completed
+and verified all 54,000 jobs exactly once with zero errors, overload, late offers
+or late dispatches. The independent verifier also accepted all 18.
+
+| Backend | Fresh passes | Worst enqueue p95 | Slowest workload completion |
+|---|---:|---:|---:|
+| postgres | 6/6 | 19.19 ms | 60.059 s |
+| redis | 6/6 | 37.47 ms | 60.068 s |
+| nats | 6/6 | 436.29 ms | 60.204 s |
+
+The slowest run left 4.796 seconds of the original five-second drain allowance,
+and 1.796 seconds against the stricter 62-second limit. Worst enqueue p95 was
+436.30 ms against the stricter 1,000 ms limit. This is measured latency and drain
+headroom at 900/s, not a measurement of maximum sustainable throughput.
+
+The qualified VM has eight vCPUs and six GiB RAM. Four Tokio workers, a separate
+paced producer runtime, fair scheduling, balanced compact-four NATS streams,
+two Go processors and a 1,024 MiB Go budget per NATS server were used. NATS keeps
+three file-backed always-fsync replicas; Redis keeps always-fsync, automatic
+rewrites and snapshots (rewrite floor 1,024 MiB); PostgreSQL keeps default durable
+commits, external payload storage, pool limit 64 and enqueue concurrency 16.
+NATS enqueue/update concurrency is eight/four per stream. Enqueue collection is
+16 ms, metadata collection remains 8 ms, and full batches dispatch immediately.
+Post-run readback overlaps four tenants under the unchanged shared 30-second
+budget and checks exact identities, tenant, terminal status and attempt count.
+
+The user's IDE and build were left running. Docker Desktop was temporarily
+stopped as authorized. Qualification required 25 GiB free host disk space and
+allowed up to 120 seconds between fixtures for APFS space reclamation; no files
+were cleaned during the qualification. This is the configuration qualified here,
+not a claim that every Mac memory profile or concurrent workload will pass.
+
+The evidence JSON records the source hashes, executable SHA-256, all 18 reports,
+and raw archive SHA-256. The complete raw archive is retained locally under
+`artifacts/dogrs-mac-capacity-2026-10-25/headroom-qualification-6g-batch16.tar.gz`.
+Verification uses `.github/scripts/verify_capacity_reports.py REPORT_ROOT
+--nats-layout compact-4 --headroom --nats-leaders balanced
+--producer-runtime paced --nats-memory-mib 1024 --fair-scheduler
+--redis-rewrite-min-mib 1024`.
+
+Validation: 31 capacity workflow/verifier Python tests, two snapshot-verification
+Rust tests, ten NATS batch unit/integration tests, the release build and the
+independent 18-fixture headroom verifier passed.
+
+The measured candidate was based on `018939a` plus the capacity changes recorded
+in the evidence hashes. Before publication it was rebased onto `41f5ec1` to
+preserve concurrent calendar/tracing changes. Those commits did not change the
+five hashed capacity sources; the 18-run result belongs to the measured candidate,
+not a new qualification of every later workspace change.

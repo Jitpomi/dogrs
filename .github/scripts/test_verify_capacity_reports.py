@@ -47,6 +47,20 @@ class QualificationEvidenceTests(unittest.TestCase):
                             dict(server_id=f'server-{server}', config=dict(sync_always=True),
                                  account_details=[dict(stream_detail=streams)])))
 
+    def test_parallel_readback_cannot_extend_budget_or_skip_identity(self):
+        path = self.root / 'postgres-0' / 'capacity.log'
+        row = json.loads(path.read_text())
+        row.update(verification_concurrency=4, verification_budget_seconds=30,
+                   verification_identity_checked=True)
+        path.write_text(json.dumps(row))
+        self.assertEqual(verify(self.root)[1], [])
+        for key, value in [('verification_concurrency', 100),
+                           ('verification_budget_seconds', 60),
+                           ('verification_identity_checked', False)]:
+            changed = dict(row, **{key: value})
+            path.write_text(json.dumps(changed))
+            self.assertTrue(verify(self.root)[1])
+
     def test_producer_runtime_must_match_environment_and_result(self):
         for folder in self.root.iterdir():
             for name in ('environment.json', 'capacity.log'):

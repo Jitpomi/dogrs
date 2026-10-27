@@ -28,6 +28,13 @@ def verify_case(folder, backend, result, nats_layout="original-16", headroom=Fal
     if result.get('producer_runtime') == 'paced':
         require(type(result.get('late_dispatches')) is int and result['late_dispatches'] == 0,
                 'late or missing enqueue dispatch evidence')
+    if 'verification_concurrency' in result:
+        require(type(result['verification_concurrency']) is int
+                and result['verification_concurrency'] == 4
+                and type(result.get('verification_budget_seconds')) is int
+                and result['verification_budget_seconds'] == 30
+                and result.get('verification_identity_checked') is True,
+                'snapshot verification bounds or identity checks changed')
     require(result.get('passed') is True, 'reported gate did not pass')
     require(result.get('errors') == [], 'operation errors recorded')
     elapsed = result.get('elapsed_seconds')

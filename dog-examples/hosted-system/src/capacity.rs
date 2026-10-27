@@ -340,41 +340,40 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     let ids = ids.lock().unwrap().clone();
     eprintln!("CAPACITY_PROGRESS phase=verification");
     let verification_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    'verification: for t in 0..tenants {
-        let tenant = format!("{prefix}-{t}");
-        let keys: Vec<_> = ids
-            .iter()
-            .filter(|(name, _)| name == &tenant)
-            .map(|(_, id)| id.clone())
-            .collect();
-        for chunk in keys.chunks(1000) {
-            match tokio::time::timeout_at(
-                verification_deadline,
-                backend.get_snapshots(QueueCtx::new(&tenant), chunk),
-            )
-            .await
-            {
-                Ok(Ok(rows)) => {
-                    verified += rows
-                        .iter()
-                        .filter(|r| {
-                            r.status.is_terminal()
-                                && matches!(r.status, dog_queue::JobStatus::Completed { .. })
-                                && r.attempt == 1
-                        })
-                        .count()
+    // Read back independent tenants concurrently after freezing the timed verdict.
+    // Bound fan-out and retain one shared deadline; no extra recovery time is given.
+    use futures::StreamExt;
+    let checks = futures::stream::iter(0..tenants)
+        .map(|t| {
+            let tenant = format!("{prefix}-{t}");
+            let keys: Vec<_> = ids
+                .iter()
+                .filter(|(name, _)| name == &tenant)
+                .map(|(_, id)| id.clone())
+                .collect();
+            let backend = backend.clone();
+            async move {
+                let mut checked = 0;
+                for chunk in keys.chunks(1000) {
+                    let rows = backend.get_snapshots(QueueCtx::new(&tenant), chunk).await?;
+                    checked += verify_snapshots(&tenant, chunk, &rows)?;
                 }
-                Ok(Err(e)) => errors
+                Ok::<usize, anyhow::Error>(checked)
+            }
+        })
+        .buffer_unordered(4);
+    tokio::pin!(checks);
+    loop {
+        match tokio::time::timeout_at(verification_deadline, checks.next()).await {
+            Ok(Some(Ok(count))) => verified += count,
+            Ok(Some(Err(error))) => errors.lock().unwrap().push(format!("snapshot: {error}")),
+            Ok(None) => break,
+            Err(_) => {
+                errors
                     .lock()
                     .unwrap()
-                    .push(format!("snapshot {tenant}: {e}")),
-                Err(_) => {
-                    errors
-                        .lock()
-                        .unwrap()
-                        .push("snapshot verification timed out".into());
-                    break 'verification;
-                }
+                    .push("snapshot verification timed out".into());
+                break;
             }
         }
     }
@@ -409,11 +408,80 @@ pub async fn run<B: QueueBackend + 'static>(backend: B) -> Result<()> {
     };
     println!(
         "{}",
-        json!({"late_dispatches":late_dispatches.load(Ordering::Relaxed),"max_dispatch_lateness_ms":max_dispatch_us.load(Ordering::Relaxed) as f64 / 1000.0,"producer_runtime":producer_runtime,"nats_connections":std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_|"shared".into()),"payload_pattern":"unique-per-tenant-and-sequence","stage_timings":stage_timings,"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":rate,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed_in_capacity_phase,"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"max_offer_lateness_ms":max_lateness_us.load(Ordering::Relaxed) as f64 / 1000.0,"late_offer_samples":*late_samples.lock().unwrap(),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed,"overload_recovery":overload_recovery,"latency_includes_recovery":recovery_seconds>0})
+        json!({"late_dispatches":late_dispatches.load(Ordering::Relaxed),"max_dispatch_lateness_ms":max_dispatch_us.load(Ordering::Relaxed) as f64 / 1000.0,"producer_runtime":producer_runtime,"nats_connections":std::env::var("DOGRS_NATS_CONNECTIONS").unwrap_or_else(|_|"shared".into()),"payload_pattern":"unique-per-tenant-and-sequence","stage_timings":stage_timings,"scope":"queue-level persistence and payload integrity; no HTTP or external payment effects","tenants":tenants,"jobs_per_second_per_tenant":rate,"seconds":seconds,"payload_bytes":bytes,"workers_per_tenant":workers,"max_inflight_per_tenant":inflight,"shards":std::env::var("DOGRS_CAPACITY_SHARDS").unwrap_or_else(|_|"1".into()),"postgres_enqueue_concurrency":std::env::var("DOGRS_PG_ENQUEUE_CONCURRENCY").ok(),"postgres_pool_limit":std::env::var("DOGRS_PG_POOL_SIZE").unwrap_or_else(|_|"64".into()),"offered":offered,"accepted":accepted.load(Ordering::SeqCst),"completed":completed_in_capacity_phase,"verification_concurrency":4,"verification_budget_seconds":30,"verification_identity_checked":true,"verified_terminal_once":verified,"overload":overload.load(Ordering::SeqCst),"late_offers":late.load(Ordering::SeqCst),"max_offer_lateness_ms":max_lateness_us.load(Ordering::Relaxed) as f64 / 1000.0,"late_offer_samples":*late_samples.lock().unwrap(),"elapsed_seconds":elapsed,"enqueue_p95_ms":p95,"claim_latency_ms":latency_summary(&claim_latency),"ack_latency_ms":latency_summary(&ack_latency),"empty_claims":empty_claims.load(Ordering::Relaxed),"error_count":errors.len(),"errors":errors.iter().take(10).collect::<Vec<_>>(),"passed":passed,"overload_recovery":overload_recovery,"latency_includes_recovery":recovery_seconds>0})
     );
     anyhow::ensure!(passed, "queue capacity gate failed");
     Ok(())
 }
+fn verify_snapshots(
+    tenant: &str,
+    ids: &[dog_queue::JobId],
+    rows: &[dog_queue::JobSnapshot],
+) -> Result<usize> {
+    anyhow::ensure!(
+        rows.len() == ids.len(),
+        "snapshot count mismatch for {tenant}"
+    );
+    for (row, id) in rows.iter().zip(ids) {
+        anyhow::ensure!(
+            row.job_id == *id && row.tenant_id == tenant,
+            "snapshot identity mismatch for {tenant}"
+        );
+        anyhow::ensure!(
+            matches!(row.status, dog_queue::JobStatus::Completed { .. }) && row.attempt == 1,
+            "job did not complete once for {tenant}"
+        );
+    }
+    Ok(rows.len())
+}
+
+#[cfg(test)]
+mod verification_tests {
+    use super::verify_snapshots;
+    use dog_queue::{JobId, JobSnapshot, JobStatus};
+
+    fn completed(id: JobId) -> JobSnapshot {
+        let now = chrono::Utc::now();
+        JobSnapshot {
+            job_id: id,
+            tenant_id: "tenant".into(),
+            status: JobStatus::Completed { completed_at: now },
+            attempt: 1,
+            created_at: now,
+            updated_at: now,
+            last_error: None,
+            result: None,
+            progress: None,
+        }
+    }
+
+    #[test]
+    fn verification_rejects_missing_duplicate_or_foreign_rows() {
+        let ids = vec![JobId::new(), JobId::new()];
+        let rows = vec![completed(ids[0].clone()), completed(ids[1].clone())];
+        assert_eq!(verify_snapshots("tenant", &ids, &rows).unwrap(), 2);
+        assert!(verify_snapshots("tenant", &ids, &rows[..1]).is_err());
+        assert!(verify_snapshots("tenant", &ids, &[rows[0].clone(), rows[0].clone()]).is_err());
+        assert!(verify_snapshots("foreign", &ids, &rows).is_err());
+        assert!(verify_snapshots("tenant", &ids, &[rows[1].clone(), rows[0].clone()]).is_err());
+    }
+
+    #[test]
+    fn verification_requires_completed_once_not_just_terminal() {
+        let id = JobId::new();
+        let mut row = completed(id.clone());
+        row.attempt = 2;
+        assert!(verify_snapshots("tenant", &[id.clone()], &[row.clone()]).is_err());
+        row.attempt = 1;
+        row.status = JobStatus::Canceled {
+            canceled_at: chrono::Utc::now(),
+        };
+        assert!(verify_snapshots("tenant", &[id.clone()], &[row.clone()]).is_err());
+        row.status = JobStatus::Enqueued;
+        assert!(verify_snapshots("tenant", &[id], &[row]).is_err());
+    }
+}
+
 pub(super) fn make_payload(seed: u64, size: usize) -> Vec<u8> {
     let mut bytes = vec![0; size];
     bytes[..8].copy_from_slice(&seed.to_le_bytes());
