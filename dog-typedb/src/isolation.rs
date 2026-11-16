@@ -526,27 +526,32 @@ fn requires_checkpoints(stages: &[typeql::query::stage::Stage]) -> bool {
     })
 }
 fn named(variable: &Variable) -> Result<String> {
-    ensure!(
-        matches!(variable, Variable::Named { optional: None, .. }),
-        "Optional/anonymous variables are not supported"
-    );
+    if !matches!(variable, Variable::Named { optional: None, .. }) {
+        return Err(
+            QueryRejected::Unsupported("Optional/anonymous variables are not supported").into(),
+        );
+    }
     let name = variable
         .name()
         .ok_or_else(|| anyhow::anyhow!("Named variable required"))?;
-    ensure!(!name.starts_with("dog_security_"), "Reserved variable");
+    if name.starts_with("dog_security_") {
+        return Err(QueryRejected::Invalid("Reserved variable namespace").into());
+    }
     Ok(name.into())
 }
 fn label(reference: &TypeRef) -> Result<String> {
     match reference {
         TypeRef::Label(label) => Ok(label.to_string()),
-        _ => anyhow::bail!("Dynamic types are not supported"),
+        _ => Err(QueryRejected::Unsupported("Dynamic types are not supported").into()),
     }
 }
 fn literal(expression: &Expression) -> Result<String> {
-    ensure!(
-        matches!(expression, Expression::Value(_)),
-        "Only literal values are supported in this position"
-    );
+    if !matches!(expression, Expression::Value(_)) {
+        return Err(QueryRejected::Unsupported(
+            "Only literal values are supported in this position",
+        )
+        .into());
+    }
     Ok(expression.to_string())
 }
 fn parser_budget(source: &str) -> Result<()> {

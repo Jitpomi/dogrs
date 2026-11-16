@@ -566,9 +566,9 @@ impl<'a> Compiler<'a> {
                 }
                 out.push(' ');
             }
-            ensure!(!write || mutated, "Write method requires a mutation");
+            require_query!(!write || mutated, "Write method requires a mutation");
             if root && !fetched {
-                ensure!(
+                require_query!(
                     mutated && matches!(stages.last(), Some(Stage::Delete(_))),
                     "Explicit fetch is required"
                 );
@@ -585,7 +585,7 @@ impl<'a> Compiler<'a> {
         env: &'s mut Env,
     ) -> BoxFuture<'s, Result<String>> {
         Box::pin(async move {
-            ensure!(patterns.len() <= 128, "Pattern limit exceeded");
+            require_query!(patterns.len() <= 128, "Pattern limit exceeded");
             let inherited = env.objects.keys().cloned().collect::<BTreeSet<_>>();
             let mut normalized = patterns.to_vec();
             let mut aliases = BTreeMap::new();
@@ -653,7 +653,7 @@ impl<'a> Compiler<'a> {
                         };
                         for c in &t.constraints {
                             if let Constraint::Isa(isa) = c {
-                                ensure!(
+                                require_query!(
                                     isa.constraint.is_none(),
                                     "Inline isa values/relations are unsupported; use links"
                                 );
@@ -703,7 +703,7 @@ impl<'a> Compiler<'a> {
                         } else {
                             env.require(v)?
                         };
-                        ensure!(
+                        require_query!(
                             env.objects.contains_key(&owner),
                             "Typed object owner required"
                         );
@@ -716,7 +716,7 @@ impl<'a> Compiler<'a> {
                                         let v = match player {
                                             RolePlayer::Typed(_, v) | RolePlayer::Untyped(v) => v,
                                         };
-                                        ensure!(
+                                        require_query!(
                                             env.objects.contains_key(&env.require(v)?),
                                             "Role players must be classified objects"
                                         );
@@ -724,7 +724,7 @@ impl<'a> Compiler<'a> {
                                     }
                                 }
                                 Constraint::Has(has) => {
-                                    ensure!(
+                                    require_query!(
                                         matches!(
                                             has.type_,
                                             Some(TypeRefAny::Type(TypeRef::Label(_)))
@@ -737,7 +737,7 @@ impl<'a> Compiler<'a> {
                                     match &has.value {
                                         HasValue::Variable(v) => {
                                             let n = named(v)?;
-                                            ensure!(
+                                            require_query!(
                                                 !env.objects.contains_key(&n),
                                                 "Attribute/object alias forbidden"
                                             );
@@ -773,7 +773,7 @@ impl<'a> Compiler<'a> {
                             self.expression(&a.rhs, env).await?
                         };
                         let types = self.expression_types(&a.rhs)?;
-                        ensure!(
+                        require_query!(
                             vars.len() == types.len(),
                             "Function assignment arity mismatch"
                         );
@@ -789,7 +789,7 @@ impl<'a> Compiler<'a> {
                             self.expression(&a.rhs, env).await?
                         };
                         let types = self.expression_types(&a.rhs)?;
-                        ensure!(
+                        require_query!(
                             types.len() == a.lhs.len(),
                             "Stream assignment arity mismatch"
                         );
@@ -931,7 +931,7 @@ impl<'a> Compiler<'a> {
             }
             let name = call.name.to_string();
             if matches!(call.name, FunctionName::Builtin(_)) {
-                ensure!(
+                require_query!(
                     ["iid", "abs", "ceil", "floor", "round", "length"].contains(&name.as_str()),
                     "Non-data builtin is not public"
                 );
@@ -943,7 +943,7 @@ impl<'a> Compiler<'a> {
                 .ok_or_else(|| anyhow::anyhow!("Unknown schema function"))?
                 .clone();
             if has_meta(&f.annotations, "dog.security.context", "true")? {
-                ensure!(
+                require_query!(
                     f.signature.args.len() >= 3 && f.signature.args.len() == args.len() + 3,
                     "Context function arity mismatch"
                 );
@@ -961,14 +961,14 @@ impl<'a> Compiler<'a> {
                         ],
                     "Context function signature mismatch"
                 );
-                ensure!(
+                require_query!(
                     guarded_binding || outputs(&f).iter().all(|t| primitive(t)),
                     "Context functions must return values, not unguarded objects"
                 );
                 let separator = if args.is_empty() { "" } else { ", " };
                 return Ok(format!("{name}({CTX}{separator}{})", args.join(", ")));
             }
-            ensure!(
+            require_query!(
                 f.signature.args.len() == args.len(),
                 "Function arity mismatch"
             );
@@ -1096,11 +1096,11 @@ impl<'a> Compiler<'a> {
         })
     }
     fn attribute(&self, attribute: &FetchAttribute, env: &Env) -> Result<()> {
-        ensure!(
+        require_query!(
             env.objects.contains_key(&env.require(&attribute.owner)?),
             "Fetch owner must be classified"
         );
-        ensure!(
+        require_query!(
             matches!(attribute.attribute, TypeRefAny::Type(TypeRef::Label(_))),
             "Dynamic projection is forbidden"
         );
@@ -1208,7 +1208,7 @@ impl<'a> Compiler<'a> {
             return Ok(());
         }
         let q = format!("match $t sub! {ty}; fetch {{ 'child': label($t) }};");
-        ensure!(
+        require_query!(
             self.rows(&q).await?.is_empty(),
             "Subtype query requires explicit concrete isa! when subtypes exist"
         );
@@ -1309,7 +1309,7 @@ impl<'a> Compiler<'a> {
                 unsupported!("Inserted objects must be named")
             };
             let owner = named(v)?;
-            ensure!(
+            require_query!(
                 !env.contains(&owner),
                 "Insert must create a new named object"
             );
@@ -1319,7 +1319,7 @@ impl<'a> Compiler<'a> {
             for c in &t.constraints {
                 match c {
                     Constraint::Isa(isa) => {
-                        ensure!(
+                        require_query!(
                             ty.is_none() && isa.constraint.is_none(),
                             "Explicit insert type required"
                         );
@@ -1334,7 +1334,7 @@ impl<'a> Compiler<'a> {
                             HasValue::Expression(e) => literal(e)?,
                             HasValue::Variable(v) => {
                                 let n = existing.require(v)?;
-                                ensure!(
+                                require_query!(
                                     existing.values.contains(&n),
                                     "Inserted attribute must be an owned value"
                                 );
@@ -1342,7 +1342,7 @@ impl<'a> Compiler<'a> {
                             }
                             _ => unsupported!("Unsupported insert value"),
                         };
-                        ensure!(
+                        require_query!(
                             proposals.insert(a.to_string(), value).is_none(),
                             "Repeated insert fields need a collection proposal policy"
                         );
@@ -1356,11 +1356,11 @@ impl<'a> Compiler<'a> {
                                 unsupported!("Inserted roles must be explicit and unscoped")
                             };
                             let n = existing.require(v)?;
-                            ensure!(
+                            require_query!(
                                 existing.objects.contains_key(&n),
                                 "Inserted role players must already be guarded"
                             );
-                            ensure!(
+                            require_query!(
                                 proposals
                                     .insert(role.to_string(), format!("${n}"))
                                     .is_none(),
@@ -1373,7 +1373,7 @@ impl<'a> Compiler<'a> {
             }
             let ty = ty.ok_or_else(|| anyhow::anyhow!("Missing insert type"))?;
             let tenant = self.tenant_attribute(&ty).await?;
-            ensure!(
+            require_query!(
                 !proposals.contains_key(&tenant),
                 "The server assigns tenant ownership"
             );
@@ -1491,7 +1491,7 @@ impl<'a> Compiler<'a> {
                 .name()
                 .ok_or_else(|| anyhow::anyhow!("Named graph object required"))?
                 .to_string();
-            ensure!(
+            require_query!(
                 !env.contains(&owner) && !new.contains_key(&owner),
                 "Graph object already bound or repeated"
             );
@@ -1503,7 +1503,7 @@ impl<'a> Compiler<'a> {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            ensure!(
+            require_query!(
                 types.len() == 1 && types[0].constraint.is_none(),
                 "One explicit graph type required"
             );
@@ -1524,7 +1524,7 @@ impl<'a> Compiler<'a> {
                 match c {
                     Constraint::Isa(_) => {}
                     Constraint::Has(has) => {
-                        ensure!(
+                        require_query!(
                             matches!(has.type_, Some(TypeRefAny::Type(TypeRef::Label(_)))),
                             "Explicit graph attribute required"
                         );
@@ -1537,7 +1537,7 @@ impl<'a> Compiler<'a> {
                             }
                             HasValue::Variable(v) => {
                                 let n = env.require(v)?;
-                                ensure!(
+                                require_query!(
                                     env.values.contains(&n),
                                     "Graph attribute requires bound value"
                                 );
@@ -1546,7 +1546,7 @@ impl<'a> Compiler<'a> {
                                 match &c.rhs {
                                     Expression::Variable(v) => {
                                         let n = env.require(v)?;
-                                        ensure!(
+                                        require_query!(
                                             env.values.contains(&n),
                                             "Graph attribute requires bound value"
                                         );
@@ -1566,7 +1566,7 @@ impl<'a> Compiler<'a> {
                                 unsupported!("Explicit graph roles required")
                             };
                             let n = named(v)?;
-                            ensure!(
+                            require_query!(
                                 new.contains_key(&n) || env.objects.contains_key(&n),
                                 "Unbound graph role player"
                             );
