@@ -23,10 +23,6 @@ members = [
     "dog-auth-oauth"
 ]
 
-exclude = ["vendor/aws-sigv4"]
+exclude = ["tests/aws-signing"]
 
 resolver = "2"
-
-# Temporary security fix; see vendor/aws-sigv4/DOGRS-PATCH.md.
-[patch.crates-io]
-aws-sigv4 = { path = "vendor/aws-sigv4" }

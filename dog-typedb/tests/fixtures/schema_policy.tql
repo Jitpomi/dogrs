@@ -1,0 +1,141 @@
+define
+attribute tenant-key, value string;
+attribute tenant-alias sub tenant-key;
+attribute actor-key, value string;
+attribute title, value string;
+attribute active, value boolean;
+attribute member-role, value string;
+attribute private-value @meta("dog.security.hidden", "true"), value string;
+attribute private-sub sub private-value;
+entity member, owns tenant-key, owns actor-key, owns active @card(1), owns member-role;
+entity note
+  @meta("dog.security.tenant", "tenant-key")
+  @meta("dog.security.read", "can_read_note")
+  @meta("dog.security.insert", "can_insert_note")
+  @meta("dog.security.delete", "can_delete_note"),
+  owns tenant-key @card(1),
+  owns tenant-alias @meta("dog.security.update", "can_update_title"),
+  owns title @card(1) @meta("dog.security.update", "can_update_title"), owns private-value,
+  plays note-link:left, plays note-link:right;
+relation note-link
+  @meta("dog.security.tenant", "tenant-key")
+  @meta("dog.security.read", "can_read_link")
+  @meta("dog.security.insert", "can_insert_link")
+  @meta("dog.security.delete", "can_delete_link"),
+  relates left @card(1), relates right @card(1), owns tenant-key @card(1), plays holder:child;
+relation holder, relates child @card(1), owns tenant-key;
+entity unsafe-note @meta("dog.security.tenant", "tenant-key") @meta("dog.security.read", "unsafe_read"), owns tenant-key;
+entity secret, owns title;
+entity company @meta("dog.security.scope", "scope_company") @meta("dog.security.read", "scope_company"), owns tenant-key @key, plays book-owner:company;
+entity book @meta("dog.security.scope", "scope_book") @meta("dog.security.read", "scope_book") @meta("dog.security.create", "create_book"), owns title @card(1), plays book-owner:book @card(1);
+relation book-owner @meta("dog.security.scope", "scope_book_owner") @meta("dog.security.read", "scope_book_owner") @meta("dog.security.create", "create_book_owner"), relates company @card(1), relates book @card(1);
+
+fun scope_company($tenant: string, $actor: string, $now: datetime, $c: company) -> boolean:
+  match $c has tenant-key == $tenant;
+    $m isa member, has tenant-key == $tenant, has actor-key == $actor, has active true;
+    $now >= 2020-01-01T00:00:00;
+  return check;
+fun scope_book($tenant: string, $actor: string, $now: datetime, $b: book) -> boolean:
+  match $c isa company; (company:$c,book:$b) isa book-owner;
+    let $ok=scope_company($tenant,$actor,$now,$c); $ok==true;
+  return check;
+fun scope_book_owner($tenant: string, $actor: string, $now: datetime, $r: book-owner) -> boolean:
+  match $r links (company:$c,book:$b); $c isa company; $b isa book;
+    let $ok=scope_company($tenant,$actor,$now,$c); $ok==true;
+  return check;
+fun create_book($tenant: string, $actor: string, $now: datetime, $b: book) -> boolean:
+  match let $ok=scope_book($tenant,$actor,$now,$b); $ok==true;
+    $m isa member, has tenant-key == $tenant, has actor-key == $actor, has member-role "owner";
+    $b has title $title; $title != "forbidden";
+  return check;
+fun create_book_owner($tenant: string, $actor: string, $now: datetime, $r: book-owner) -> boolean:
+  match let $ok=scope_book_owner($tenant,$actor,$now,$r); $ok==true;
+    $r links (book:$b); $b isa book;
+    let $created=create_book($tenant,$actor,$now,$b); $created==true;
+  return check;
+fun request_actor($tenant: string, $actor: string, $now: datetime) -> string @meta("dog.security.context", "true"):
+  match $tenant != ""; $now >= 2020-01-01T00:00:00; let $value=$actor;
+  return first $value;
+
+fun can_read_note($tenant: string, $actor: string, $now: datetime, $note: note) -> boolean:
+  match
+    $now >= 2020-01-01T00:00:00;
+    $m isa member, has tenant-key == $tenant, has actor-key == $actor, has active true;
+    $note has tenant-key == $tenant;
+    $note has title $title; $title != "unreadable";
+  return check;
+
+fun can_update_title($tenant: string, $actor: string, $now: datetime, $note: note, $title: string) -> boolean:
+  match
+    $now >= 2020-01-01T00:00:00;
+    $m isa member, has tenant-key == $tenant, has actor-key == $actor,
+      has active true, has member-role "owner";
+    $note has tenant-key == $tenant;
+    $title != "forbidden";
+  return check;
+
+# Deliberately global as stored: public execution must scope its body,
+# including when a different stored function calls it.
+fun all_titles() -> { string }:
+  match $x isa note, has title $title; let $value = $title;
+  return { $value };
+
+fun can_insert_note($tenant: string, $actor: string, $now: datetime, $title: string) -> boolean:
+  match
+    $now >= 2020-01-01T00:00:00;
+    $m isa member, has tenant-key == $tenant, has actor-key == $actor,
+      has active true, has member-role "owner";
+    $title != "forbidden";
+  return check;
+fun can_delete_note($tenant: string, $actor: string, $now: datetime, $note: note) -> boolean:
+  match
+    $note has tenant-key == $tenant, has title $title;
+    let $value = $title;
+    let $allow = can_insert_note($tenant, $actor, $now, $value); $allow == true;
+  return check;
+fun can_read_link($tenant: string, $actor: string, $now: datetime, $link: note-link) -> boolean:
+  match
+    $now >= 2020-01-01T00:00:00;
+    $m isa member, has tenant-key == $tenant, has actor-key == $actor, has active true;
+    $link has tenant-key == $tenant;
+  return check;
+fun can_insert_link($tenant: string, $actor: string, $now: datetime, $left: note, $right: note) -> boolean:
+  match
+    $left has tenant-key == $tenant;
+    $right has tenant-key == $tenant;
+    let $allow = can_insert_note($tenant, $actor, $now, "link"); $allow == true;
+  return check;
+fun can_delete_link($tenant: string, $actor: string, $now: datetime, $link: note-link) -> boolean:
+  match
+    $link has tenant-key == $tenant;
+    let $allow = can_insert_note($tenant, $actor, $now, "link"); $allow == true;
+  return check;
+fun wrapped_titles() -> { string }:
+  match let $title in all_titles();
+  return { $title };
+fun count_notes() -> integer:
+  match $n isa note;
+  return count;
+fun note_objects() -> { note }:
+  match $n isa note;
+  return { $n };
+fun secret_titles() -> { string }:
+  match $n isa secret, has title $title; let $v = $title;
+  return { $v };
+fun empty_value() -> string:
+  match $n isa note, has title "never-created"; let $v = "empty";
+  return first $v;
+fun linked_titles() -> { string }:
+  match
+    $l isa note; $r isa note;
+    (left: $l, right: $r) isa note-link;
+    $r has title $title; let $v = $title;
+  return { $v };
+fun four() -> integer:
+  match let $v = 4;
+  return first $v;
+fun unsafe_read($tenant: string, $actor: string, $now: datetime, $note: unsafe-note) -> boolean:
+  match
+    $note has tenant-key == $tenant;
+    let $allowed = can_insert_note($tenant, $actor, $now, "unsafe");
+  return first $allowed;

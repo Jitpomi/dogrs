@@ -88,7 +88,7 @@ async fn rabbitmq_notifications_and_job_completion() {
     receive_one(backend.notifications()).await;
     let state = channel
         .queue_declare(
-            &queue,
+            queue.clone().into(),
             lapin::options::QueueDeclareOptions {
                 passive: true,
                 ..Default::default()
@@ -132,7 +132,7 @@ async fn rabbitmq_notifications_and_job_completion() {
         loop {
             let state = channel
                 .queue_declare(
-                    &queue,
+                    queue.clone().into(),
                     lapin::options::QueueDeclareOptions {
                         passive: true,
                         ..Default::default()
@@ -150,10 +150,10 @@ async fn rabbitmq_notifications_and_job_completion() {
     .await
     .expect("shutdown cancels the persistent RabbitMQ consumer");
     channel
-        .queue_delete(&queue, Default::default())
+        .queue_delete(queue.clone().into(), Default::default())
         .await
         .unwrap();
-    connection.close(200, "test complete").await.unwrap();
+    connection.close(200, "test complete".into()).await.unwrap();
 }
 
 #[cfg(feature = "aws-sqs")]
@@ -389,7 +389,7 @@ async fn rabbitmq_shutdown_settles_prefetch_and_restarts() {
     backend.shutdown_notifications().await;
     let state = channel
         .queue_declare(
-            &queue,
+            queue.clone().into(),
             QueueDeclareOptions {
                 passive: true,
                 ..Default::default()
@@ -406,13 +406,13 @@ async fn rabbitmq_shutdown_settles_prefetch_and_restarts() {
     backend.shutdown_notifications().await;
     // Closing the channel would requeue any stranded, unacknowledged prefetch.
     channel
-        .close(200, "verify no outstanding deliveries")
+        .close(200, "verify no outstanding deliveries".into())
         .await
         .unwrap();
     let observer = connection.create_channel().await.unwrap();
     let state = observer
         .queue_declare(
-            &queue,
+            queue.clone().into(),
             QueueDeclareOptions {
                 passive: true,
                 ..Default::default()
@@ -428,7 +428,7 @@ async fn rabbitmq_shutdown_settles_prefetch_and_restarts() {
     );
     assert_eq!(state.consumer_count(), 0);
     observer
-        .queue_delete(&queue, Default::default())
+        .queue_delete(queue.clone().into(), Default::default())
         .await
         .unwrap();
 }

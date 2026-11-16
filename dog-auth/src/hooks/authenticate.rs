@@ -74,6 +74,7 @@ where
 {
     auth_service: Arc<AuthenticationService<P>>,
     strategies: Vec<String>,
+    strict: bool,
 }
 
 impl<P> AuthenticateHook<P>
@@ -84,7 +85,16 @@ where
         Self {
             auth_service,
             strategies,
+            strict: false,
         }
+    }
+
+    /// Require a fresh bearer-token verification on every call, including
+    /// internal calls. Cached flags and authentication payloads are not trusted.
+    /// Configure a token strategy (normally `jwt`) for this mode.
+    pub fn strict(mut self) -> Self {
+        self.strict = true;
+        self
     }
 
     pub fn from_app(app: &dog_core::DogApp<Value, P>, strategies: Vec<String>) -> Result<Self>
@@ -105,17 +115,22 @@ where
     P: AuthenticateHookParams + Clone + Send + Sync + 'static,
 {
     async fn run(&self, ctx: &mut HookContext<Value, P>) -> Result<()> {
-        if ctx.params.authenticated() {
+        if self.strict {
+            ctx.params.set_authenticated(false);
+            ctx.params.set_auth_result(Value::Null);
+        }
+        if !self.strict && ctx.params.authenticated() {
             return Ok(());
         }
 
         let provider = ctx.params.provider().unwrap_or("");
-        if provider.trim().is_empty() {
+        if !self.strict && provider.trim().is_empty() {
             // Internal call: allow through.
             return Ok(());
         }
 
-        let auth_req = if let Some(req) = ctx.params.authentication() {
+        let auth_req = if !self.strict && ctx.params.authentication().is_some() {
+            let req = ctx.params.authentication().expect("checked above");
             req.clone()
         } else if let Some(token) = extract_bearer_token(ctx.params.headers()) {
             let mut data = Map::new();
