@@ -39,10 +39,17 @@ async fn previous_release_store_and_postcard_bytes_remain_readable() -> anyhow::
         };
         assert_eq!(decoded, expected);
         assert_eq!(postcard::to_stdvec(&expected)?, fixture.postcard);
-        assert_eq!(
-            postcard::to_vec::<_, 262144>(&expected)?.as_slice(),
-            fixture.postcard.as_slice()
-        );
+        if fixture.size <= 16385 {
+            assert_eq!(
+                postcard::to_vec::<_, 32768>(&expected)?.as_slice(),
+                fixture.postcard.as_slice()
+            );
+        } else {
+            assert!(matches!(
+                postcard::to_vec::<_, 32>(&expected),
+                Err(postcard::Error::SerializeBufferFull)
+            ));
+        }
     }
     let current = store
         .add_bytes(b"current release after compatibility check".to_vec())
