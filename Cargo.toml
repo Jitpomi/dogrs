@@ -26,3 +26,10 @@ members = [
 exclude = ["tests/aws-signing"]
 
 resolver = "2"
+
+# Reviewed upstream compatibility branches; see docs/dependency-security.md.
+[patch.crates-io]
+typedb-driver = { git = "https://github.com/Jitpomi/typedb-driver", rev = "548a885bc3dee18a3a84fb3092e8b45dc9a4e081" }
+postcard = { git = "https://github.com/Jitpomi/postcard", rev = "d3df0e18bc00553b05238dd7062544c5feb63efd" }
+netlink-packet-core = { git = "https://github.com/Jitpomi/netlink-packet-core", rev = "8d50a3e68354700aaedc3c69b143b57329969c70" }
+bao-tree = { git = "https://github.com/n0-computer/bao-tree", rev = "d50f2b2ce4b2477f9c7bfa3c452914b9bc66b334" }
