@@ -23,24 +23,52 @@ empty feature should remove it from their feature list.
 
 The hosted example reads PEM certificates and keys through maintained
 rustls-pki-types APIs while retaining verified TLS, CA roots and client auth.
-Iroh retains its compatible 0.103 series at the non-yanked 0.103.1 patch; existing
-blob hashes, payloads, storage types and peer protocol are preserved.
+Iroh blobs uses 0.105 with the corresponding Bao validation and streaming APIs.
+Compatibility checks cover existing serialized payloads and filesystem stores.
 
-## Remaining upstream informational warnings
+## Removal of the four unmaintained dependencies
 
-These are unmaintained-package warnings, not cleared or ignored findings:
+The resolved workspace graph now contains none of rustls-pemfile,
+proc-macro-error, atomic-polyfill or paste. CI rejects unmaintained findings as
+well as vulnerabilities, unsoundness and yanked releases, without ignores or
+platform filters.
 
-- rustls-pemfile: TypeDB driver -> tonic 0.12. The latest TypeDB driver also
-  requests that transport series. There is no patched pemfile release.
-- proc-macro-error: iroh-blobs/bao-tree -> genawaiter macros. The latest upstream
-  iroh-blobs still reaches this chain; removing blob support would lose work.
-- atomic-polyfill: postcard's heapless support, including Iroh dependencies.
-- paste: Iroh's Linux netwatch/netlink dependency chain.
+Released upstream versions do not yet provide this entire combination. Root
+Cargo patches pin explicit, reviewable source commits, not renamed obsolete
+packages. JITPOMI owns the following compatibility branches and their maintenance:
 
-Removing these remaining warnings requires upstream maintained replacements or
-an explicitly validated transport/storage migration. No local fork, TLS bypass,
-feature disabling, target filtering or audit ignore is used to report clearance.
-All warnings remain visible in the CI audit output.
+- TypeDB driver 3.13.6: `Jitpomi/typedb-driver` at `548a885`, based on the exact
+  upstream release. Tonic/Prost move to 0.14; the channel uses its public Body
+  and interceptor response-body types. Authentication injection, CA roots,
+  hostname verification and transactions remain. The unused async-std normal
+  dependency is removed, matching the prior registry package. The C client's
+  sync feature stays explicit at its own dependency rather than forcing it onto
+  the asynchronous Rust test harness.
+- TypeDB protocol 3.13.4: `Jitpomi/typedb-protocol` at `2644e0d`, selected by the
+  driver. Tonic/Prost generation uses unchanged protobuf definitions and a
+  registry-provided protoc. TLS tests reject untrusted roots and wrong names.
+- Postcard 1.1.3: `Jitpomi/postcard` at `d3df0e1`. Fixed-capacity serialization
+  uses heapless 0.8 and portable-atomic, preserving its wire encoding, feature
+  names and overflow behavior. Public heapless return values are now 0.8 types;
+  callers directly naming the older type must update their dependency.
+- Netlink core 0.8.2: `Jitpomi/netlink-packet-core` at `8d50a3e`. Its implementation
+  and exported macros use maintained pastey. Upstream parser/packet tests and
+  updated route examples exercise the same public and wire behavior on Linux.
+
+Iroh blobs moves to registry 0.105 and Bao tree uses upstream's immutable
+`d50f2b2` commit, which removes unused procedural macro support while retaining
+validation, streaming and filesystem features. The coroutine implementation
+remains; only the unused generator macro feature is removed. Blob hashes,
+request payload limits and stored payload encoding stay unchanged.
+
+All forks retain upstream history, source and licenses, and document their base,
+changes, tests and replacement policy in JITPOMI-MAINTENANCE.md. Replace a source
+pin only when the corresponding maintained upstream registry release passes the
+same compatibility checks. Cargo root patches are application/workspace scoped;
+they do not propagate to downstream crates.io consumers. These changes do not
+claim to fix already-published DogRS packages or publish a new release. A future
+release must use maintained registry dependencies or explicitly published
+maintained integration packages before removing the root pins.
 
 ## Verification
 

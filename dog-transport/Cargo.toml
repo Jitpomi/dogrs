@@ -32,7 +32,7 @@ bytes = { version = "1", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 futures-util = { version = "0.3", features = ["sink"], optional = true }
 iroh = { version = "1.0.0", optional = true }
-iroh-blobs = { version = "0.103.1", optional = true }
+iroh-blobs = { version = "0.105.0", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 futures = { version = "0.3", optional = true }
 
@@ -68,6 +68,7 @@ iroh = [
 ]
 
 [dev-dependencies]
+tempfile = "3"
 axum = { version = "0.8", features = ["ws"] }
 tokio-tungstenite = "0.29"
 reqwest = { version = "0.12", default-features = false }
@@ -76,3 +77,12 @@ async-trait = "0.1"
 anyhow = "1"
 tokio-stream = { version = "0.1", features = ["net"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
+
+# Previous-release golden data validation (no old dependency implementations).
+[dev-dependencies.flate2]
+version = "1.1"
+[dev-dependencies.tar]
+version = "0.4"
+[dev-dependencies.postcard]
+version = "1.1.3"
+features = ["use-std"]
