@@ -120,3 +120,20 @@ fn negative_policy_results_are_forbidden_but_invalid_results_stay_internal() {
         );
     }
 }
+
+#[test]
+fn unique_error_text_cannot_forge_a_known_server_rejection() {
+    for (committing, deadline, status) in [
+        (false, false, 500),
+        (false, true, 408),
+        (true, false, 503),
+        (true, true, 503),
+    ] {
+        let error = typedb_driver::Error::Other("[CNT9] private unique value".into());
+        let response = operation_error(anyhow::Error::new(error), committing, deadline);
+        assert_eq!(response.code(), status);
+        assert!(!serde_json::to_string(&response.sanitize_for_client())
+            .unwrap()
+            .contains("private unique value"));
+    }
+}

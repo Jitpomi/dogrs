@@ -476,7 +476,24 @@ fn operation_error(error: anyhow::Error, committing: bool, deadline: bool) -> do
                     matches!(error, typedb_driver::Error::Server(_)) && error.code() == "STC2"
                 })
         });
-    let public = if rejected_conflict {
+    // CNT9 is the server's structured unique-value rejection. A caller value
+    // already exists, not a schema/compiler defect. Never classify error text,
+    // a transport failure, or an uncertain commit as a known conflict.
+    let unique_conflict = !deadline
+        && !committing
+        && !error.is::<SchemaDefinition>()
+        && error.chain().any(|cause| {
+            cause
+                .downcast_ref::<typedb_driver::Error>()
+                .is_some_and(|error| {
+                    matches!(error, typedb_driver::Error::Server(_)) && error.code() == "CNT9"
+                })
+        });
+    let public = if unique_conflict {
+        dog_core::DogError::conflict(
+            "A unique value already exists; refresh before submitting again",
+        )
+    } else if rejected_conflict {
         dog_core::DogError::conflict(
             "Concurrent change prevented commit; refresh before submitting again",
         )

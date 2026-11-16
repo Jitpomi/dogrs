@@ -1237,3 +1237,42 @@ async fn scoped_adapter_enforces_tenants_and_rolls_back_invalid_results() -> any
         Err(panic) => std::panic::resume_unwind(panic),
     }
 }
+
+#[tokio::test]
+#[ignore = "Requires development TypeDB; only generated synthetic database, verifies actual structured uniqueness rejection"]
+async fn schema_unique_conflict_is_clear_and_rolls_back() -> anyhow::Result<()> {
+    use dog_typedb::isolation::{AuthenticatedScope, SchemaPolicyAdapter};
+    let driver = test_driver().await?;
+    let database = format!("dogrs-unique-probe-{}", uuid::Uuid::new_v4().simple());
+    driver.databases().create(&database).await?;
+    let state = Arc::new(State {
+        driver: driver.clone(),
+        database: database.clone(),
+    });
+    let trusted = TypeDBAdapter::new(state.clone());
+    let scoped = SchemaPolicyAdapter::new(state);
+    let result=async {
+        trusted.schema(json!({"query":include_str!("fixtures/schema_policy.tql")})).await?;
+        trusted.schema(json!({"query":"define note owns title @unique;"})).await?;
+        trusted.write(json!({"query":"insert $m isa member,has tenant-key 'a',has actor-key 'alice',has active true,has member-role 'owner';$n isa note,has tenant-key 'a',has title 'private-unique-value';"})).await?;
+        let scope=AuthenticatedScope::new("a","alice")?;
+        let error=scoped.write(&scope,json!({"query":"insert $n isa note,has title 'private-unique-value';fetch {'title':$n.title};"})).await.expect_err("Duplicate unique value committed");
+        let error=error.downcast_ref::<dog_core::DogError>().expect("Structured error");
+        let codes:Vec<_>=error.source_ref().unwrap().chain().filter_map(|cause|cause.downcast_ref::<typedb_driver::Error>().map(|e|e.code())).collect();
+        assert_eq!(error.code(),409,"Structured server codes: {codes:?}; {error:?}");
+        assert!(codes.iter().any(|code|code=="CNT9"));
+        let wire=serde_json::to_string(&error.sanitize_for_client())?;
+        assert!(!wire.contains("private-unique-value")&&!wire.contains("CNT9"));
+        let remaining=trusted.read(json!({"query":"match $n isa note;fetch {'title':$n.title};"})).await?;
+        assert_eq!(remaining["ok"]["answers"].as_array().unwrap().len(),1);
+        // The failed write's transaction closed; normal scoped writes still work.
+        scoped.write(&scope,json!({"query":"insert $n isa note,has title 'fresh-unique-value';fetch {'title':$n.title};"})).await?;
+        Ok::<_,anyhow::Error>(())
+    }.await;
+    if result.is_ok() {
+        driver.databases().get(&database).await?.delete().await?;
+    } else {
+        eprintln!("Failed synthetic uniqueness fixture retained: {database}");
+    }
+    result
+}
