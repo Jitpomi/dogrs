@@ -155,6 +155,16 @@ pub struct WorkerHandle {
 }
 
 impl WorkerHandle {
+    /// Whether any worker exited. Supervisors can drain the pool and restart it;
+    /// shutdown still reports the underlying failure instead of hiding it.
+    pub fn is_finished(&self) -> bool {
+        self.join_handles.iter().any(JoinHandle::is_finished)
+            || self
+                .reaper_handle
+                .as_ref()
+                .is_some_and(JoinHandle::is_finished)
+    }
+
     /// Gracefully signal all workers and the integrated reaper to stop, then wait
     /// for them all to finish.
     pub async fn shutdown(self) -> QueueResult<()> {
@@ -678,13 +688,19 @@ impl<C: Send + Sync + 'static> Worker<C> {
         let mut consecutive_errors: u32 = 0;
 
         loop {
+            // A shutdown request stops admission, not an in-flight handler. Dropping
+            // the handler can hide a payment outcome before its journal is saved.
+            let processing = self.process_next_job(&queue_refs);
+            tokio::pin!(processing);
             tokio::select! {
+                biased;
                 _ = &mut shutdown_rx => {
-                    info!("Worker shutdown requested");
+                    info!("Worker shutdown requested; draining current delivery");
+                    processing.await?;
                     break;
                 }
 
-                result = self.process_next_job(&queue_refs) => {
+                result = &mut processing => {
                     match result {
                         Ok(true) => {
                             // A job ran — reset both the idle clock and error counter.
@@ -1189,6 +1205,59 @@ mod tests {
             count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
+    }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct DrainedJob;
+    #[derive(Clone)]
+    struct DrainContext {
+        started: Arc<tokio::sync::Notify>,
+        finish: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl Job for DrainedJob {
+        type Context = DrainContext;
+        type Result = ();
+        const JOB_TYPE: &'static str = "drained_job";
+        async fn execute(&self, ctx: DrainContext) -> Result<(), JobError> {
+            ctx.started.notify_one();
+            ctx.finish.notified().await;
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn shutdown_drains_handler_and_acknowledges_before_returning() {
+        let adapter = QueueAdapter::new(MemoryBackend::new());
+        adapter.register_job::<DrainedJob>().await.unwrap();
+        let ctx = QueueCtx::new("drain");
+        let id = adapter.enqueue(ctx.clone(), DrainedJob).await.unwrap();
+        let context = DrainContext {
+            started: Arc::new(tokio::sync::Notify::new()),
+            finish: Arc::new(tokio::sync::Notify::new()),
+        };
+        let handle = adapter
+            .start_workers(
+                ctx.clone(),
+                context.clone(),
+                vec![DrainedJob::JOB_TYPE.into()],
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), context.started.notified())
+            .await
+            .unwrap();
+        let drain = tokio::spawn(handle.shutdown());
+        tokio::task::yield_now().await;
+        assert!(!drain.is_finished(), "shutdown abandoned the handler");
+        context.finish.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), drain)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            adapter.backend.get_status(ctx, id).await.unwrap(),
+            crate::JobStatus::Completed { .. }
+        ));
     }
     #[tokio::test]
     async fn worker_does_not_start_effects_for_a_lease_expired_before_dispatch() {
