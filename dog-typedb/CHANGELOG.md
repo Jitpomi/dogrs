@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Return a redacted HTTP 409 for a structured TypeDB CNT9 uniqueness rejection
   before commit. Keep schema defects, arbitrary error text, deadlines and unknown
   commit outcomes distinct; never infer a rollback from message text.
+- Refresh release-validation TLS and I/O dependency locks to patched RustSec
+  versions; no advisory ignores or relaxed certificate checks.
 - Add a real-server regression proving a duplicate write rolls back, preserves
   existing data and closes its transaction so later authorized writes succeed.
 
