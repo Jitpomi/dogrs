@@ -1,0 +1,22 @@
+[package]
+name = "dogrs-aws-signing-regressions"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+default = ["sigv4a", "http1", "sign-http"]
+sigv4a = ["aws-sigv4/sigv4a"]
+http1 = ["aws-sigv4/http1"]
+sign-http = ["aws-sigv4/sign-http"]
+
+[dependencies]
+aws-sigv4 = { version = "1.6.5", default-features = false }
+aws-credential-types = "1.2"
+p256 = { version = "0.14", features = ["ecdsa"] }
+sha2 = "0.10"
+hex = "0.4"
+http = "1"
+serde_json = "1"

@@ -1,3 +1,4 @@
+use rustls_pki_types::pem::PemObject;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,7 +44,7 @@ fn path(name: &str) -> Result<PathBuf> {
 fn pg_tls() -> Result<MakeRustlsConnect> {
     let mut roots = rustls::RootCertStore::empty();
     let bytes = std::fs::read(path("aiven-ca.pem")?)?;
-    for cert in rustls_pemfile::certs(&mut bytes.as_slice()) {
+    for cert in rustls_pki_types::CertificateDer::pem_slice_iter(&bytes) {
         roots.add(cert?)?;
     }
     let config = rustls::ClientConfig::builder()
@@ -316,15 +317,15 @@ pub async fn dispatch(role: &str) -> Result<()> {
         "kafka-rust" => {
             let mut roots = rustls::RootCertStore::empty();
             let ca = std::fs::read(path("aiven-ca.pem")?)?;
-            for cert in rustls_pemfile::certs(&mut ca.as_slice()) {
+            for cert in rustls_pki_types::CertificateDer::pem_slice_iter(&ca) {
                 roots.add(cert?)?;
             }
             let pem = std::fs::read(path("kafka-cert.pem")?)?;
-            let certs =
-                rustls_pemfile::certs(&mut pem.as_slice()).collect::<std::io::Result<Vec<_>>>()?;
+            let certs = rustls_pki_types::CertificateDer::pem_slice_iter(&pem)
+                .collect::<Result<Vec<_>, _>>()?;
             let pem = std::fs::read(path("kafka-key.pem")?)?;
-            let key = rustls_pemfile::private_key(&mut pem.as_slice())?
-                .context("missing Kafka client key")?;
+            let key = rustls_pki_types::PrivateKeyDer::from_pem_slice(&pem)
+                .context("missing or invalid Kafka client key")?;
             let tls = rustls::ClientConfig::builder()
                 .with_root_certificates(roots)
                 .with_client_auth_cert(certs, key)?;

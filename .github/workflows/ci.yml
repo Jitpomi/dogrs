@@ -239,9 +239,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --locked
-      - run: cargo audit
-      - name: Verify patched AWS signer including SigV4a
-        run: cargo test --manifest-path vendor/aws-sigv4/Cargo.toml --all-features --locked
+      - run: cargo audit --deny unsound --deny yanked
+      - run: cargo audit --file tests/aws-signing/Cargo.lock --deny unsound --deny yanked
+      - name: Verify upstream AWS signer including SigV4a
+        run: cargo test --manifest-path tests/aws-signing/Cargo.toml --all-features --locked
 
   provider-recovery:
     runs-on: ubuntu-latest

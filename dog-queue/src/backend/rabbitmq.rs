@@ -31,7 +31,7 @@ impl RabbitMqBackend {
         }
         channel
             .queue_declare(
-                &queue,
+                queue.clone().into(),
                 QueueDeclareOptions {
                     durable: true,
                     ..Default::default()
@@ -60,8 +60,8 @@ impl Notifications for RabbitNotifications {
         let confirmed = self
             .channel
             .basic_publish(
-                "",
-                &self.queue,
+                "".into(),
+                self.queue.clone().into(),
                 BasicPublishOptions {
                     mandatory: true,
                     ..Default::default()
@@ -74,7 +74,7 @@ impl Notifications for RabbitNotifications {
             .await
             .map_err(error)?;
         match confirmed {
-            lapin::publisher_confirm::Confirmation::Ack(None) => Ok(()),
+            lapin::Confirmation::Ack(None) => Ok(()),
             _ => Err(error("RabbitMQ rejected or returned the notification")),
         }
     }
@@ -87,7 +87,7 @@ impl Notifications for RabbitNotifications {
         // hints: acknowledging them cannot complete or remove a ledger job.
         let cleanup = async {
             self.channel
-                .basic_cancel(consumer.tag().as_str(), BasicCancelOptions::default())
+                .basic_cancel(consumer.tag(), BasicCancelOptions::default())
                 .await?;
             while let Some(delivery) = consumer.next().await {
                 delivery?.ack(BasicAckOptions::default()).await?;
@@ -95,7 +95,7 @@ impl Notifications for RabbitNotifications {
             // A round trip on this channel also orders the preceding ack frames.
             self.channel
                 .queue_declare(
-                    &self.queue,
+                    self.queue.clone().into(),
                     QueueDeclareOptions {
                         passive: true,
                         ..Default::default()
@@ -121,8 +121,8 @@ impl Notifications for RabbitNotifications {
             *consumer = Some(
                 self.channel
                     .basic_consume(
-                        &self.queue,
-                        "",
+                        self.queue.clone().into(),
+                        "".into(),
                         BasicConsumeOptions::default(),
                         FieldTable::default(),
                     )

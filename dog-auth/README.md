@@ -6,6 +6,21 @@ Register strategies on `AuthenticationService::builder(...)` before calling `bui
 
 ## JWT
 
+### Strict request authentication
+
+Use `AuthenticateHook::new(auth, vec!["jwt".into()]).strict()` when every
+call must present a bearer token, including internal calls. Strict mode clears
+cached authentication state before checking credentials, ignores request-supplied
+authentication payloads, and reruns the configured strategy on every call.
+Failed verification leaves `authenticated` false and `auth_result` null.
+Register this hook before any hook that binds a verified identity to a database
+scope. Membership and resource authorization remain the responsibility of your
+configured identity resolver and database policies.
+
+The default constructor preserves the existing trusted-internal-call and
+already-authenticated shortcuts for backwards compatibility; opt into strict
+mode explicitly at protected service boundaries.
+
 The default features use `jsonwebtoken` with AWS-LC and PEM support. HS256/384/512 and RS256/384/512, ES256/384 are supported. HMAC secrets must contain at least 32 bytes; generate them randomly and keep them out of source control. Signing requires the private PEM and verification requires the public PEM for asymmetric algorithms. `setup_validate()` accepts asymmetric configuration without an HMAC secret.
 
 Verification pins the configured algorithm, issuer, audience, and token type. Access verification rejects refresh tokens. Expiration and `nbf` are enforced with zero clock leeway; synchronize deployment clocks. Tokens require a nonempty `jti` and are limited to 16 KiB. Token lifetimes must be positive and fit the timestamp range. Reserved JWT claims cannot be replaced through `custom_claims`.
