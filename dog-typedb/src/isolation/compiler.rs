@@ -1,7 +1,19 @@
 //! Structural compiler. The function catalogue is read from the database schema;
 //! applications do not register queries or duplicate function bodies in Rust.
 use super::{label, literal, named};
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
+macro_rules! unsupported {
+    ($reason:literal) => {
+        return Err(super::QueryRejected::Unsupported($reason).into())
+    };
+}
+macro_rules! require_query {
+    ($condition:expr, $reason:literal $(,)?) => {
+        if !$condition {
+            return Err(super::QueryRejected::Invalid($reason).into());
+        }
+    };
+}
 use futures::future::BoxFuture;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -95,7 +107,7 @@ impl Env {
     }
     fn require(&self, variable: &Variable) -> Result<String> {
         let n = named(variable)?;
-        ensure!(self.contains(&n), "Unbound or unclassified variable");
+        require_query!(self.contains(&n), "Unbound or unclassified variable");
         Ok(n)
     }
 }
@@ -117,10 +129,7 @@ impl Compiled {
                 "Incomplete post-write checks"
             );
             for key in &self.checks {
-                ensure!(
-                    checks.get(key).and_then(serde_json::Value::as_bool) == Some(true),
-                    "Post-write read policy denied"
-                );
+                super::require_policy(checks.get(key).and_then(serde_json::Value::as_bool))?;
             }
             let data = row["data"]
                 .get_mut("result")
@@ -270,13 +279,13 @@ impl<'a> Compiler<'a> {
         root: bool,
     ) -> BoxFuture<'s, Result<(String, Env)>> {
         Box::pin(async move {
-            ensure!(stages.len() <= 32, "Pipeline stage limit exceeded");
+            require_query!(stages.len() <= 32, "Pipeline stage limit exceeded");
             let mut out = String::new();
             let mut mutated = false;
             let mut fetched = false;
             let mut mutation_marker = None;
             for (index, stage) in stages.iter().enumerate() {
-                ensure!(!fetched, "Fetch must be terminal");
+                require_query!(!fetched, "Fetch must be terminal");
                 if root
                     && write
                     && !mutated
@@ -308,16 +317,16 @@ impl<'a> Compiler<'a> {
                         mutated = true;
                     }
                     Stage::Update(update) if write && !mutated && root => {
-                        ensure!(
+                        require_query!(
                             update.patterns.len() == 1,
                             "One ownership update per operation is supported"
                         );
                         let Pattern::Statement(Statement::Thing(thing)) = &update.patterns[0]
                         else {
-                            anyhow::bail!("Unsupported update")
+                            unsupported!("Unsupported update")
                         };
                         let Head::Variable(owner) = &thing.head else {
-                            anyhow::bail!("Named update owner required")
+                            unsupported!("Named update owner required")
                         };
                         let owner = env.require(owner)?;
                         let type_ = env
@@ -325,31 +334,58 @@ impl<'a> Compiler<'a> {
                             .get(&owner)
                             .ok_or_else(|| anyhow::anyhow!("Object update required"))?
                             .clone();
-                        ensure!(
+                        require_query!(
                             thing.constraints.len() == 1,
                             "Combined updates need a combined proposal policy"
                         );
                         let Constraint::Has(has) = &thing.constraints[0] else {
-                            anyhow::bail!("Only ownership updates are supported")
+                            unsupported!("Only ownership updates are supported")
                         };
                         let Some(TypeRefAny::Type(TypeRef::Label(attribute))) = &has.type_ else {
-                            anyhow::bail!("Explicit attribute required")
+                            unsupported!("Explicit attribute required")
                         };
                         let HasValue::Expression(value) = &has.value else {
-                            anyhow::bail!("Literal update required")
+                            unsupported!("Literal update required")
                         };
                         let value = literal(value)?;
                         self.public_attribute(&attribute.to_string())?;
                         self.immutable_tenant(&type_, &attribute.to_string())
                             .await?;
+                        let attributes: BTreeSet<_> = self
+                            .ancestry(&attribute.to_string())?
+                            .iter()
+                            .map(|t| t.label.to_string())
+                            .collect();
+                        let mut declared = false;
+                        for ty in self.ancestry(&type_)? {
+                            for capability in &ty.capabilities {
+                                if let CapabilityBase::Owns(owns) = &capability.base {
+                                    if attributes.contains(&owns.owned.to_string()) {
+                                        for annotation in &capability.annotations {
+                                            if let typeql::Annotation::Meta(meta) = annotation {
+                                                if meta.key.unescape()? == "dog.security.update" {
+                                                    declared = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !declared {
+                            return Err(super::PolicyDenied.into());
+                        }
                         let q = format!("match $t label {type_}; $a label {attribute}; let $f = get_owns_meta('dog.security.update', $t, $a); fetch {{ 'f': $f }};");
+                        if self.rows(&q).await?.is_empty() {
+                            return Err(super::PolicyDenied.into());
+                        }
                         let f = self.metadata_function(&q, "f").await?;
                         let check = self.fresh();
                         out.push_str(&format!("match let ${check} = {f}({CTX}, ${owner}, {value}); ${check} == true; {stage} "));
                         mutated = true;
                     }
                     Stage::Delete(delete) if write && !mutated && root => {
-                        ensure!(
+                        require_query!(
                             !delete.deletables.is_empty() && delete.deletables.len() <= 64,
                             "Delete limit exceeded"
                         );
@@ -357,7 +393,7 @@ impl<'a> Compiler<'a> {
                         let mut guard = String::new();
                         for d in &delete.deletables {
                             let DeletableKind::Concept { variable } = &d.kind else {
-                                anyhow::bail!("Only whole-object deletes are supported; ownership/link deletion requires a distinct policy")
+                                unsupported!("Only whole-object deletes are supported; ownership/link deletion requires a distinct policy")
                             };
                             let owner = env.require(variable)?;
                             let type_ = env
@@ -524,9 +560,9 @@ impl<'a> Compiler<'a> {
                         Operator::Limit(_) | Operator::Offset(_) | Operator::Distinct(_) => {
                             out.push_str(&stage.to_string())
                         }
-                        _ => anyhow::bail!("Unsupported stream modifier"),
+                        _ => unsupported!("Unsupported stream modifier"),
                     },
-                    _ => anyhow::bail!("Unsupported stage or write after write/filter after write"),
+                    _ => unsupported!("Unsupported stage or write after write/filter after write"),
                 }
                 out.push(' ');
             }
@@ -660,7 +696,7 @@ impl<'a> Compiler<'a> {
                 let text = match pattern {
                     Pattern::Statement(Statement::Thing(t)) => {
                         let Head::Variable(v) = &t.head else {
-                            anyhow::bail!("Relations must have an explicit named variable and links constraint")
+                            unsupported!("Relations must have an explicit named variable and links constraint")
                         };
                         let owner = if let Some(alias) = aliases.get(&index) {
                             alias.clone()
@@ -729,7 +765,7 @@ impl<'a> Compiler<'a> {
                     }
                     Pattern::Statement(Statement::Assignment(a)) => {
                         let AssignmentPattern::Variables(vars) = &a.lhs else {
-                            anyhow::bail!("Struct destructuring is not supported")
+                            unsupported!("Struct destructuring is not supported")
                         };
                         let rhs = if let Expression::Function(call) = &a.rhs {
                             self.call_binding(call, env, true).await?
@@ -787,11 +823,11 @@ impl<'a> Compiler<'a> {
                         let mut inner = env.clone();
                         format!("not {{ {} }}", self.block(&n.patterns, &mut inner).await?)
                     }
-                    Pattern::Optional(_) => anyhow::bail!(
+                    Pattern::Optional(_) => unsupported!(
                         "Optional exports require optional value tracking and are not supported"
                     ),
                     Pattern::Disjunction(d) => {
-                        ensure!(
+                        require_query!(
                             !d.branches.is_empty() && d.branches.len() <= 32,
                             "Disjunction limit exceeded"
                         );
@@ -810,7 +846,7 @@ impl<'a> Compiler<'a> {
                         *env = common;
                         branches.join(" or ")
                     }
-                    _ => anyhow::bail!("Unclassified schema/statement access"),
+                    _ => unsupported!("Unclassified schema/statement access"),
                 };
                 output.push_str(&text);
                 output.push_str("; ");
@@ -834,7 +870,7 @@ impl<'a> Compiler<'a> {
     }
     fn bind(&self, env: &mut Env, variable: &Variable, ty: &str) -> Result<()> {
         let n = named(variable)?;
-        ensure!(!env.contains(&n), "Rebinding/shadowing is not supported");
+        require_query!(!env.contains(&n), "Rebinding/shadowing is not supported");
         if primitive(ty) {
             env.values.insert(n);
         } else {
@@ -871,7 +907,7 @@ impl<'a> Compiler<'a> {
                     self.expression(&o.right, env).await?
                 ),
                 Expression::Function(call) => self.call(call, env).await?,
-                _ => anyhow::bail!("Unsupported expression"),
+                _ => unsupported!("Unsupported expression"),
             })
         })
     }
@@ -958,8 +994,10 @@ impl<'a> Compiler<'a> {
                 }
                 let (body, final_env) = self
                     .pipeline(&f.block.stages, function_env, false, false)
-                    .await?;
-                self.validate_return(&f, &final_env)?;
+                    .await
+                    .context(super::SchemaDefinition)?;
+                self.validate_return(&f, &final_env)
+                    .context(super::SchemaDefinition)?;
                 let arguments = f
                     .signature
                     .args
@@ -1007,7 +1045,7 @@ impl<'a> Compiler<'a> {
                         Reducer::Stat(s) => {
                             env.require(&s.variable)?;
                         }
-                        _ => anyhow::bail!("Collection return reducers are not yet supported"),
+                        _ => unsupported!("Collection return reducers are not yet supported"),
                     }
                 }
             }
@@ -1021,7 +1059,7 @@ impl<'a> Compiler<'a> {
     ) -> BoxFuture<'s, Result<String>> {
         Box::pin(async move {
             let FetchObjectBody::Entries(entries) = &object.body else {
-                anyhow::bail!("Wildcard fetch is not supported")
+                unsupported!("Wildcard fetch is not supported")
             };
             let mut fields = Vec::new();
             for entry in entries {
@@ -1035,7 +1073,7 @@ impl<'a> Compiler<'a> {
                         self.expression(e, env).await?
                     }
                     FetchSome::Single(FetchSingle::FunctionBlock(_)) => {
-                        anyhow::bail!("Inline function blocks are not supported")
+                        unsupported!("Inline function blocks are not supported")
                     }
                     FetchSome::List(list) => {
                         let body = match &list.stream {
@@ -1047,7 +1085,7 @@ impl<'a> Compiler<'a> {
                             FetchStream::SubQueryFetch(stages) => {
                                 self.pipeline(stages, env.clone(), false, false).await?.0
                             }
-                            _ => anyhow::bail!("Nested function blocks are not supported"),
+                            _ => unsupported!("Nested function blocks are not supported"),
                         };
                         format!("[ {body} ]")
                     }
@@ -1073,10 +1111,9 @@ impl<'a> Compiler<'a> {
     }
     fn public_attribute(&self, attribute: &str) -> Result<()> {
         for ty in self.ancestry(attribute)? {
-            ensure!(
-                !has_meta(&ty.annotations, "dog.security.hidden", "true")?,
-                "Private attribute is not public"
-            );
+            if has_meta(&ty.annotations, "dog.security.hidden", "true")? {
+                return Err(super::PolicyDenied.into());
+            }
         }
         Ok(())
     }
@@ -1244,16 +1281,17 @@ impl<'a> Compiler<'a> {
             return Ok(());
         }
         let tenant = self.tenant_attribute(ty).await?;
-        ensure!(tenant != attribute, "Tenant ownership is immutable");
+        if tenant == attribute {
+            return Err(super::PolicyDenied.into());
+        }
         let q = format!("match $a label {attribute}; $t label {tenant}; {{ $a sub $t; }} or {{ $t sub $a; }}; fetch {{ 'overlap': label($a) }};");
-        ensure!(
-            self.rows(&q).await?.is_empty(),
-            "Tenant ownership hierarchy is immutable"
-        );
+        if !self.rows(&q).await?.is_empty() {
+            return Err(super::PolicyDenied.into());
+        }
         Ok(())
     }
     async fn insert(&mut self, patterns: &[Pattern], env: &mut Env) -> Result<(String, String)> {
-        ensure!(
+        require_query!(
             !patterns.is_empty() && patterns.len() <= 64,
             "Insert limit exceeded"
         );
@@ -1265,10 +1303,10 @@ impl<'a> Compiler<'a> {
         let mut writes = String::new();
         for pattern in patterns {
             let Pattern::Statement(Statement::Thing(t)) = pattern else {
-                anyhow::bail!("Only typed object inserts are supported")
+                unsupported!("Only typed object inserts are supported")
             };
             let Head::Variable(v) = &t.head else {
-                anyhow::bail!("Inserted objects must be named")
+                unsupported!("Inserted objects must be named")
             };
             let owner = named(v)?;
             ensure!(
@@ -1289,7 +1327,7 @@ impl<'a> Compiler<'a> {
                     }
                     Constraint::Has(has) => {
                         let Some(TypeRefAny::Type(TypeRef::Label(a))) = &has.type_ else {
-                            anyhow::bail!("Explicit inserted attribute required")
+                            unsupported!("Explicit inserted attribute required")
                         };
                         self.public_attribute(&a.to_string())?;
                         let value = match &has.value {
@@ -1302,7 +1340,7 @@ impl<'a> Compiler<'a> {
                                 );
                                 format!("${n}")
                             }
-                            _ => anyhow::bail!("Unsupported insert value"),
+                            _ => unsupported!("Unsupported insert value"),
                         };
                         ensure!(
                             proposals.insert(a.to_string(), value).is_none(),
@@ -1315,7 +1353,7 @@ impl<'a> Compiler<'a> {
                             let RolePlayer::Typed(TypeRefAny::Type(TypeRef::Label(role)), v) =
                                 player
                             else {
-                                anyhow::bail!("Inserted roles must be explicit and unscoped")
+                                unsupported!("Inserted roles must be explicit and unscoped")
                             };
                             let n = existing.require(v)?;
                             ensure!(
@@ -1330,7 +1368,7 @@ impl<'a> Compiler<'a> {
                             );
                         }
                     }
-                    _ => anyhow::bail!("Unsupported insert constraint"),
+                    _ => unsupported!("Unsupported insert constraint"),
                 }
             }
             let ty = ty.ok_or_else(|| anyhow::anyhow!("Missing insert type"))?;
@@ -1425,7 +1463,7 @@ impl<'a> Compiler<'a> {
         let mut new = BTreeMap::new();
         for pattern in &mut normalized {
             let Pattern::Statement(Statement::Thing(t)) = pattern else {
-                anyhow::bail!("Typed graph objects required")
+                unsupported!("Typed graph objects required")
             };
             if let Head::Variable(v) = &t.head {
                 named(v)?;
@@ -1447,7 +1485,7 @@ impl<'a> Compiler<'a> {
                 }
             }
             let Head::Variable(v) = &t.head else {
-                anyhow::bail!("Named graph object required")
+                unsupported!("Named graph object required")
             };
             let owner = v
                 .name()
@@ -1518,14 +1556,14 @@ impl<'a> Compiler<'a> {
                                     }
                                 }
                             }
-                            _ => anyhow::bail!("Unsupported graph attribute"),
+                            _ => unsupported!("Unsupported graph attribute"),
                         }
                     }
                     Constraint::Links(links) => {
                         for role in &links.relation.role_players {
                             let RolePlayer::Typed(TypeRefAny::Type(TypeRef::Label(_)), v) = role
                             else {
-                                anyhow::bail!("Explicit graph roles required")
+                                unsupported!("Explicit graph roles required")
                             };
                             let n = named(v)?;
                             ensure!(
@@ -1534,7 +1572,7 @@ impl<'a> Compiler<'a> {
                             );
                         }
                     }
-                    _ => anyhow::bail!("Unsupported graph constraint"),
+                    _ => unsupported!("Unsupported graph constraint"),
                 }
             }
         }

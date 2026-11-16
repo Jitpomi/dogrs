@@ -70,7 +70,7 @@ async fn schema_policy_failure_preserves_private_cause_and_rolls_back() -> anyho
         let scope = AuthenticatedScope::new("a", "alice")?;
         let error = scoped.write(&scope, json!({"query": "insert $n isa note, has title 'private-rollback-probe'; update $n has tenant-key 'b'; fetch {'title':$n.title};"})).await.unwrap_err();
         let error = error.downcast_ref::<dog_core::DogError>().expect("Structured policy error");
-        assert_eq!(error.code(), 500);
+        assert_eq!(error.code(), 403);
         assert!(error.source_ref().is_some(), "Underlying policy failure was discarded");
         let wire = serde_json::to_string(&error.sanitize_for_client())?;
         assert!(!wire.contains("private-rollback-probe"));
@@ -78,6 +78,15 @@ async fn schema_policy_failure_preserves_private_cause_and_rolls_back() -> anyho
         let remaining = trusted.read(json!({"query":"match $n isa note, has title 'private-rollback-probe'; fetch {'title':$n.title};"})).await?;
         assert!(remaining["ok"]["answers"].as_array().unwrap().is_empty());
         trusted.write(json!({"query":"insert $c isa company,has tenant-key 'a'; $b isa book,has title 'retained'; (company:$c,book:$b) isa book-owner;"})).await?;
+        // No ownership update permission: the original Business HTTP 500 regression.
+        let denied=scoped.write(&scope,json!({"query":"match $b isa book; update $b has title 'must-not-change'; fetch {'title':$b.title};"})).await.unwrap_err();
+        assert_eq!(denied.downcast_ref::<dog_core::DogError>().unwrap().code(),403,"{denied:?}");
+        let retained=trusted.read(json!({"query":"match $b isa book;fetch {'title':$b.title};"})).await?;
+        assert_eq!(retained["ok"]["answers"][0]["data"]["title"],"retained");
+        for (request,code) in [(json!({}),400),(json!({"query":"not a query"}),400),(json!({"query":"match $b isa book;fetch {$b.*};"}),422)] {
+            let error=scoped.read(&scope,request).await.unwrap_err();
+            assert_eq!(error.downcast_ref::<dog_core::DogError>().unwrap().code(),code);
+        }
         for query in [
             "match $b isa book; delete $b;",
             "match $b isa book; delete $b; fetch {'done':true};",
@@ -89,6 +98,14 @@ async fn schema_policy_failure_preserves_private_cause_and_rolls_back() -> anyho
             assert!(!serde_json::to_string(&error.sanitize_for_client())?.contains("book"));
             let retained=trusted.read(json!({"query":"match $b isa book; fetch {'title':$b.title};"})).await?;
             assert_eq!(retained["ok"]["answers"].as_array().unwrap().len(),1);
+        }
+        // A declared but broken policy is a server/schema defect, never a caller denial.
+        for (index,value) in ["", "missing_policy_function"].iter().enumerate() {
+            let verb=if index==0 {"define"}else{"redefine"};
+            trusted.schema(json!({"query":format!("{verb} book owns title @meta('dog.security.update', '{value}');")})).await?;
+            let error=scoped.write(&scope,json!({"query":"match $b isa book;update $b has title 'must-not-change';fetch {'title':$b.title};"})).await.unwrap_err();
+            let error=error.downcast_ref::<dog_core::DogError>().unwrap();assert_eq!(error.code(),500);
+            assert!(!serde_json::to_string(&error.sanitize_for_client())?.contains("missing_policy_function"));
         }
         Ok::<_, anyhow::Error>(())
     }).catch_unwind().await;

@@ -54,3 +54,69 @@ fn conflict_text_does_not_turn_an_unknown_commit_into_a_known_rollback() {
     assert_eq!(response.code(), 503);
     assert!(response.message.contains("unknown"));
 }
+
+#[test]
+fn request_rejections_are_typed_and_never_disguise_server_or_commit_failures() {
+    for (rejection, status) in [
+        (
+            super::QueryRejected::Invalid("Expected a query object"),
+            400,
+        ),
+        (
+            super::QueryRejected::Unsupported("Wildcard fetch is not supported"),
+            422,
+        ),
+    ] {
+        let response = operation_error(
+            anyhow::Error::new(rejection).context("private query"),
+            false,
+            false,
+        );
+        assert_eq!(response.code(), status);
+        let wire = serde_json::to_string(&response.sanitize_for_client()).unwrap();
+        assert!(!wire.contains("private query"));
+        assert!(wire.contains("TypeQL"));
+    }
+    for (committing, deadline, status) in
+        [(true, false, 503), (true, true, 503), (false, true, 408)]
+    {
+        assert_eq!(
+            operation_error(
+                super::QueryRejected::Invalid("Invalid syntax").into(),
+                committing,
+                deadline
+            )
+            .code(),
+            status
+        );
+    }
+    let stored = anyhow::Error::new(super::QueryRejected::Unsupported(
+        "private stored definition",
+    ))
+    .context(super::SchemaDefinition);
+    let response = operation_error(stored, false, false);
+    assert_eq!(response.code(), 500);
+    assert!(!serde_json::to_string(&response.sanitize_for_client())
+        .unwrap()
+        .contains("private stored definition"));
+    assert_eq!(
+        operation_error(
+            anyhow::anyhow!("Unsupported TypeQL operation: Wildcard fetch is not supported"),
+            false,
+            false
+        )
+        .code(),
+        500
+    );
+}
+
+#[test]
+fn negative_policy_results_are_forbidden_but_invalid_results_stay_internal() {
+    assert!(super::require_policy(Some(true)).is_ok());
+    for (value, status) in [(Some(false), 403), (None, 500)] {
+        assert_eq!(
+            operation_error(super::require_policy(value).unwrap_err(), false, false).code(),
+            status
+        );
+    }
+}

@@ -388,3 +388,18 @@ on its free single-node GCP plan (2 burstable vCPUs, 4 GB RAM, 10 GB storage).
 The test completed in 9.44 seconds, including deleting its temporary database.
 This validates the covered transaction and query-limit behaviors on that hosted
 configuration; it is not a load, failover, or backup-restoration certification.
+
+
+### Public schema-policy errors
+
+The schema-policy executor rejects invalid request envelopes and malformed TypeQL
+with HTTP 400, unsupported query constructs with HTTP 422, and missing or denied
+schema permissions with HTTP 403. Missing ownership-update metadata is a denied
+permission, not a server failure. Policies remain schema-owned and enforced in the
+same TypeDB transaction; no service-layer role checks or raw-query fallback apply.
+
+Malformed declared policies, driver failures and internal invariants remain server
+errors with private causes. Deadlines remain 408 before commit. Unknown commit
+outcomes remain 503 and must be reconciled before another mutation; a caller error
+must never imply that an uncertain commit rolled back. Public messages contain only
+static request guidance, never queries, bindings or stored function definitions.

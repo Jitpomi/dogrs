@@ -20,6 +20,39 @@ impl std::fmt::Display for PolicyDenied {
 }
 impl std::error::Error for PolicyDenied {}
 
+fn require_policy(value: Option<bool>) -> Result<()> {
+    match value {
+        Some(true) => Ok(()),
+        Some(false) => Err(PolicyDenied.into()),
+        None => anyhow::bail!("Missing or invalid policy result"),
+    }
+}
+
+/// A rejection selected by the request compiler, never by matching error text.
+#[derive(Debug)]
+enum QueryRejected {
+    Invalid(&'static str),
+    Unsupported(&'static str),
+}
+impl std::fmt::Display for QueryRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(reason) => write!(f, "Invalid TypeQL request: {reason}"),
+            Self::Unsupported(reason) => write!(f, "Unsupported TypeQL operation: {reason}"),
+        }
+    }
+}
+impl std::error::Error for QueryRejected {}
+/// Unsupported code in a stored function is a schema error, not caller input.
+#[derive(Debug)]
+struct SchemaDefinition;
+impl std::fmt::Display for SchemaDefinition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Stored function could not be compiled")
+    }
+}
+impl std::error::Error for SchemaDefinition {}
+
 #[derive(Default)]
 struct PendingTransaction(Option<Transaction>);
 impl Drop for PendingTransaction {
@@ -86,31 +119,46 @@ impl SchemaPolicyAdapter {
         self.execute(scope, data, true).await
     }
     async fn execute(&self, scope: &AuthenticatedScope, data: Value, write: bool) -> Result<Value> {
-        let object = data
-            .as_object()
-            .ok_or_else(|| anyhow::anyhow!("Expected query object"))?;
-        ensure!(
-            object.len() == 1,
-            "Only query is accepted; authentication is server-owned"
-        );
-        let query = object
-            .get("query")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("Missing query"))?;
-        self.options.validate_query(query)?;
-        ensure!(
-            query.len() <= 32 * 1024,
-            "Schema-policy query limit exceeded"
-        );
-        parser_budget(query)?;
-        let parsed = typeql::parse_query(query).map_err(|_| anyhow::anyhow!("Invalid TypeQL"))?;
-        let QueryStructure::Pipeline(pipeline) = parsed.structure else {
-            anyhow::bail!("Schema access is forbidden")
+        // Input rejection happens before a transaction is opened.
+        let validate = || -> Result<_> {
+            self.options.validate()?;
+            let object = data
+                .as_object()
+                .ok_or(QueryRejected::Invalid("Expected a query object"))?;
+            if object.len() != 1 {
+                return Err(QueryRejected::Invalid(
+                    "Only query is accepted; authentication is server-owned",
+                )
+                .into());
+            }
+            let query = object
+                .get("query")
+                .and_then(Value::as_str)
+                .ok_or(QueryRejected::Invalid("Missing query string"))?;
+            if query.trim().is_empty() || query.len() > self.options.max_query_bytes.min(32 * 1024)
+            {
+                return Err(QueryRejected::Invalid(
+                    "Query is blank or exceeds the configured byte limit",
+                )
+                .into());
+            }
+            parser_budget(query)
+                .map_err(|_| QueryRejected::Invalid("Query exceeds syntax nesting limits"))?;
+            let parsed = typeql::parse_query(query)
+                .map_err(|_| QueryRejected::Invalid("Invalid TypeQL syntax"))?;
+            let QueryStructure::Pipeline(pipeline) = parsed.structure else {
+                return Err(QueryRejected::Unsupported("Schema access is forbidden").into());
+            };
+            if !pipeline.preambles.is_empty() {
+                return Err(QueryRejected::Unsupported(
+                    "Caller-supplied function definitions are forbidden",
+                )
+                .into());
+            }
+            Ok(pipeline)
         };
-        ensure!(
-            pipeline.preambles.is_empty(),
-            "Caller-supplied function definitions are forbidden"
-        );
+        let pipeline =
+            validate().map_err(|error| operation_error(error, false, false).into_anyhow())?;
         let mut committing = false;
         let mut phase = "opening transaction";
         let mut transaction = PendingTransaction::default();
@@ -282,12 +330,10 @@ impl SchemaPolicyAdapter {
                     "Checkpoint row limit exceeded"
                 );
                 for key in &compiled.checks {
-                    ensure!(
+                    require_policy(
                         row.get(&format!("dog_security_check_{key}"))?
-                            .and_then(|c| c.try_get_boolean())
-                            == Some(true),
-                        "Checkpoint policy denied"
-                    );
+                            .and_then(|c| c.try_get_boolean()),
+                    )?;
                 }
                 // Keep attribute concepts as attributes, not just their values.
                 // A later query must not silently change TypeQL binding semantics.
@@ -329,10 +375,9 @@ impl SchemaPolicyAdapter {
                 materialized.push((shape, values));
             }
             if materialized.is_empty() {
-                ensure!(
-                    !wrote,
-                    "Later mutation denied; rolling back preceding writes"
-                );
+                if wrote {
+                    return Err(PolicyDenied.into());
+                }
                 let result = serde_json::json!({"ok":{
                     "queryType":"write", "answerType":"conceptDocuments",
                     "answers":[], "warning":null
@@ -441,8 +486,23 @@ fn operation_error(error: anyhow::Error, committing: bool, deadline: bool) -> do
         dog_core::DogError::timeout("TypeDB policy operation timed out before commit")
     } else if error.chain().any(|cause| cause.is::<PolicyDenied>()) {
         dog_core::DogError::forbidden("Schema policy does not authorize this operation")
+    } else if !error.is::<SchemaDefinition>() {
+        match error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<QueryRejected>())
+        {
+            Some(rejection @ QueryRejected::Invalid(_)) => {
+                dog_core::DogError::bad_request(rejection.to_string())
+            }
+            Some(rejection @ QueryRejected::Unsupported(_)) => {
+                dog_core::DogError::unprocessable(rejection.to_string())
+            }
+            None => {
+                dog_core::DogError::general_error("TypeDB policy operation failed before commit")
+            }
+        }
     } else {
-        dog_core::DogError::general_error("TypeDB policy operation denied or failed before commit")
+        dog_core::DogError::general_error("TypeDB policy schema could not be compiled")
     };
     public.with_source(error)
 }
