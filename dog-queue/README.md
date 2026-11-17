@@ -279,3 +279,21 @@ user/server: each connection polls up to 128 jobs sequentially (default once per
 second, with a 10-second read timeout). Drop the stream on logout/revocation.
 Errors terminate the stream; never send raw backend error text to a client.
 See `dog-transport/REALTIME.md` for the optional SSE integration.
+
+## Durable recurring jobs
+
+`recurrence` provides fixed-rate scheduling, durable catch-up and stable occurrence
+keys for any `ScheduledJob`. Register `Scheduled<MyJob>` with the normal queue
+adapter. An application storage adapter implements `RecurrenceBackend`: its commit
+must compare the schedule revision and atomically store the occurrence delivery,
+advanced cursor and next wake-up. Keep these writes separate from business fences.
+A lost commit acknowledgement is recovered by reloading the revision, never by
+blindly publishing again. Disabled schedules, future timestamps and exhausted
+cursors do not publish work. Business permissions remain in the application data
+layer and are rechecked when the occurrence dispatches business work.
+
+`supervisor::TenantWorkers` supplies paged namespaces and initialized pools;
+`supervisor::start` owns discovery, failed-pool recovery and concurrent draining,
+including source panics. `timing` supplies checked delay and backoff calculations.
+The existing feature-gated cron in-memory scheduler remains explicitly non-durable;
+do not use it as the persistence mechanism for a durable deployment.
