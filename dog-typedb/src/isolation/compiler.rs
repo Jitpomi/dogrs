@@ -1207,7 +1207,9 @@ impl<'a> Compiler<'a> {
         if self.optional_type_function(ty, "scope").await?.is_some() {
             return Ok(());
         }
-        let q = format!("match $t sub! {ty}; fetch {{ 'child': label($t) }};");
+        // Type-row existence checks also work for an empty type set.
+        // Fetch would wrap it in an inline function rejected by TypeDB 3.15.
+        let q = format!("match $t sub! {ty}; select $t;");
         require_query!(
             self.rows(&q).await?.is_empty(),
             "Subtype query requires explicit concrete isa! when subtypes exist"
@@ -1284,7 +1286,8 @@ impl<'a> Compiler<'a> {
         if tenant == attribute {
             return Err(super::PolicyDenied.into());
         }
-        let q = format!("match $a label {attribute}; $t label {tenant}; {{ $a sub $t; }} or {{ $t sub $a; }}; fetch {{ 'overlap': label($a) }};");
+        // Evaluate ownership hierarchy in TypeDB without projecting empty types.
+        let q = format!("match $a label {attribute}; $t label {tenant}; {{ $a sub $t; }} or {{ $t sub $a; }}; select $a;");
         if !self.rows(&q).await?.is_empty() {
             return Err(super::PolicyDenied.into());
         }
