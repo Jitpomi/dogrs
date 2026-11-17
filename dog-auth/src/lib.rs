@@ -1,6 +1,7 @@
 //! Authentication strategies and hooks for DogRS.
 
 pub mod core;
+mod duration_config;
 pub mod hooks;
 pub mod jwt;
 pub mod options;
