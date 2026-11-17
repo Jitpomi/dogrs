@@ -44,3 +44,14 @@ Namespace records by issuer and token ID, retain them through expiry, and use sh
 Refresh endpoints must apply current account/permission policy before calling rotation; rotation preserves custom claims from the old token. Account-wide session termination and password-change session policy belong to the application.
 
 See [authentication hardening and migration](../docs/auth-hardening.md) for changes and verification.
+
+### Duration configuration and clocks
+
+Token lifetimes still use human duration strings (for example `1h 30m`), parsed
+by maintained upstream `fundu`. Existing unit aliases and the fixed configuration
+meanings of month (2,630,016 seconds) and year (31,557,600 seconds) are retained.
+Serialization uses exact seconds, including fractional nanoseconds, as a string.
+Unitless, signed, infinite, exponent and overflowing lifetimes are rejected.
+JWT expiry and revocation use checked standard-library Unix seconds; dog-auth
+no longer depends on chrono or humantime. This does not claim those crates are
+removed from other workspace members or TypeDB's upstream dependencies.

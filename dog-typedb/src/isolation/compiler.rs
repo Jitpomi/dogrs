@@ -1209,7 +1209,10 @@ impl<'a> Compiler<'a> {
         if self.optional_type_function(ty, "scope").await?.is_some() {
             return Ok(());
         }
-        let q = format!("match $t sub! {ty}; fetch {{ 'child': label($t) }};");
+        // Existence checks return type rows. Wrapping an empty type set in a
+        // fetch inline function fails type inference on TypeDB 3.15 instead
+        // of returning no rows. Keep hierarchy evaluation in TypeDB.
+        let q = format!("match $t sub! {ty}; select $t;");
         require_query!(
             self.rows(&q).await?.is_empty(),
             "Subtype query requires explicit concrete isa! when subtypes exist"
@@ -1286,7 +1289,10 @@ impl<'a> Compiler<'a> {
         if tenant == attribute {
             return Err(super::PolicyDenied.into());
         }
-        let q = format!("match $a label {attribute}; $t label {tenant}; {{ $a sub $t; }} or {{ $t sub $a; }}; fetch {{ 'overlap': label($a) }};");
+        // Only existence matters; do not project an impossible type through
+        // a fetch inline function. Related tenant attributes still deny the
+        // update and the database remains the source of schema truth.
+        let q = format!("match $a label {attribute}; $t label {tenant}; {{ $a sub $t; }} or {{ $t sub $a; }}; select $a;");
         if !self.rows(&q).await?.is_empty() {
             return Err(super::PolicyDenied.into());
         }

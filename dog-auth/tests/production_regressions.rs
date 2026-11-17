@@ -337,7 +337,13 @@ async fn invalid_lifetimes_secrets_and_reserved_claims_are_rejected() {
 #[tokio::test]
 async fn jwt_requires_exp_issuer_audience_jti_and_enforces_nbf() {
     let (_, auth) = setup();
-    let now = chrono::Utc::now().timestamp();
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
     let valid =
         json!({"iss":"dogrs-auth","aud":["dogrs-api"],"exp":now+300,"iat":now,"jti":"unique"});
     let mut invalid = Vec::new();
