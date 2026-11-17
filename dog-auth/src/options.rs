@@ -166,10 +166,10 @@ pub struct JwtOptions {
     /// Token audience (aud claim)
     pub audience: Vec<String>,
     /// Access token expiration duration
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "crate::duration_config")]
     pub access_token_expires_in: Duration,
     /// Refresh token expiration duration
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "crate::duration_config")]
     pub refresh_token_expires_in: Duration,
     /// Token type for this configuration
     pub token_type: TokenType,

@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::Utc;
 use dog_core::errors::DogError;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use dog_core::HookContext;
 use serde::{Deserialize, Serialize};
@@ -479,7 +479,7 @@ where
                 TokenType::Refresh => jwt.refresh_token_expires_in.as_secs(),
             });
 
-        let now = Utc::now().timestamp();
+        let now = unix_seconds()?;
         let lifetime = i64::try_from(expires_in_seconds)?;
         anyhow::ensure!(lifetime > 0, "Token lifetime must be positive");
         let exp = now
@@ -623,9 +623,14 @@ fn token_identity(claims: &Value) -> Result<(&str, &str, i64)> {
         .filter(|s| !s.is_empty());
     let exp = claims.get("exp").and_then(Value::as_i64);
     match (issuer, jti, exp) {
-        (Some(issuer), Some(jti), Some(exp)) if exp > Utc::now().timestamp() => {
-            Ok((issuer, jti, exp))
-        }
+        (Some(issuer), Some(jti), Some(exp)) if exp > unix_seconds()? => Ok((issuer, jti, exp)),
         _ => Err(DogError::not_authenticated("Invalid token claims").into_anyhow()),
     }
+}
+
+/// A pre-epoch or out-of-range system clock must not mint or accept a token.
+fn unix_seconds() -> Result<i64> {
+    Ok(i64::try_from(
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+    )?)
 }
