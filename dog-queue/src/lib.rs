@@ -89,3 +89,5 @@ pub mod prelude {
     #[cfg(feature = "cron-scheduling")]
     pub use crate::{Schedule, Scheduler};
 }
+
+pub mod calendar;
