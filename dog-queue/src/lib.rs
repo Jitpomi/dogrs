@@ -14,6 +14,9 @@ pub mod error;
 pub mod job;
 pub mod observability;
 pub mod realtime;
+pub mod recurrence;
+pub mod supervisor;
+pub mod timing;
 pub mod types;
 
 #[cfg(test)]

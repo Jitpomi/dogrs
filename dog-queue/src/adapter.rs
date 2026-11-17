@@ -1067,7 +1067,7 @@ impl<C: Send + Sync + 'static> Worker<C> {
                 let retry_at = if is_retryable
                     && leased_job.record.attempt <= leased_job.record.message.max_retries
                 {
-                    Some(self.calculate_retry_time(leased_job.record.attempt))
+                    Some(self.calculate_retry_time(leased_job.record.attempt)?)
                 } else {
                     None
                 };
@@ -1136,27 +1136,14 @@ impl<C: Send + Sync + 'static> Worker<C> {
     /// pick uniformly from `[0, clamp(2^attempt * base, cap)]`. This desynchronises
     /// concurrent retriers that all failed at the same instant — preventing the thundering
     /// herd that pure exponential backoff causes on mass failures.
-    fn calculate_retry_time(&self, attempt: u32) -> chrono::DateTime<chrono::Utc> {
-        let cap = self.adapter.config.max_retry_backoff.as_secs();
-        let base = self
-            .adapter
-            .config
-            .base_retry_backoff
-            .as_secs()
-            .saturating_mul(2_u64.pow(attempt.saturating_sub(1)));
-        let ceiling = base.min(cap);
-
-        // Uniform sample in [0, ceiling] — each retrier picks a different slot.
-        // rand::random_range is the rand 0.10 top-level API used throughout this file;
-        // consistent with the poll_jitter sampling below. Inclusive upper bound
-        // matches the documented semantics ("pick uniformly from [0, cap]").
-        let jitter_secs = if ceiling > 0 {
-            rand::random_range(0u64..=ceiling)
-        } else {
-            0
-        };
-
-        chrono::Utc::now() + chrono::Duration::seconds(jitter_secs as i64)
+    fn calculate_retry_time(&self, attempt: u32) -> QueueResult<chrono::DateTime<chrono::Utc>> {
+        crate::timing::retry_at(
+            chrono::Utc::now(),
+            attempt.saturating_sub(1),
+            self.adapter.config.base_retry_backoff.as_secs(),
+            self.adapter.config.max_retry_backoff.as_secs(),
+            true,
+        )
     }
 }
 
